@@ -571,7 +571,71 @@ def freeze_in_window(intervals, t0, t1):
     return total
 
 
-def freeze_window_provider(intervals=None):
+def journal_coverage():
+    """(oldest, newest) epoch seconds the journal can actually speak to.
+
+    A freeze provider must be able to say what is ANSWERABLE before it is
+    asked for an answer, because the alternative is answering anyway.
+    """
+    text = _run(["journalctl", "-b", "-o", "export", "--no-pager"])
+    if text is None:
+        raise ClockError("journalctl unreadable")
+    stamps = []
+    for line in text.splitlines():
+        if line.startswith("__REALTIME_TIMESTAMP="):
+            try:
+                stamps.append(int(line.split("=", 1)[1]) / 1e6)
+            except ValueError:
+                pass
+    if len(stamps) < 2:
+        raise ClockError("journal has %d timestamps: cannot state coverage" % len(stamps))
+    return min(stamps), max(stamps)
+
+
+def freeze_window_provider(intervals=None, coverage=None):
+    """Return a per-host `freeze_lookup(t0, t1) -> seconds` callable.
+
+    🔴 IT REFUSES RATHER THAN ANSWERING OUTSIDE ITS COVERAGE, and that is the
+    load-bearing part, not a nicety (ladybug's rule, adopted from their Darwin
+    provider and applied here to the Linux one, which had the same hole).
+
+    `freeze_in_window` sums overlapping intervals, so a window reaching BEFORE
+    the data's start returns 0 -- a confident, plausible, specific zero from an
+    instrument that cannot see that span. ⇒ **A provider that silently reports
+    "no freeze" for a window it cannot observe reports a QUIET MACHINE when the
+    truth is a BLIND INSTRUMENT, and nothing downstream can distinguish them.**
+    Same shape as `clock_step_detected` reading False on Darwin because the
+    probe never ran: absence read as safety.
+
+    Linux coverage is the CURRENT BOOT (journalctl -b). Darwin's provider is
+    bounded differently and more tightly -- `pmset -g log` retains only ~7 days
+    (measured 167.98 h against a boot ~408 h earlier) -- so on that host most
+    historical windows are genuinely unanswerable and must say so.
+    """
+    if intervals is None:
+        intervals = freeze_intervals_from_journal()
+    if coverage is None:
+        try:
+            coverage = journal_coverage()
+        except ClockError:
+            coverage = None
+
+    def lookup(t0, t1):
+        if coverage is not None and t0 < coverage[0] - 1.0:
+            raise ClockError(
+                "window starts %.1f h before this provider's coverage begins "
+                "(%.1f h of history available). Refusing to return 0: a zero "
+                "here is indistinguishable from 'no freeze occurred', and the "
+                "caller cannot tell a quiet machine from a blind instrument."
+                % ((coverage[0] - t0) / 3600.0, (coverage[1] - coverage[0]) / 3600.0)
+            )
+        return freeze_in_window(intervals, t0, t1)
+
+    lookup.coverage = coverage
+    return lookup
+
+
+def _freeze_window_provider_legacy(intervals=None):
     """Return a per-host `freeze_lookup(t0, t1) -> seconds` callable.
 
     THE INTERFACE IS THE POINT, NOT THE JOURNAL. Consumers take a lookup

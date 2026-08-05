@@ -206,6 +206,28 @@ if boot_wall is not None:
     print()
 
 # ---------------------------------------------------------------- segment
+print("== CANARY: the freeze provider REFUSES outside its coverage ==")
+# A provider that silently returns 0 for a window it cannot observe reports a
+# QUIET MACHINE when the truth is a BLIND INSTRUMENT, and nothing downstream
+# can tell those apart. (ladybug's rule, from the Darwin provider where
+# `pmset -g log` retains only ~7 days; the Linux journal had the same hole.)
+try:
+    lk = C.freeze_window_provider()
+    cov = lk.coverage
+    ok("the provider states its coverage", cov is not None and cov[1] > cov[0])
+    inside = lk(cov[1] - 3600, cov[1])
+    ok("a window INSIDE coverage is answered", inside >= 0.0)
+    raised = False
+    try:
+        lk(cov[0] - 48 * 3600, cov[1])
+    except C.ClockError:
+        raised = True
+    ok("a window BEFORE coverage is REFUSED, not answered with 0", raised,
+       "a zero here is indistinguishable from 'no freeze occurred'")
+except C.ClockError as e:
+    print("  SKIP  no journal on this platform (%s)" % str(e)[:40])
+print()
+
 print("== segment_voided (reboot voids, freeze does not) ==")
 open_s = C.Stamps(1000.0, 500.0, 500.0, "Linux")
 later  = C.Stamps(2000.0, 600.0, 600.0, "Linux")
