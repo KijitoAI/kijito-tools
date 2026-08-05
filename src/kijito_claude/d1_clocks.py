@@ -471,6 +471,32 @@ def freeze_in_window(intervals, t0, t1):
     return total
 
 
+def freeze_window_provider(intervals=None):
+    """Return a per-host `freeze_lookup(t0, t1) -> seconds` callable.
+
+    THE INTERFACE IS THE POINT, NOT THE JOURNAL. Consumers take a lookup
+    callable and must not assume how it was derived -- the derivation is
+    per-host and the shapes genuinely differ:
+
+      Linux : the guest CANNOT FEEL a hypervisor pause, so freeze must be
+              INFERRED by differencing realtime against monotonic across
+              adjacent journal entries.
+      macOS : sleep is guest-VISIBLE, so the OS records its own sleep
+              intervals directly (`pmset -g log`). That provider is expected
+              to be STRONGER than this one -- observed rather than inferred,
+              with real interval boundaries instead of adjacent-entry
+              localisation. It is ladybug's Darwin lane; this module must not
+              pre-empt its shape.
+
+    So: no caller of this may reach for `freeze_intervals_from_journal`
+    directly. Pass `intervals` to inject any provider's output, including in
+    tests.
+    """
+    if intervals is None:
+        intervals = freeze_intervals_from_journal()
+    return lambda t0, t1: freeze_in_window(intervals, t0, t1)
+
+
 def segment_voided(open_stamps, now_stamps):
     """Does a monotonic RESET void the in-flight window/soak segment?
 
