@@ -60,6 +60,15 @@ r3 = user("u2", "wake %s payload" % NONCE)
 ok("(3) nonce present, NO enqueue contains it -> BOX-RETURN",
    D.dispatch_shape(r3, idx_noenq, NONCE)[0] == D.SHAPE_BOX_RETURN)
 
+# (2-fallback) L3-F1: enqueue for this nonce EXISTS but content differs
+# (box-edited / truncated) -> dequeue-shape + ATTRIBUTION-UNCERTAIN, NOT a page.
+r2b = user("u9", "wake %s payload EDITED BY A HUMAN" % NONCE)
+shape2b, _ = D.dispatch_shape(r2b, idx, NONCE)
+ok("(2-fallback) box-edited row -> dequeue-shape + ATTRIBUTION-UNCERTAIN",
+   shape2b.startswith(D.SHAPE_DEQUEUE) and D.ATTRIBUTION_UNCERTAIN in shape2b, shape2b)
+ok("(2-fallback) does NOT page", shape2b != D.SHAPE_BLOCKED,
+   "the plan's disclosed residue class must not become a false page")
+
 r4 = D.Row(dict(type="system", uuid="s1", content="carries %s" % NONCE), 0)
 ok("(4) anything else nonce-bearing -> BLOCKED (never silent)",
    D.dispatch_shape(r4, idx_noenq, NONCE)[0] == D.SHAPE_BLOCKED)
@@ -136,6 +145,21 @@ idx2 = D.RowIndex([qop("remove", "2026-08-05T02:00:00.000Z", "reply with exactly
 k2 = D.batch_keys_from_ops(idx2)
 ok("a content-bearing exit keys its item EXACTLY (no guessing)",
    k2(e1) == "op:2026-08-05T02:00:00.000Z")
+
+# L3-F2: byte-identical payloads removed at different instants must NOT
+# collapse onto the first remove's stamp. Pre-nonce, recurring heartbeats are
+# byte-identical by construction.
+dup1 = user("d1", "HEARTBEAT")
+dup2 = user("d2", "HEARTBEAT")
+idx3 = D.RowIndex([
+    qop("remove", "2026-08-05T01:00:00.000Z", "HEARTBEAT"), dup1,
+    qop("remove", "2026-08-06T09:00:00.000Z", "HEARTBEAT"), dup2,
+])
+k3 = D.batch_keys_from_ops(idx3)
+ok("duplicate payloads get DISTINCT per-occurrence keys (L3-F2)",
+   k3(dup1) != k3(dup2), "%s vs %s -- cross-day deliveries would become batch siblings" % (k3(dup1), k3(dup2)))
+ok("each occurrence claims its own exit in file order",
+   k3(dup1) == "op:2026-08-05T01:00:00.000Z" and k3(dup2) == "op:2026-08-06T09:00:00.000Z")
 print()
 
 print("---- %d passed, %d failed ----" % (passed, failed))
