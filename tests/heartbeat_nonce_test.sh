@@ -19,9 +19,26 @@ bash -n "$SCRIPT" 2>/dev/null && ok "syntax is valid" 1 || ok "syntax is valid" 
 grep -q 'wake-nonce: \$_nonce' "$SCRIPT" && ok "the NUDGE PROMPT carries the nonce" 1 \
   || ok "the NUDGE PROMPT carries the nonce" 0 "D1 cannot attribute a nudge without it"
 
-grep -q 'HEARTBEAT_NUDGE "pane=\$PANE nonce=\$_nonce' "$SCRIPT" && ok "the LOG LINE carries pane AND nonce" 1 \
-  || ok "the LOG LINE carries pane AND nonce" 0 \
+grep -q 'HEARTBEAT_NUDGE "target_pane=\$PANE nonce=\$_nonce' "$SCRIPT" && ok "the LOG LINE carries target_pane AND nonce" 1 \
+  || ok "the LOG LINE carries target_pane AND nonce" 0 \
      "lc_log's prefix renders pane=? under systemd, so it must be in the body"
+
+# CANARY: the body field must NOT be named `pane=`. lc_log always emits
+# `pane=` in its prefix, so a same-named body field puts two on one line and
+# `grep -o 'pane=[^ ]*'` returns the PREFIX (`pane=?`) -- "pane unknown" on
+# exactly the lines this change makes attributable.
+grep -q 'HEARTBEAT_NUDGE "pane=' "$SCRIPT" \
+  && ok "body field is NOT named pane= (would collide with lc_log prefix)" 0 \
+     "two pane= on one line; a naive grep reads the useless one" \
+  || ok "body field is NOT named pane= (would collide with lc_log prefix)" 1
+
+line='2026-01-01T00:00:00 sid=? pane=? HEARTBEAT_NUDGE target_pane=%4 nonce=abcdefghijk idle ~1200s'
+first_pane=$(echo "$line" | grep -o 'pane=[^ ]*' | head -1)
+[ "$first_pane" = "pane=?" ] && ok "prefix pane= is still first (the collision is real, not theoretical)" 1 \
+  || ok "prefix pane= is still first" 0 "got $first_pane"
+tp=$(echo "$line" | grep -o 'target_pane=[^ ]*' | head -1)
+[ "$tp" = "target_pane=%4" ] && ok "target_pane= is unambiguously extractable" 1 \
+  || ok "target_pane= is unambiguously extractable" 0 "got $tp"
 
 echo
 echo "== CANARY: the generator =="

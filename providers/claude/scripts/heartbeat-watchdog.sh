@@ -94,12 +94,23 @@ while true; do
   _nonce="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom 2>/dev/null | head -c 11)"
   [ ${#_nonce} -eq 11 ] || _nonce="$(date +%s%N | cksum | tr -dc '0-9' | head -c 11)"
 
-  # pane goes in the MESSAGE BODY, not just the lc_log prefix: that prefix is
-  # built from $TMUX_PANE/$CLAUDE_CODE_SESSION_ID, which a systemd unit does
+  # The pane goes in the MESSAGE BODY, not just the lc_log prefix: that prefix
+  # is built from $TMUX_PANE/$CLAUDE_CODE_SESSION_ID, which a systemd unit does
   # not have, so it renders `pane=? sid=?` in production -- 147 such lines on
-  # this seat. The one context where the prefix is populated is a hand-run,
+  # this seat. The one context where the prefix IS populated is a hand-run,
   # which is the one context that never runs in production.
-  lc_log HEARTBEAT_NUDGE "pane=$PANE nonce=$_nonce idle ~$((unchanged*POLL))s"
+  #
+  # ⚠️ IT IS `target_pane=`, NOT `pane=`, AND THAT IS NOT COSMETIC (cadence,
+  # caught pre-install). lc_log ALWAYS emits `pane=` in its prefix, so a body
+  # field of the same name puts TWO `pane=` on one line:
+  #     … sid=? pane=?  HEARTBEAT_NUDGE  pane=%4 nonce=…
+  # and `grep -o 'pane=[^ ]*'` returns the PREFIX one -- `pane=?` -- because
+  # it comes first. A consumer parsing naively would read "pane unknown" on
+  # precisely the lines this change exists to make attributable. That is one
+  # label with two meanings on a single line, which is the defect class this
+  # fleet has hit repeatedly; a distinct name avoids it without touching the
+  # shared lc_log prefix, whose blast radius is every log line we emit.
+  lc_log HEARTBEAT_NUDGE "target_pane=$PANE nonce=$_nonce idle ~$((unchanged*POLL))s"
   prompt="Backup heartbeat [wake-nonce: $_nonce]: this pane has been idle. Re-read your current-state pointer by ID (never by recall) and CONTINUE the active work autonomously to its DONE-WHEN. If your measured context is at or past the self-clear target, run the kijito-qa-memory skill and then self-clear. If there is genuinely no active work left, say so and stop."
 
   # Same paste-buffer discipline as session-autosend: a gap before the Enter, then verify, because
