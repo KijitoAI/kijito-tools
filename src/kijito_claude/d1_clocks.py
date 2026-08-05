@@ -293,8 +293,14 @@ def boot_wall_instant(tolerance=BOOT_AGREEMENT_TOLERANCE):
         if v:
             readings[name] = v
 
+    # NOTE THE TRI-STATE. `discontinuity_detected` starts as None meaning
+    # UNMEASURED, not False. On Darwin there is no /proc/stat, so the probe
+    # never runs -- and a hard False there would be false-BECAUSE-NOT-MEASURED
+    # wearing the clothes of false-BECAUSE-NOTHING-HAPPENED. A consumer must
+    # be forced to handle the third state rather than reading absence as
+    # safety. (ladybug, review of this module, 2026-08-05.)
     info = {"witnesses": dict(readings), "derived_btime": None,
-            "clock_step_detected": False, "step_delta_s": None}
+            "discontinuity_detected": None, "derived_witness_delta_s": None}
 
     if not _IS_MAC:
         bt = _derived_btime()
@@ -323,10 +329,32 @@ def boot_wall_instant(tolerance=BOOT_AGREEMENT_TOLERANCE):
     value = values[len(values) // 2] if len(values) % 2 else values[0]
 
     if info["derived_btime"]:
+        # ⚠️ WHAT THIS QUANTITY IS, AND WHAT IT IS NOT.
+        #
+        # btime == wall_now - boottime, so |btime - boot_wall| is IDENTICALLY
+        # freeze_cumulative. It is ONE quantity, not two: measured on this
+        # seat, delta 262053.0 s vs freeze 262053.6 s, and the 0.647 s is
+        # btime's 1-second resolution across two reads -- agreement to the
+        # instrument's floor is IDENTITY, not corroboration.
+        #
+        # This field was previously called `clock_step_detected`, which
+        # asserted a discrimination the number cannot make. It reports
+        # accumulated FREEZE; it would read the same on a host that had only
+        # ever been paused and never stepped. Worse, freeze_cumulative never
+        # decreases, so the flag could never return False for the rest of the
+        # boot epoch -- a LATCH, not a detector. It happened to be correct
+        # here, which is the dangerous case.
+        #
+        # And pause-vs-step may not be separable from in-guest clocks at all:
+        # all 26/26 freeze-interval ends on this seat coincide within 2 s with
+        # a kernel CLOCK_WAS_SET, i.e. every pause here is also a step
+        # (ladybug). So the honest move is to name what is measured -- a
+        # DISCONTINUITY between the derived and witnessed boot instants --
+        # rather than to claim a classification. `suspend_kind()` is the
+        # function that classifies, and it does so from different inputs.
         delta = abs(info["derived_btime"] - value)
-        info["step_delta_s"] = delta
-        if delta > tolerance:
-            info["clock_step_detected"] = True
+        info["derived_witness_delta_s"] = delta
+        info["discontinuity_detected"] = bool(delta > tolerance)
 
     return value, info
 
