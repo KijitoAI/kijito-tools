@@ -164,6 +164,26 @@ if boot_wall is not None:
     print("       boot - mono       = %.1f s (%.1f h)   [guest sleep]" % (s.boot - s.mono, (s.boot - s.mono)/3600.0))
     print("       verdict           = %s" % kind)
     ok("freeze_cumulative is finite", fc == fc and abs(fc) < 10**12)
+
+    # A derived quantity may not claim precision the boot instant lacks.
+    # Measured on real Darwin: freeze read 26.5 s from the utmpx witness and
+    # 0.5 s from kern.boottime -- the 26 s is ENTIRELY the truncated seconds
+    # field, and it flipped suspend_kind from GUEST_SUSPEND to BOTH, i.e. a
+    # hypervisor pause reported on a laptop that had merely slept.
+    res = C.boot_wall_resolution_s()
+    ok("boot instant resolution is stated per platform", res > 0)
+    ok("Darwin resolution is >= the 60 s minute-truncation floor",
+       (platform.system() != "Darwin") or res >= 60.0, "res=%.0f" % res)
+    ok("freeze BELOW the boot-instant resolution is not called a pause",
+       C.suspend_kind(C.Stamps(s.wall + res * 0.5, s.mono, s.boot, s.platform),
+                      boot_wall) != "HYPERVISOR_PAUSE"
+       or fc > res,
+       "sub-resolution freeze must not be reported as a real one")
+    # ...but widening the tolerance must NOT blind the detector.
+    ok("a freeze well ABOVE the resolution is still detected",
+       C.suspend_kind(C.Stamps(s.wall + 3600.0, s.mono, s.boot, s.platform),
+                      boot_wall) in ("HYPERVISOR_PAUSE", "BOTH"),
+       "the platform-aware tolerance swallowed a real 1 h freeze")
     ok("verdict is one of the four", kind in ("RUNNING","GUEST_SUSPEND","HYPERVISOR_PAUSE","BOTH"))
 
     # Synthetic positive control: inject a known freeze and assert it is SEEN.

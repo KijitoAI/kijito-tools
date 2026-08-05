@@ -236,8 +236,49 @@ def _witness_utmp():
         return None
 
 
+def _parse_darwin_reboot(text):
+    """Parse Darwin's `last reboot`, whose line shape differs from Linux's.
+
+        Linux  : reboot   system boot  7.0.0-28  Fri Jul 31 14:04:30 2026
+        Darwin : reboot   time                   Sun Jul 19 15:42
+
+    Three differences, all fatal to the Linux parser: NO YEAR, NO SECONDS, and
+    the literal word `time` where a tty is expected. It returned None, None is
+    indistinguishable from "witness absent", and the module therefore REFUSED
+    on a perfectly healthy Mac (ladybug, measured on real Darwin).
+
+    THE YEAR IS DERIVED FROM THE CURRENT DATE, WITH ROLLOVER -- never from the
+    sibling witness. Borrowing `kern.boottime`'s year would make the two
+    witnesses non-independent in exactly the field most likely to be wrong at a
+    year boundary, and a dual-witness rule whose witnesses share a value is not
+    dual. (ladybug caught this in their own drill, where the answer was right
+    and the method was not.)
+    """
+    m = re.search(
+        r"reboot\s+\S+\s+([A-Z][a-z]{2})\s+([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{1,2}):(\d{2})",
+        text or "",
+    )
+    if not m:
+        return None
+    _dow, mon, day, hh, mm = m.groups()
+    import datetime
+    now = datetime.datetime.now()
+    for year in (now.year, now.year - 1):
+        try:
+            cand = datetime.datetime.strptime(
+                "%s %s %s %s:%s" % (mon, day, year, hh, mm), "%b %d %Y %H:%M"
+            )
+        except ValueError:
+            continue
+        # A boot cannot be in the future; if it parses ahead of now, the line
+        # belongs to the previous year (Dec boot read in Jan).
+        if cand <= now + datetime.timedelta(minutes=5):
+            return time.mktime(cand.timetuple())
+    return None
+
+
 def _witness_mac_utmpx():
-    return _parse_wtmp_reboot(_run(["last", "reboot"]))
+    return _parse_darwin_reboot(_run(["last", "reboot"]))
 
 
 def _witness_mac_sysctl():
@@ -267,6 +308,16 @@ _TRUSTED_MAC = (("utmpx", _witness_mac_utmpx), ("kern.boottime[UNVERIFIED]", _wi
 
 BOOT_AGREEMENT_TOLERANCE = 120.0
 
+# ⚠️ A PLATFORM PROPERTY, NOT A PREFERENCE -- DO NOT TIGHTEN BELOW THIS.
+# Darwin's `last reboot` truncates to the MINUTE while `kern.boottime` carries
+# seconds, so two perfectly correct witnesses disagree by up to 59 s FROM
+# FORMATTING ALONE (measured: 26.0 s on the Mac, entirely the :26 seconds
+# field). Any Darwin tolerance under 60 s refuses on every healthy Mac,
+# forever. The 120 s default already clears it -- but it cleared it by LUCK
+# until this floor existed, and "tighten it to 30 s for precision" is the
+# obvious next edit. Enforced in code rather than left to review.
+_DARWIN_TOLERANCE_FLOOR_S = 60.0
+
 
 def boot_wall_instant(tolerance=BOOT_AGREEMENT_TOLERANCE):
     """The wall instant this host booted, from >=2 AGREEING on-disk witnesses.
@@ -283,6 +334,8 @@ def boot_wall_instant(tolerance=BOOT_AGREEMENT_TOLERANCE):
     btime, uptime -s): that expression is the quantity the freeze arithmetic
     checks, so returning it would make the check pass unconditionally.
     """
+    if _IS_MAC and tolerance < _DARWIN_TOLERANCE_FLOOR_S:
+        tolerance = _DARWIN_TOLERANCE_FLOOR_S
     witnesses = _TRUSTED_MAC if _IS_MAC else _TRUSTED_LINUX
     readings = {}
     for name, fn in witnesses:
@@ -377,7 +430,24 @@ def freeze_cumulative(stamps, boot_wall):
     return (stamps.wall - boot_wall) - stamps.boot
 
 
-def suspend_kind(stamps, boot_wall, freeze_tolerance=2.0):
+def boot_wall_resolution_s():
+    """The resolution of `boot_wall_instant()`'s answer on this platform.
+
+    Derived quantities may not claim precision the boot instant does not have.
+    On Darwin the coarsest trusted witness (`last reboot`) truncates to the
+    MINUTE, so the boot instant is only good to ~60 s; on Linux wtmp and the
+    journal both carry seconds.
+
+    THIS IS NOT PEDANTRY -- it was a live false positive. Measured on the Mac:
+    `freeze_cumulative` read 26.5 s using the utmpx witness and 0.5 s using
+    kern.boottime, and the 26 s is ENTIRELY the truncated seconds field. That
+    phantom freeze flipped `suspend_kind` from GUEST_SUSPEND to BOTH -- i.e.
+    the module reported a hypervisor pause on a laptop that had merely slept.
+    """
+    return _DARWIN_TOLERANCE_FLOOR_S if _IS_MAC else 2.0
+
+
+def suspend_kind(stamps, boot_wall, freeze_tolerance=None):
     """Classify what has happened to this host's time, from one row's stamps.
 
     Returns one of:
@@ -392,6 +462,8 @@ def suspend_kind(stamps, boot_wall, freeze_tolerance=2.0):
     real signal; a widened bound is how D5(ii)'s ceiling came to sit above the
     pathology it existed to catch.
     """
+    if freeze_tolerance is None:
+        freeze_tolerance = boot_wall_resolution_s()
     slept = stamps.boot - stamps.mono
     frozen = freeze_cumulative(stamps, boot_wall)
     has_sleep = slept > freeze_tolerance
