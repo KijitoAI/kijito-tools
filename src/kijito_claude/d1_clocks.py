@@ -162,61 +162,173 @@ def read_stamps():
 # it must survive a freeze, so it may not be derived from an in-process clock.
 # --------------------------------------------------------------------------
 
-def _boot_wall_linux():
-    # /proc/stat's btime is the kernel's own boot epoch and needs no parsing of
-    # locale-formatted dates, so it is tried first.
+# A witness is TRUSTED only if it is a record WRITTEN AT BOOT and left alone
+# afterwards. A witness is DERIVED if it is recomputed from the current wall
+# clock -- those inherit every clock step and are useless as a boot instant,
+# but they are excellent STEP DETECTORS, so they are read and reported rather
+# than merely banned.
+#
+# MEASURED ON THIS SEAT 2026-08-05 (the reason this section was rewritten):
+#     /proc/stat btime   2026-08-03T20:52:03Z   == now - uptime, EXACTLY
+#     uptime -s          2026-08-03 14:52:03    same derived value
+#     who -b             2026-07-31 14:04       agrees with wtmp
+#     last -F reboot     Fri Jul 31 14:04:30    on-disk wtmp record
+#     journalctl boot 0  Fri 2026-07-31 14:04:30
+# The first two had absorbed a ~3-day clock step. Sourcing the boot instant
+# from btime makes (wall - boot_wall) equal boottime BY CONSTRUCTION, so
+# freeze_cumulative reads ~0 forever, on any host, under any pause. The first
+# version of this module did exactly that -- while its own docstring refused
+# "wall minus boottime" -- because btime ARRIVES UNDER A DIFFERENT NAME. The
+# rename defeated the guard.
+
+
+def _run(cmd):
+    try:
+        out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL)
+        return out.decode("utf-8", "replace")
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
+def _parse_wtmp_reboot(text):
+    # "reboot   system boot  7.0.0-28  Fri Jul 31 14:04:30 2026   still running"
+    m = re.search(r"([A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d+\s+\d{2}:\d{2}:\d{2}\s+\d{4})", text or "")
+    if not m:
+        return None
+    try:
+        return time.mktime(time.strptime(m.group(1), "%a %b %d %H:%M:%S %Y"))
+    except ValueError:
+        return None
+
+
+def _witness_wtmp():
+    return _parse_wtmp_reboot(_run(["last", "-F", "reboot"]))
+
+
+def _witness_journal():
+    text = _run(["journalctl", "--list-boots", "--no-pager"])
+    if not text:
+        return None
+    for line in text.splitlines():
+        # the current boot is index 0
+        if re.match(r"\s*0\s+[0-9a-f]{8,}", line):
+            m = re.search(r"(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})", line)
+            if m:
+                try:
+                    return time.mktime(time.strptime(m.group(1), "%Y-%m-%d %H:%M:%S"))
+                except ValueError:
+                    return None
+    return None
+
+
+def _witness_utmp():
+    # `who -b` reads utmp's BOOT_TIME record, written at boot. Measured to
+    # agree with wtmp and to DISagree with btime on a stepped host, which is
+    # what places it on the trusted side. Minute resolution -- hence the
+    # 120 s agreement tolerance.
+    text = _run(["who", "-b"])
+    m = re.search(r"(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})", text or "")
+    if not m:
+        return None
+    try:
+        return time.mktime(time.strptime(m.group(1) + " " + m.group(2), "%Y-%m-%d %H:%M"))
+    except ValueError:
+        return None
+
+
+def _witness_mac_utmpx():
+    return _parse_wtmp_reboot(_run(["last", "reboot"]))
+
+
+def _witness_mac_sysctl():
+    text = _run(["sysctl", "-n", "kern.boottime"])
+    m = re.search(r"sec\s*=\s*(\d+)", text or "")
+    return float(m.group(1)) if m else None
+
+
+def _derived_btime():
     try:
         with open("/proc/stat", "r") as fh:
             for line in fh:
                 if line.startswith("btime "):
-                    return float(line.split()[1]), "/proc/stat:btime"
+                    return float(line.split()[1])
     except (IOError, OSError, ValueError, IndexError):
         pass
-    # `who -b` reads the on-disk wtmp/utmp boot record.
-    try:
-        out = subprocess.check_output(["who", "-b"], stderr=subprocess.DEVNULL)
-        out = out.decode("utf-8", "replace").strip()
-        m = re.search(r"(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})", out)
-        if m:
-            struct = time.strptime(m.group(1) + " " + m.group(2), "%Y-%m-%d %H:%M")
-            return time.mktime(struct), "who -b"
-    except (OSError, subprocess.CalledProcessError, ValueError):
-        pass
-    return None, None
+    return None
 
 
-def _boot_wall_mac():
-    # macOS has no /proc; kern.boottime is the kernel's own record.
-    try:
-        out = subprocess.check_output(
-            ["sysctl", "-n", "kern.boottime"], stderr=subprocess.DEVNULL
-        )
-        out = out.decode("utf-8", "replace")
-        m = re.search(r"sec\s*=\s*(\d+)", out)
-        if m:
-            return float(m.group(1)), "sysctl kern.boottime"
-    except (OSError, subprocess.CalledProcessError, ValueError):
-        pass
-    return None, None
+# (name, callable). macOS note: kern.boottime's INDEPENDENCE FROM CLOCK STEPS
+# IS UNVERIFIED -- no one has yet measured a stepped Mac. It is listed as a
+# trusted witness so the Mac path works, and this comment is the standing
+# marker that the measurement is owed. If it turns out to be step-inheriting,
+# it moves to the derived list and macOS needs a second real witness.
+_TRUSTED_LINUX = (("wtmp", _witness_wtmp), ("journal", _witness_journal), ("utmp", _witness_utmp))
+_TRUSTED_MAC = (("utmpx", _witness_mac_utmpx), ("kern.boottime[UNVERIFIED]", _witness_mac_sysctl))
+
+BOOT_AGREEMENT_TOLERANCE = 120.0
 
 
-def boot_wall_instant():
-    """The wall-clock instant this host booted, from an on-disk kernel record.
+def boot_wall_instant(tolerance=BOOT_AGREEMENT_TOLERANCE):
+    """The wall instant this host booted, from >=2 AGREEING on-disk witnesses.
 
-    Returns (epoch_seconds, source). Raises ClockError if no source could be
-    read -- it does NOT fall back to `time.time() - boottime`, because that
-    expression is exactly what a clock step corrupts, and silently returning it
-    would make the freeze arithmetic self-confirming.
+    Returns (epoch_seconds, info) where info carries every witness read, the
+    derived btime probe, and whether a clock step was detected.
+
+    Requires at least TWO trusted witnesses agreeing within `tolerance`.
+    One witness alone is not accepted: a single record cannot reveal that it
+    is wrong, and this module exists because a single confident source was.
+
+    Raises ClockError rather than returning a best guess. It never falls back
+    to `time.time() - boottime` NOR to any restatement of it (/proc/stat
+    btime, uptime -s): that expression is the quantity the freeze arithmetic
+    checks, so returning it would make the check pass unconditionally.
     """
-    value, source = (_boot_wall_mac() if _IS_MAC else _boot_wall_linux())
-    if value is None:
+    witnesses = _TRUSTED_MAC if _IS_MAC else _TRUSTED_LINUX
+    readings = {}
+    for name, fn in witnesses:
+        try:
+            v = fn()
+        except Exception:
+            v = None
+        if v:
+            readings[name] = v
+
+    info = {"witnesses": dict(readings), "derived_btime": None,
+            "clock_step_detected": False, "step_delta_s": None}
+
+    if not _IS_MAC:
+        bt = _derived_btime()
+        info["derived_btime"] = bt
+
+    if len(readings) < 2:
         raise ClockError(
-            "no on-disk boot record readable (%s). Refusing to derive boot time "
-            "from wall-minus-boottime: that is the quantity the freeze "
-            "arithmetic exists to check, and deriving it would make the check "
-            "always pass." % ("macOS" if _IS_MAC else "Linux")
+            "need >=2 agreeing on-disk boot witnesses, got %d (%s). Refusing to "
+            "fall back to /proc/stat btime or uptime -s: both are the current "
+            "wall clock minus uptime under another name, which makes the freeze "
+            "arithmetic self-confirming."
+            % (len(readings), ", ".join(sorted(readings)) or "none")
         )
-    return value, source
+
+    values = sorted(readings.values())
+    spread = values[-1] - values[0]
+    if spread > tolerance:
+        raise ClockError(
+            "trusted boot witnesses DISAGREE by %.1f s (> %.1f s tolerance): %s. "
+            "Refusing to pick one -- disagreement among boot records is itself "
+            "a clock event and must be attributed before any freeze arithmetic "
+            "is trusted." % (spread, tolerance, readings)
+        )
+
+    # Median-ish: the middle reading, which for 2 witnesses is the earlier.
+    value = values[len(values) // 2] if len(values) % 2 else values[0]
+
+    if info["derived_btime"]:
+        delta = abs(info["derived_btime"] - value)
+        info["step_delta_s"] = delta
+        if delta > tolerance:
+            info["clock_step_detected"] = True
+
+    return value, info
 
 
 # --------------------------------------------------------------------------

@@ -64,35 +64,81 @@ ok("as_dict carries platform", C.read_stamps().as_dict().get("platform") == plat
 print()
 
 # ---------------------------------------------------------------- boot record
-print("== boot_wall_instant (on-disk, must not be derived) ==")
+print("== boot_wall_instant (>=2 agreeing ON-DISK witnesses) ==")
 try:
-    boot_wall, source = C.boot_wall_instant()
+    boot_wall, info = C.boot_wall_instant()
     ok("boot instant readable", boot_wall > 0, "value=%r" % boot_wall)
-    ok("source named", bool(source), "source=%r" % source)
+    ok(">=2 trusted witnesses agreed", len(info["witnesses"]) >= 2, repr(info["witnesses"]))
     ok("boot instant is in the past", boot_wall < time.time())
-    print("       source=%s  boot_wall=%s" % (source, time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(boot_wall))))
+    print("       boot_wall = %s" % time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(boot_wall)))
+    for n, v in sorted(info["witnesses"].items()):
+        print("         witness %-24s %s" % (n, time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(v))))
+    if info["derived_btime"]:
+        print("         derived btime (NOT used)  %s   delta=%.0f s"
+              % (time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(info["derived_btime"])),
+                 info["step_delta_s"] or 0.0))
+    print("         clock_step_detected = %s" % info["clock_step_detected"])
 except C.ClockError as e:
     ok("boot instant readable", False, str(e))
-    boot_wall = None
-
-# FAIL-CLOSED canary: with every source unavailable it must RAISE, not return a
-# derived number. Deriving it from wall-minus-boottime would make the freeze
-# arithmetic self-confirming (always ~0).
+    boot_wall, info = None, {}
 print()
-print("== CANARY: fail-closed when no boot source is readable ==")
-_lin, _mac = C._boot_wall_linux, C._boot_wall_mac
+
+print("== CANARY: the derived source must NOT be the answer (this seat is stepped) ==")
+# This host carries a real ~3-day clock step: /proc/stat btime is ~2 days
+# later than the on-disk boot records. That makes it a LIVE positive control
+# for the step detector -- no synthetic input needed.
+if info.get("derived_btime") and boot_wall:
+    ok("btime differs from the trusted boot instant", (info["step_delta_s"] or 0) > 120,
+       "btime agrees with the on-disk records; this seat may no longer be stepped, "
+       "in which case this control is vacuous and must be re-established elsewhere")
+    ok("the step is REPORTED, not silently absorbed", info["clock_step_detected"] is True)
+    ok("the returned value is the ON-DISK one, not btime",
+       abs(boot_wall - info["derived_btime"]) > 120,
+       "boot_wall_instant returned the derived value -- the exact defect this rewrite fixes")
+else:
+    print("  SKIP  no derived btime available on this platform")
+print()
+
+print("== CANARY: refuses on <2 witnesses, and on DISAGREEMENT ==")
+_lin, _mac = C._TRUSTED_LINUX, C._TRUSTED_MAC
 try:
-    C._boot_wall_linux = lambda: (None, None)
-    C._boot_wall_mac = lambda: (None, None)
+    # (a) no witnesses at all -> refuse
+    C._TRUSTED_LINUX = C._TRUSTED_MAC = ()
     raised = False
-    try:
-        C.boot_wall_instant()
-    except C.ClockError:
-        raised = True
-    ok("raises ClockError rather than returning a derived value", raised,
-       "it returned a number with no source -- that is the myctx.sh defect")
+    try: C.boot_wall_instant()
+    except C.ClockError: raised = True
+    ok("refuses with zero witnesses", raised)
+
+    # (b) exactly one witness -> still refuse; one record cannot check itself
+    C._TRUSTED_LINUX = C._TRUSTED_MAC = (("solo", lambda: 1785790323.0),)
+    raised = False
+    try: C.boot_wall_instant()
+    except C.ClockError: raised = True
+    ok("refuses with a SINGLE witness", raised,
+       "a lone confident source is what produced the original defect")
+
+    # (c) two witnesses that DISAGREE (btime-style vs wtmp-style, ~2 days
+    #     apart) -> refuse rather than pick one. This is assay's L1-F1 canary.
+    C._TRUSTED_LINUX = C._TRUSTED_MAC = (
+        ("wtmp_like", lambda: 1785528270.0),      # Jul 31
+        ("btime_like", lambda: 1785790323.0),     # Aug 3
+    )
+    raised = False
+    try: C.boot_wall_instant()
+    except C.ClockError: raised = True
+    ok("REFUSES when witnesses disagree beyond tolerance", raised,
+       "it silently picked one -- disagreement among boot records IS a clock event")
+
+    # (d) two witnesses that agree -> accepted
+    C._TRUSTED_LINUX = C._TRUSTED_MAC = (
+        ("a", lambda: 1785528270.0), ("b", lambda: 1785528290.0),
+    )
+    got = None
+    try: got, _ = C.boot_wall_instant()
+    except C.ClockError: pass
+    ok("accepts two AGREEING witnesses", got is not None and abs(got - 1785528270.0) < 120)
 finally:
-    C._boot_wall_linux, C._boot_wall_mac = _lin, _mac
+    C._TRUSTED_LINUX, C._TRUSTED_MAC = _lin, _mac
 print()
 
 # ---------------------------------------------------------------- derived
