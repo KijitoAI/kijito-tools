@@ -377,6 +377,100 @@ def suspend_kind(stamps, boot_wall, freeze_tolerance=2.0):
     return "RUNNING"
 
 
+def freeze_intervals_from_journal(min_paired_entries=100, threshold_s=60.0):
+    """Recover PER-INTERVAL host freeze from the systemd journal, historically.
+
+    Every journal entry carries BOTH `__REALTIME_TIMESTAMP` and
+    `__MONOTONIC_TIMESTAMP`. For consecutive entries, `dt_real - dt_mono` is
+    the time the host did not execute between them. So the freeze ledger was
+    already on disk and needed no new instrumentation (argus, 2026-08-05).
+
+    Returns a list of (start_epoch, end_epoch, seconds), each >= threshold_s.
+
+    WHY PER-INTERVAL AND NOT A SINCE-BOOT TOTAL -- this replaces the
+    aggregate that produced two separate defects:
+      * A row that POSTDATES the freeze inherited the whole since-boot
+        penalty, so its host-hours were understated without bound and it
+        could never age out. (Safe direction, but detection never fires.)
+      * A row PREDATING the current boot had prior boots' freezes uncounted,
+        so the "lower bound" overstated and could declare a loss EARLY --
+        the unsafe direction, on exactly the old-dormant-file class the
+        threshold exists to protect (assay, L2-F1).
+    Both dissolve once freeze is attributed to the row's OWN window.
+
+    LIMITS, inherited from the method: the journal bounds a freeze between
+    ADJACENT entries, so each interval is an upper bound on the start and a
+    lower bound on the end -- it localises, it does not timestamp to the
+    second, and on an idle box adjacent entries can be minutes apart. Covers
+    the CURRENT BOOT ONLY; there is no monotonic continuity across a reboot.
+
+    FAILS CLOSED: raises rather than returning [] when too few entries were
+    read. An empty list is indistinguishable from "no freezes" and this
+    module's whole history is confident zeroes -- three of them in one day,
+    from three different mechanisms.
+    """
+    if _IS_MAC:
+        raise ClockError(
+            "no systemd journal on macOS; per-interval freeze recovery needs a "
+            "Mac-specific witness that has not been established yet"
+        )
+    text = _run(["journalctl", "-b", "-o", "export", "--no-pager"])
+    if text is None:
+        raise ClockError("journalctl unreadable")
+
+    pairs = []
+    real = mono = None
+    for line in text.splitlines():
+        if line.startswith("__REALTIME_TIMESTAMP="):
+            try:
+                real = int(line.split("=", 1)[1])
+            except ValueError:
+                real = None
+        elif line.startswith("__MONOTONIC_TIMESTAMP="):
+            try:
+                mono = int(line.split("=", 1)[1])
+            except ValueError:
+                mono = None
+            if real is not None and mono is not None:
+                pairs.append((real, mono))
+                real = mono = None
+
+    if len(pairs) < min_paired_entries:
+        raise ClockError(
+            "only %d paired journal entries (< %d): refusing to report freeze "
+            "intervals. An empty result here is indistinguishable from 'no "
+            "freezes', which is the exact false absence this guard exists for."
+            % (len(pairs), min_paired_entries)
+        )
+
+    pairs.sort()
+    intervals = []
+    for (r0, m0), (r1, m1) in zip(pairs, pairs[1:]):
+        gap = ((r1 - r0) - (m1 - m0)) / 1e6
+        if gap >= threshold_s:
+            intervals.append((r0 / 1e6, r1 / 1e6, gap))
+    return intervals
+
+
+def freeze_in_window(intervals, t0, t1):
+    """Seconds of host freeze overlapping [t0, t1], from per-interval data.
+
+    Overlap is apportioned by the fraction of each interval's WALL span that
+    falls inside the window. Because the journal localises rather than
+    timestamps a freeze, an interval straddling a window edge is approximate;
+    that approximation is bounded by the interval's own wall span, which is
+    reported by the caller when it matters.
+    """
+    total = 0.0
+    for start, end, seconds in intervals:
+        lo, hi = max(start, t0), min(end, t1)
+        if hi <= lo:
+            continue
+        span = end - start
+        total += seconds if span <= 0 else seconds * ((hi - lo) / span)
+    return total
+
+
 def segment_voided(open_stamps, now_stamps):
     """Does a monotonic RESET void the in-flight window/soak segment?
 
