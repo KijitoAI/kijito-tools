@@ -76,8 +76,8 @@ try:
     if info["derived_btime"]:
         print("         derived btime (NOT used)  %s   delta=%.0f s"
               % (time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(info["derived_btime"])),
-                 info["step_delta_s"] or 0.0))
-    print("         clock_step_detected = %s" % info["clock_step_detected"])
+                 info["derived_witness_delta_s"] or 0.0))
+    print("         discontinuity_detected = %r" % info["discontinuity_detected"])
 except C.ClockError as e:
     ok("boot instant readable", False, str(e))
     boot_wall, info = None, {}
@@ -88,15 +88,28 @@ print("== CANARY: the derived source must NOT be the answer (this seat is steppe
 # later than the on-disk boot records. That makes it a LIVE positive control
 # for the step detector -- no synthetic input needed.
 if info.get("derived_btime") and boot_wall:
-    ok("btime differs from the trusted boot instant", (info["step_delta_s"] or 0) > 120,
+    ok("btime differs from the trusted boot instant", (info["derived_witness_delta_s"] or 0) > 120,
        "btime agrees with the on-disk records; this seat may no longer be stepped, "
        "in which case this control is vacuous and must be re-established elsewhere")
-    ok("the step is REPORTED, not silently absorbed", info["clock_step_detected"] is True)
+    ok("the discontinuity is REPORTED, not silently absorbed",
+       info["discontinuity_detected"] is True)
+    # ladybug's finding: the delta IS freeze_cumulative, one quantity not two.
+    s_now = C.read_stamps()
+    fc = C.freeze_cumulative(s_now, boot_wall)
+    ok("delta and freeze_cumulative are the SAME quantity (identity, not agreement)",
+       abs((info["derived_witness_delta_s"] or 0) - fc) < 5.0,
+       "delta=%.1f freeze=%.1f -- if these ever DIVERGE the identity assumption broke"
+       % (info["derived_witness_delta_s"] or 0, fc))
     ok("the returned value is the ON-DISK one, not btime",
        abs(boot_wall - info["derived_btime"]) > 120,
        "boot_wall_instant returned the derived value -- the exact defect this rewrite fixes")
 else:
-    print("  SKIP  no derived btime available on this platform")
+    # ladybug F2: on Darwin the probe never runs, so the field must be
+    # UNMEASURED (None) rather than False -- false-because-not-measured is
+    # indistinguishable from false-because-nothing-happened.
+    ok("unmeasured platform reports None, NOT False",
+       info.get("discontinuity_detected") is None,
+       "a hard False here is a confident negative from an instrument that never ran")
 print()
 
 print("== CANARY: refuses on <2 witnesses, and on DISAGREEMENT ==")
