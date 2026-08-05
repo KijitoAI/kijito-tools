@@ -39,6 +39,10 @@ for cmd, want in [
     ("bash -c 'hidden'", F.CLASSIFIER_UNKNOWN),
     ("./mystery.sh", F.CLASSIFIER_UNKNOWN),
     ("cat x | xargs foo", F.CLASSIFIER_UNKNOWN),
+    # D11-F1: a command that MENTIONS a heavy word is not a heavy command.
+    ("grep pytest test.log", F.LIGHT),
+    ("cat Makefile", F.LIGHT),
+    ("ls docker-compose.yml", F.LIGHT),
 ]:
     got, why = F.classify_command("Bash", cmd)
     ok("%-34r -> %s" % (cmd[:32], want), got == want, "got %s (%s)" % (got, why))
@@ -59,6 +63,34 @@ ok("a quoted | does not split the command", F.classify_command("Bash", q)[0] == 
 ok("a quoted | leaves ONE segment", len(F._split_compound(q)) == 1)
 ok('echo "a|b" stays light', F.classify_command("Bash", 'echo "a|b"')[0] == F.LIGHT)
 ok("an UNquoted | still splits", len(F._split_compound("cat x | wc -l")) == 2)
+print()
+
+print("== CANARY: D11-F1 heavy matching is COMMAND POSITION, not substring ==")
+ok("grep pytest -> LIGHT (15 min), not HEAVY (4 h)",
+   F.classify_command("Bash", "grep pytest test.log")[0] == F.LIGHT,
+   "substring matching inflates detection latency 16x in the QUIET direction")
+ok("a REAL pytest is still HEAVY", F.classify_command("Bash", "pytest -q")[0] == F.HEAVY)
+ok("multi-word heavy tokens still match at command position",
+   F.classify_command("Bash", "git bundle create x --all")[0] == F.HEAVY)
+ok("...but not when merely mentioned",
+   F.classify_command("Bash", "echo git bundle")[0] == F.LIGHT)
+rows_a = [asst_tool("q1", "Bash", ago(1.0), command="grep pytest test.log")]
+f_a = F.evaluate_open_calls(rows_a, now, freeze_lookup=NOFREEZE)[0]
+ok("and it changes the VERDICT: a 1 h stuck grep now PAGES", f_a["verdict"] == "PAGE",
+   "under the old substring rule this waited 4 h: %s" % f_a["reason"])
+print()
+
+print("== CANARY: D11-F2 pre-boot open call is floored, not overstated ==")
+boot = now - 10 * 3600
+rows_b = [asst_tool("p1", "Bash", ago(500.0), command="ls")]
+f_b = F.evaluate_open_calls(rows_b, now, freeze_lookup=NOFREEZE, boot_wall=boot)[0]
+ok("pre-boot call uses current-boot executing time as the floor",
+   abs(f_b["mono_age_s"] - 10 * 3600) < 60,
+   "mono_age=%.1fh -- 500 h wall must not be charged across a reboot" % (f_b["mono_age_s"] / 3600))
+rows_c = [asst_tool("p2", "Bash", ago(5.0), command="ls")]
+f_c = F.evaluate_open_calls(rows_c, now, freeze_lookup=NOFREEZE, boot_wall=boot)[0]
+ok("an in-boot call is unaffected by the floor",
+   abs(f_c["mono_age_s"] - 5 * 3600) < 60)
 print()
 
 print("== open-call detection (the ABSENCE is the predicate) ==")

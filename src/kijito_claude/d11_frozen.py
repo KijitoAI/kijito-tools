@@ -67,6 +67,17 @@ HEAVY_BOUND_S_PROVISIONAL = 4 * 3600.0
 # "Age the child's file" was therefore UNIMPLEMENTABLE for these and failed
 # OPEN. A hung backgrounded command is lost background WORK, not a frozen
 # seat -- the synchronous class that motivated D11 stays fully covered.
+#
+# ⚠️ NOTE HOW EACH IS ACTUALLY EXCLUDED, because the two mechanisms differ and
+# only one is enforced here. Monitor is excluded BY NAME, below. Bash's
+# "moved to background" is excluded BY RELIANCE: a backgrounded call closes
+# its tool_result promptly, so it never appears OPEN and never reaches the
+# bound. That is true of the harness versions measured (2.1.220 / 2.1.222) and
+# it is a VERSION-SCOPED ASSUMPTION, not an invariant -- if a future binary
+# leaves background pairs open, this scope-out silently stops working and the
+# class starts paging. Disclosed here so it is a stated dependency rather than
+# an implicit one; re-check it when the binary version changes, which Clause 0
+# already requires for the D1/D2 predicates.
 OUT_OF_SCOPE_TOOLS = ("Monitor",)
 
 _HEAVY_TOKENS = (
@@ -206,13 +217,20 @@ def _classify_one(command):
             return (CLASSIFIER_UNKNOWN,
                     "opaque construct %r -- payload not decidable from the "
                     "command string" % tok)
+    # D11-F1: heavy tokens match at COMMAND POSITION, not as a substring
+    # anywhere in the line -- symmetric with the discipline the light list
+    # already used. Substring matching classified `grep pytest test.log` as
+    # HEAVY (4 h bound) and `cat Makefile` as HEAVY, inflating detection
+    # latency 16x in the QUIET direction on exactly the commands a
+    # review-heavy fleet runs all day. A command that MENTIONS pytest is not
+    # a command that RUNS pytest.
+    norm = " ".join(low.split())
     for tok in _HEAVY_TOKENS:
-        if tok in low:
-            return HEAVY, "heavy-child token %r" % tok.strip()
-    toks = low.split()
-    first = toks[0] if toks else ""
+        t = tok.strip()
+        if norm == t or norm.startswith(t + " "):
+            return HEAVY, "heavy-child command %r" % t
     for tok in _LIGHT_TOKENS:
-        if first == tok or low.strip().startswith(tok + " ") or low.strip() == tok:
+        if norm == tok or norm.startswith(tok + " "):
             return LIGHT, "known-light command %r" % tok
     return (CLASSIFIER_UNKNOWN,
             "command %r matches no declared class" % (command.strip()[:40],))
@@ -262,6 +280,7 @@ def open_calls(rows):
 
 
 def evaluate_open_calls(rows, now_wall, freeze_lookup=None, suspend_verdict=None,
+                        boot_wall=None,
                         bound_s=BOUND_S_PROVISIONAL,
                         heavy_bound_s=HEAVY_BOUND_S_PROVISIONAL):
     """Assess every open call. Returns a list of findings.
@@ -305,8 +324,18 @@ def evaluate_open_calls(rows, now_wall, freeze_lookup=None, suspend_verdict=None
                                         "wall age overstates executing time. Refusing to page on it."))
             continue
 
-        frozen = freeze_lookup(started, now_wall)
-        mono_age = wall_age - frozen
+        # D11-F2: THE freeze_lookup CONTRACT. A journal-backed provider can
+        # only see the CURRENT boot, so for a call whose tool_use predates it
+        # the prior boots' freezes are invisible, `mono_age` OVERSTATES, and
+        # the call pages EARLY -- the same aggregate hazard fixed in d1_queue
+        # (L2-F1). Stated here rather than left to the provider, so a future
+        # provider that merely satisfies the signature cannot reintroduce it.
+        if boot_wall is not None and started < boot_wall:
+            frozen = freeze_lookup(boot_wall, now_wall)
+            mono_age = (now_wall - boot_wall) - frozen
+        else:
+            frozen = freeze_lookup(started, now_wall)
+            mono_age = wall_age - frozen
 
         if cls == CLASSIFIER_UNKNOWN and mono_age > bound_s:
             findings.append(dict(call=call, verdict="PAGE", subtype=CLASSIFIER_UNKNOWN, cls=cls,
