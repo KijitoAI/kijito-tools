@@ -198,7 +198,7 @@ def _file_shows_loss(items):
 T_HOST_HOURS_PROVISIONAL = 96.0
 
 
-def classify_exitless(enqueue_ts, now_wall, freeze_since_boot_s=0.0,
+def classify_exitless(enqueue_ts, now_wall, freeze_lookup=None, boot_wall=None,
                       session_is_live=None, t_host_hours=T_HOST_HOURS_PROVISIONAL):
     """An enqueue with no exit and nothing after it: ORPHANED, or still in flight?
 
@@ -221,16 +221,26 @@ def classify_exitless(enqueue_ts, now_wall, freeze_since_boot_s=0.0,
     THE HOST-HOURS BOUND, and why it is conservative by construction:
     host_hours <= wall_hours always, so `wall_age >= T` is NECESSARY but NOT
     SUFFICIENT -- using wall age alone declares orphans EARLY, which is the
-    unsafe direction (a false loss signature pages). Lacking per-row historical
-    stamps, the defensible LOWER bound on host-hours for a row inside the
-    current boot is `wall_age - freeze_since_boot`. Only when that lower bound
-    clears T is ORPHANED asserted. Passing freeze_since_boot_s=0 recovers the
-    naive wall-clock behaviour and is NOT recommended on a virtualised host.
+    unsafe direction (a false loss signature pages).
+
+    `freeze_lookup(t0, t1) -> seconds` supplies freeze attributed to THIS
+    row's own window, not a since-boot aggregate. The aggregate produced two
+    separate defects and both dissolve here:
+      * a row POSTDATING the freeze inherited the whole since-boot penalty,
+        so it could never age out at all;
+      * a row PREDATING the current boot had prior boots' freezes uncounted,
+        so the bound OVERSTATED and could declare a loss early (L2-F1).
+    The second is handled explicitly: for a pre-boot enqueue the floor is the
+    current boot's executing time alone, which needs no prior-boot records.
+
+    With no `freeze_lookup` at all, host-hours cannot be established and the
+    function REFUSES the positive verdict rather than falling back to wall
+    age -- the fallback is precisely the early-declaration hazard.
     """
     if session_is_live:
         return ENQUEUED_IN_FLIGHT, "session is live (pane witness collapses T)"
     try:
-        import calendar, datetime
+        import datetime
         ts = enqueue_ts.replace("Z", "+00:00")
         enq_epoch = datetime.datetime.fromisoformat(ts).timestamp()
     except Exception:
@@ -239,20 +249,44 @@ def classify_exitless(enqueue_ts, now_wall, freeze_since_boot_s=0.0,
                 "signature off an unreadable clock" % (enqueue_ts,))
 
     wall_age_h = (now_wall - enq_epoch) / 3600.0
-    host_lower_h = wall_age_h - (freeze_since_boot_s or 0.0) / 3600.0
+
+    # Without per-window freeze data, host-hours cannot be established at all.
+    # Falling back to wall age would OVERSTATE host-hours and declare a loss
+    # EARLY -- the unsafe direction. So refuse the positive verdict instead.
+    if freeze_lookup is None:
+        return (ENQUEUED_IN_FLIGHT,
+                "no freeze data: host-hours cannot be established (wall %.1f h). "
+                "Refusing to substitute wall age, which overstates host-hours "
+                "and would declare a loss early." % wall_age_h)
+
+    if boot_wall is not None and enq_epoch < boot_wall:
+        # L2-F1: for an enqueue older than the current boot, prior boots'
+        # freezes are unrecorded, so wall_age - freeze_this_boot is NOT a
+        # lower bound -- it overstates, on exactly the old-dormant-file class
+        # T exists to protect. The defensible floor that needs no prior-boot
+        # records is the executing time of the CURRENT boot alone.
+        frozen = freeze_lookup(boot_wall, now_wall)
+        host_lower_h = ((now_wall - boot_wall) - frozen) / 3600.0
+        basis = ("pre-boot enqueue: floored at current-boot executing time "
+                 "%.1f h (wall age %.1f h spans >=1 reboot; prior-boot freeze "
+                 "unrecorded)" % (host_lower_h, wall_age_h))
+    else:
+        frozen = freeze_lookup(enq_epoch, now_wall)
+        host_lower_h = wall_age_h - frozen / 3600.0
+        basis = ("wall %.1f h - freeze-in-window %.1f h = host %.1f h"
+                 % (wall_age_h, frozen / 3600.0, host_lower_h))
+
     if host_lower_h >= t_host_hours:
         return (ENQUEUED_ORPHANED,
-                "no exit, no subsequent row, and host-hours lower bound %.1f h "
-                ">= T %.1f h (wall %.1f h, freeze %.1f h)"
-                % (host_lower_h, t_host_hours, wall_age_h, (freeze_since_boot_s or 0) / 3600.0))
+                "no exit, no subsequent row, host-hours %.1f h >= T %.1f h [%s]"
+                % (host_lower_h, t_host_hours, basis))
     return (ENQUEUED_IN_FLIGHT,
-            "no exit and no subsequent row, but host-hours lower bound %.1f h "
-            "< T %.1f h (wall %.1f h, freeze %.1f h) -- NOT yet declarable"
-            % (host_lower_h, t_host_hours, wall_age_h, (freeze_since_boot_s or 0) / 3600.0))
+            "no exit and no subsequent row, but host-hours %.1f h < T %.1f h "
+            "-- NOT yet declarable [%s]" % (host_lower_h, t_host_hours, basis))
 
 
 def pair_queue_ops(ops, path=None, has_subsequent_row=None, now_wall=None,
-                   freeze_since_boot_s=0.0, session_is_live=None,
+                   freeze_lookup=None, boot_wall=None, session_is_live=None,
                    t_host_hours=T_HOST_HOURS_PROVISIONAL):
     """Pair each enqueue with its exit and assign an op-layer outcome.
 
@@ -321,7 +355,8 @@ def pair_queue_ops(ops, path=None, has_subsequent_row=None, now_wall=None,
             )
             continue
         outcome, note = classify_exitless(enq.timestamp, now_wall=now_wall,
-                                          freeze_since_boot_s=freeze_since_boot_s,
+                                          freeze_lookup=freeze_lookup,
+                                          boot_wall=boot_wall,
                                           session_is_live=session_is_live,
                                           t_host_hours=t_host_hours)
         items.append(QueueItem(enq, None, outcome, ATTR_NONE, note))
@@ -337,7 +372,7 @@ def pair_queue_ops(ops, path=None, has_subsequent_row=None, now_wall=None,
     return items, unmatched_exits
 
 
-def scan_corpus(root, now_wall=None, freeze_since_boot_s=0.0,
+def scan_corpus(root, now_wall=None, freeze_lookup=None, boot_wall=None,
                 t_host_hours=T_HOST_HOURS_PROVISIONAL):
     """Walk a projects root, returning {path: (items, unmatched_exits)}.
 
@@ -360,8 +395,7 @@ def scan_corpus(root, now_wall=None, freeze_since_boot_s=0.0,
             if not ops:
                 continue
             out[p] = pair_queue_ops(
-                ops, path=p, now_wall=now_wall,
-                freeze_since_boot_s=freeze_since_boot_s,
-                t_host_hours=t_host_hours,
+                ops, path=p, now_wall=now_wall, freeze_lookup=freeze_lookup,
+                boot_wall=boot_wall, t_host_hours=t_host_hours,
             )
     return out

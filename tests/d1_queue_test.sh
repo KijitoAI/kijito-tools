@@ -59,25 +59,27 @@ def enq_at(hours_ago):
     t = datetime.datetime.fromtimestamp(now - hours_ago * 3600, datetime.timezone.utc)
     return t.isoformat().replace("+00:00", "Z")
 
+NOFREEZE = lambda a, b: 0.0
 items, _ = Q.pair_queue_ops([op("enqueue", enq_at(0.01), "fresh")],
-                            has_subsequent_row=NEVER, now_wall=now)
+                            has_subsequent_row=NEVER, now_wall=now, freeze_lookup=NOFREEZE)
 ok("a 36-SECOND-old exitless enqueue is IN FLIGHT, not ORPHANED",
    items[0].outcome == Q.ENQUEUED_IN_FLIGHT, items[0].note)
 
 items, _ = Q.pair_queue_ops([op("enqueue", enq_at(200.0), "old")],
-                            has_subsequent_row=NEVER, now_wall=now)
+                            has_subsequent_row=NEVER, now_wall=now, freeze_lookup=NOFREEZE)
 ok("a 200-HOUR-old exitless enqueue IS orphaned", items[0].outcome == Q.ENQUEUED_ORPHANED,
    items[0].note)
 
 # liveness witness outranks any clock
 items, _ = Q.pair_queue_ops([op("enqueue", enq_at(200.0), "old")],
-                            has_subsequent_row=NEVER, now_wall=now, session_is_live=True)
+                            has_subsequent_row=NEVER, now_wall=now,
+                            freeze_lookup=NOFREEZE, session_is_live=True)
 ok("a LIVE session is never orphaned, however old the enqueue",
    items[0].outcome == Q.ENQUEUED_IN_FLIGHT, items[0].note)
 
 # unparseable clock must not manufacture a loss signature
 items, _ = Q.pair_queue_ops([op("enqueue", "not-a-timestamp", "x")],
-                            has_subsequent_row=NEVER, now_wall=now)
+                            has_subsequent_row=NEVER, now_wall=now, freeze_lookup=NOFREEZE)
 ok("an unreadable timestamp does NOT score a loss", items[0].outcome == Q.ENQUEUED_IN_FLIGHT)
 print()
 
@@ -85,12 +87,47 @@ print("== CANARY: T is HOST-hours, and freeze changes the verdict ==")
 # 120 h wall old. With no freeze that clears T=96. With 72.8 h of freeze the
 # host-hours lower bound is 47.2 h and it must NOT be declared.
 a, _ = Q.pair_queue_ops([op("enqueue", enq_at(120.0), "x")], has_subsequent_row=NEVER,
-                        now_wall=now, freeze_since_boot_s=0.0)
+                        now_wall=now, freeze_lookup=NOFREEZE)
+FREEZE728 = lambda t0, t1: 72.8 * 3600
 b, _ = Q.pair_queue_ops([op("enqueue", enq_at(120.0), "x")], has_subsequent_row=NEVER,
-                        now_wall=now, freeze_since_boot_s=72.8 * 3600)
+                        now_wall=now, freeze_lookup=FREEZE728)
 ok("120 h wall, no freeze -> ORPHANED", a[0].outcome == Q.ENQUEUED_ORPHANED)
 ok("120 h wall, 72.8 h freeze -> NOT declarable", b[0].outcome == Q.ENQUEUED_IN_FLIGHT, b[0].note)
-ok("the verdict states its basis", "freeze" in b[0].note and "host-hours" in b[0].note)
+ok("the verdict states its basis", "freeze" in b[0].note and "host" in b[0].note)
+
+# NEW canaries for the per-window fix.
+none_items, _ = Q.pair_queue_ops([op("enqueue", enq_at(500.0), "x")],
+                                 has_subsequent_row=NEVER, now_wall=now)
+ok("with NO freeze data it REFUSES to declare, however old",
+   none_items[0].outcome == Q.ENQUEUED_IN_FLIGHT and "Refusing" in none_items[0].note,
+   "falling back to wall age overstates host-hours and declares a loss early")
+
+# L2-F1: a pre-boot enqueue must be floored at this boot's executing time,
+# not wall_age minus this boot's freeze (prior boots' freezes are unrecorded).
+boot = now - 50 * 3600                       # booted 50 h ago
+pre, _ = Q.pair_queue_ops([op("enqueue", enq_at(500.0), "ancient")],
+                          has_subsequent_row=NEVER, now_wall=now,
+                          freeze_lookup=NOFREEZE, boot_wall=boot)
+ok("a PRE-BOOT enqueue is floored at current-boot executing time (L2-F1)",
+   pre[0].outcome == Q.ENQUEUED_IN_FLIGHT and "pre-boot" in pre[0].note,
+   "500 h wall would clear T, but only 50 h of THIS boot is evidenced: %s" % pre[0].note)
+
+# A row inside the current boot is unaffected by that floor.
+inb, _ = Q.pair_queue_ops([op("enqueue", enq_at(40.0), "recent")],
+                          has_subsequent_row=NEVER, now_wall=now,
+                          freeze_lookup=NOFREEZE, boot_wall=boot)
+ok("an in-boot enqueue uses its own window, not the boot floor",
+   "pre-boot" not in inb[0].note)
+
+# The defect argus's decomposition exposed: a row POSTDATING the freeze must
+# not inherit it. Window-scoped lookup returns 0 for a recent row.
+def windowed(t0, t1):
+    frozen_until = now - 100 * 3600          # all freeze ended 100 h ago
+    return max(0.0, min(t1, frozen_until) - t0) if t0 < frozen_until else 0.0
+post, _ = Q.pair_queue_ops([op("enqueue", enq_at(2.0), "after the freeze")],
+                           has_subsequent_row=NEVER, now_wall=now, freeze_lookup=windowed)
+ok("a row postdating the freeze is charged ZERO of it",
+   "freeze-in-window 0.0 h" in post[0].note, post[0].note)
 print()
 
 print("== content identity beats FIFO; unmatched exits are not forced ==")
@@ -113,11 +150,12 @@ print("== post-loss ordinal downgrade ==")
 ops = [op("enqueue", T % 1, "A"), op("dequeue", T % 2),
        op("enqueue", T % 3, "ORPHAN")]
 items, _ = Q.pair_queue_ops(ops, has_subsequent_row=NEVER, now_wall=now,
-                            freeze_since_boot_s=0.0)
+                            freeze_lookup=NOFREEZE)
 # make the orphan old enough to be declarable
 ops2 = [op("enqueue", enq_at(200), "A"), op("dequeue", enq_at(199)),
         op("enqueue", enq_at(198), "ORPHAN")]
-items2, _ = Q.pair_queue_ops(ops2, has_subsequent_row=NEVER, now_wall=now)
+items2, _ = Q.pair_queue_ops(ops2, has_subsequent_row=NEVER, now_wall=now,
+                             freeze_lookup=NOFREEZE)
 has_orphan = any(i.outcome == Q.ENQUEUED_ORPHANED for i in items2)
 downgraded = any(i.attribution == Q.ATTR_ORDINAL_UNTRUSTED for i in items2)
 ok("a file with a loss signature downgrades its ordinal pairings",
