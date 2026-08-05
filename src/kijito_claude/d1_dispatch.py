@@ -47,6 +47,8 @@ __all__ = [
     "DELIVERED", "PENDING", "SUPERSEDED",
 ]
 
+ATTRIBUTION_UNCERTAIN = "ATTRIBUTION-UNCERTAIN"
+
 SHAPE_QUEUED_COMMAND = "queued_command-shape"
 SHAPE_DEQUEUE = "dequeue-shape"
 SHAPE_BOX_RETURN = "BOX-RETURN"
@@ -177,13 +179,32 @@ def dispatch_shape(row, index, nonce, enqueue_contents=None):
         if any(content == c for c in enqueue_contents):
             return SHAPE_DEQUEUE, "content-identical to an enqueue row in this file"
 
-        # (3) nonce present but NO enqueue in this file contains it.
-        # Enqueue-ABSENCE is decidable because enqueues are content-bearing.
         if nonce in (content or ""):
-            if not any(nonce in (c or "") for c in enqueue_contents):
-                return (SHAPE_BOX_RETURN,
-                        "nonce present, no enqueue row in this file contains it "
-                        "-- reached the box without transiting this session's queue")
+            # (2-fallback) L3-F1: content identity is PRIMARY, but the spec
+            # keeps a residue -- rows whose content is NOT byte-identical to
+            # any enqueue while an enqueue for that nonce plainly exists. A
+            # box-edited or truncated payload is exactly that, and a box edit
+            # is a HUMAN action we know occurs (popAll returns payloads to an
+            # editable box). The spec scores this dequeue-shape and tags it
+            # ATTRIBUTION-UNCERTAIN with a published rate, NOT in N.
+            #
+            # Without this branch the row fell through (2), failed (3)'s
+            # no-enqueue-contains-it criterion, and landed in (4) -> BLOCKED
+            # + page. That converts a class the plan HONESTLY DISCLOSES into
+            # a false page. Measured 0/181 today, so there is no corpus
+            # witness -- the branch rests on the spec and on fixtures, and
+            # that is stated rather than implied.
+            if any(nonce in (c or "") for c in enqueue_contents):
+                return (SHAPE_DEQUEUE + "|" + ATTRIBUTION_UNCERTAIN,
+                        "nonce-bearing enqueue exists but content is not "
+                        "byte-identical (box-edited or truncated) -- "
+                        "ATTRIBUTION-UNCERTAIN, rate published, never in N")
+
+            # (3) nonce present and NO enqueue in this file contains it.
+            # Enqueue-ABSENCE is decidable because enqueues are content-bearing.
+            return (SHAPE_BOX_RETURN,
+                    "nonce present, no enqueue row in this file contains it "
+                    "-- reached the box without transiting this session's queue")
 
     # (4) anything else nonce-bearing
     return (SHAPE_BLOCKED,
@@ -285,7 +306,14 @@ def batch_keys_from_ops(index, tolerance_s=0.5):
         except Exception:
             return None
 
-    by_content = {}
+    # L3-F2: keys are assigned PER OCCURRENCE, not via a content dict.
+    # A content dict collapses duplicates: pre-nonce, recurring heartbeats are
+    # byte-identical BY CONSTRUCTION, so two wakes removed days apart would
+    # share the FIRST remove's stamp, become "batch siblings", and go
+    # non-terminal to each other in the walk -- masking genuine supersession
+    # across days. Post-nonce contents are unique and this dissolves, but the
+    # corpus validated here is pre-nonce, so it was live.
+    exits = []          # content-bearing exits in file order, consumed once each
     dequeue_stamps = []
     for r in index.rows:
         if r.type != "queue-operation":
@@ -294,24 +322,38 @@ def batch_keys_from_ops(index, tolerance_s=0.5):
         if op in ("remove", "popAll"):
             c = r.raw.get("content")
             if c is not None:
-                by_content.setdefault(c, r.timestamp)
+                exits.append([c, r.timestamp, False])      # [content, stamp, used]
         elif op == "dequeue":
             e = _epoch(r.timestamp)
             if e is not None:
                 dequeue_stamps.append((e, r.timestamp))
     dequeue_stamps.sort()
 
-    def key_of(row):
-        if row.is_string_content_user():
-            c = row.message_content()
-            if c in by_content:
-                return "op:%s" % by_content[c]
+    # Precompute row -> key in FILE ORDER so assignment is deterministic and
+    # each exit is claimed at most once. key_of must stay a pure lookup:
+    # consuming state inside it would make the answer depend on call order.
+    keys = {}
+    for row in index.rows:
+        if not row.is_string_content_user():
+            continue
+        c = row.message_content()
+        chosen = None
+        for slot in exits:
+            if not slot[2] and slot[0] == c:
+                slot[2] = True
+                chosen = "op:%s" % slot[1]
+                break
+        if chosen is None:
             e = _epoch(row.timestamp)
             if e is not None:
                 for stamp_e, stamp_s in dequeue_stamps:
                     if abs(stamp_e - e) <= tolerance_s:
-                        return "deq~:%s" % stamp_s
-        return "singleton:%s" % row.uuid
+                        chosen = "deq~:%s" % stamp_s
+                        break
+        keys[row.uuid] = chosen or ("singleton:%s" % row.uuid)
+
+    def key_of(row):
+        return keys.get(row.uuid, "singleton:%s" % row.uuid)
 
     return key_of
 
