@@ -2,12 +2,39 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { compareAuthBinding, inspectAuthBinding } from "../auth-binding.mjs";
+import { acquireLock, releaseLock } from "../../_shared/wake-core.mjs";
+import {
+  controllerStartObservation,
+  enumerateControllerInstances,
+  lockStatus,
+  processPopulation,
+  repairStaleLock,
+  rollupRequiredStatuses,
+  waitArmed,
+} from "../cli.mjs";
 
 const packageRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const installer = path.join(packageRoot, "install.mjs");
+const sourceGitSha = spawnSync("/usr/bin/git", ["-C", packageRoot, "rev-parse", "HEAD"],
+  { encoding: "utf8" }).stdout.trim();
+
+function authJson({ accountId = "acct-fixture", suffix = "one", mode = "chatgpt" } = {}) {
+  return `${JSON.stringify({
+    auth_mode: mode,
+    OPENAI_API_KEY: null,
+    tokens: {
+      id_token: `id-${suffix}`,
+      access_token: `access-${suffix}`,
+      refresh_token: `refresh-${suffix}`,
+      account_id: accountId,
+    },
+    last_refresh: "2026-08-06T00:00:00.000Z",
+  })}\n`;
+}
 
 function run(args, expected = 0) {
   const direct = !args[0].endsWith(".mjs");
@@ -18,8 +45,15 @@ function run(args, expected = 0) {
   return result;
 }
 
+async function stopChild(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  const exited = new Promise((resolve) => child.once("exit", resolve));
+  child.kill("SIGTERM");
+  await exited;
+}
+
 function fixture() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-kijito-package."));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "codex-kijito-package.")));
   fs.chmodSync(root, 0o700);
   const ordinary = path.join(root, "ordinary");
   const monitor = path.join(root, "monitor");
@@ -29,7 +63,7 @@ function fixture() {
   const config = path.join(ordinary, "config.toml");
   const token = path.join(root, "token");
   const events = path.join(monitor, "events.codex.ndjson");
-  fs.writeFileSync(auth, '{"auth":"fixture"}\n', { mode: 0o600 });
+  fs.writeFileSync(auth, authJson(), { mode: 0o600 });
   fs.writeFileSync(config, 'model = "fixture"\n', { mode: 0o600 });
   fs.writeFileSync(token, `kjt_${"x".repeat(32)}\n`, { mode: 0o600 });
   fs.writeFileSync(events, "", { mode: 0o600 });
@@ -38,6 +72,10 @@ function fixture() {
   fs.copyFileSync(process.execPath, realBin);
   fs.chmodSync(realBin, 0o700);
   fs.symlinkSync(realBin, bin);
+  const legacyRoot = path.join(root, "legacy-install");
+  fs.mkdirSync(legacyRoot, { mode: 0o700 });
+  const legacyController = path.join(legacyRoot, "controller.mjs");
+  fs.writeFileSync(legacyController, "setInterval(() => {}, 1000);\n", { mode: 0o600 });
   return {
     root,
     installRoot: path.join(root, "share", "codex-kijito-hive"),
@@ -45,7 +83,7 @@ function fixture() {
     // Hermetic skills target. Without this the installer's default (~/.codex/skills) would make
     // the test suite deploy into the developer's real Codex install.
     skillsRoot: path.join(root, "codex-skills"),
-    auth, config, token, events, bin,
+    auth, config, token, events, bin, legacyRoot, legacyController,
   };
 }
 
@@ -61,6 +99,8 @@ function installArgs(f) {
     "--codex-bin", f.bin,
     "--node-bin", process.execPath,
     "--skills-root", f.skillsRoot,
+    "--origin-git-sha", sourceGitSha,
+    "--legacy-root", f.legacyRoot,
   ];
 }
 
@@ -77,8 +117,16 @@ test("release install, doctor, duplicate refusal, and manifest-bound uninstall",
     assert.ok(installed.skills.every((s) => s.target.startsWith(f.skillsRoot)));
     const manifest = JSON.parse(fs.readFileSync(path.join(f.installRoot, "installed-manifest.json"), "utf8"));
     assert.equal(manifest.paths.codexBin, fs.realpathSync(f.bin));
+    assert.deepEqual(manifest.paths.legacyInstallRoots, [fs.realpathSync(f.legacyRoot)]);
+    assert.deepEqual(manifest.origin, {
+      package: "kijito-claude",
+      packageVersion: "0.1.4",
+      repository: "https://github.com/KijitoAI/kijito-claude",
+      gitSha: sourceGitSha,
+    });
     const doctor = JSON.parse(run([f.launcher, "doctor"]).stdout);
-    assert.equal(doctor.status, "GREEN");
+    assert.equal(doctor.status, "INACTIVE");
+    assert.deepEqual(doctor.origin, manifest.origin);
     assert.equal(doctor.hooksDisabled, true);
     assert.equal(doctor.launchAgentInstalled, false);
     assert.equal(doctor.workspaceEmpty, true);
@@ -94,6 +142,540 @@ test("release install, doctor, duplicate refusal, and manifest-bound uninstall",
     assert.equal(fs.readFileSync(f.config, "utf8"), ordinaryBefore);
     assert.equal(fs.readFileSync(f.auth, "utf8"), authBefore);
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("installed CLI runs through a symlink and status fails closed on an unhealthy lock", () => {
+  const f = fixture();
+  try {
+    run(installArgs(f));
+    const cliLink = path.join(f.root, "installed-cli-link");
+    fs.symlinkSync(path.join(f.installRoot, "cli.mjs"), cliLink);
+    const symlinkDoctor = JSON.parse(run([process.execPath, cliLink, "doctor"]).stdout);
+    assert.equal(symlinkDoctor.status, "INACTIVE");
+    const controllerLink = path.join(f.root, "installed-controller-link.mjs");
+    fs.symlinkSync(path.join(f.installRoot, "codex", "controller.mjs"), controllerLink);
+    const controllerEntry = run([process.execPath, controllerLink], 1);
+    assert.match(controllerEntry.stderr, /--codex-home is required/);
+    const spacedRoot = path.join(f.root, "provider root with space");
+    fs.mkdirSync(path.join(spacedRoot, "codex"), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(path.join(spacedRoot, "_shared"), { recursive: true, mode: 0o700 });
+    fs.copyFileSync(path.join(f.installRoot, "codex", "controller.mjs"),
+      path.join(spacedRoot, "codex", "controller.mjs"));
+    fs.copyFileSync(path.join(f.installRoot, "_shared", "wake-core.mjs"),
+      path.join(spacedRoot, "_shared", "wake-core.mjs"));
+    const spacedEntry = run([process.execPath, path.join(spacedRoot, "codex", "controller.mjs")], 1);
+    assert.match(spacedEntry.stderr, /--codex-home is required/);
+
+    const lockFile = path.join(f.installRoot, "runtime", "consumer.lock");
+    fs.writeFileSync(lockFile,
+      `${JSON.stringify({ pid: process.pid, token: "live-non-controller", persona: "codex" })}\n`,
+      { mode: 0o600 });
+    const status = run([f.launcher, "status"], 1);
+    assert.match(status.stdout, /population-mismatch/);
+    const startedAt = Date.now();
+    const start = run([f.launcher, "start"], 1);
+    assert.match(start.stderr, /controller cannot start from state population-mismatch/);
+    assert.ok(Date.now() - startedAt < 5_000, "start should diagnose immediately, not time out");
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("installed repair-stale-lock command uses real ESRCH and exact zero-controller census", () => {
+  const f = fixture();
+  try {
+    run(installArgs(f));
+    const lockFile = path.join(f.installRoot, "runtime", "consumer.lock");
+    fs.writeFileSync(lockFile,
+      `${JSON.stringify({ pid: 2_147_483_000, token: "dead", persona: "codex" })}\n`,
+      { mode: 0o600 });
+    const repaired = JSON.parse(run([f.launcher, "repair-stale-lock"]).stdout);
+    assert.equal(repaired.status, "STALE_LOCK_QUARANTINED");
+    assert.equal(fs.existsSync(lockFile), false);
+    assert.equal(fs.existsSync(repaired.quarantine), true);
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("installed doctor reaches GREEN from one real exact controller and matching schema-2 evidence", async () => {
+  const f = fixture();
+  let child;
+  try {
+    run(installArgs(f));
+    const manifest = JSON.parse(fs.readFileSync(
+      path.join(f.installRoot, "installed-manifest.json"), "utf8"));
+    child = spawn(process.execPath, [f.legacyController,
+      "--codex-home", manifest.paths.codexHome,
+      "--workspace", manifest.paths.workspace,
+      "--runtime", manifest.paths.runtime,
+      "--events", manifest.paths.eventsFile], { stdio: "ignore" });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const installedCli = await import(`${pathToFileURL(path.join(f.installRoot, "cli.mjs")).href}?test=green`);
+    const census = installedCli.processPopulation(manifest);
+    assert.equal(census.status, "PASS", JSON.stringify(census));
+    const observedCommand = spawnSync("/bin/ps", ["-p", String(child.pid), "-o", "command="],
+      { encoding: "utf8" }).stdout.trim();
+    assert.ok(census.matches.some((row) => row.pid === child.pid),
+      JSON.stringify({ census, observedCommand }));
+    const exactPopulation = installedCli.enumerateControllerInstances(manifest);
+    assert.ok(exactPopulation.matches.some((row) => row.pid === child.pid),
+      JSON.stringify(exactPopulation));
+    const eventStat = fs.lstatSync(manifest.paths.eventsFile);
+    const runId = "b".repeat(32);
+    const threadId = "thread-doctor-green";
+    fs.writeFileSync(path.join(manifest.paths.runtime, "consumer.lock"),
+      `${JSON.stringify({ pid: child.pid, token: "owned", persona: "codex" })}\n`, { mode: 0o600 });
+    fs.writeFileSync(path.join(manifest.paths.runtime, "state.json"), `${JSON.stringify({
+      schema: 2,
+      persona: "codex",
+      threadId,
+      offset: eventStat.size,
+      eventFile: { dev: eventStat.dev, ino: eventStat.ino },
+      ambiguous: null,
+      inFlight: null,
+      streamStatus: { status: "clear", unreadBytes: 0, checkedAt: "2026-08-06T00:00:01Z" },
+      controllerPid: child.pid,
+      controllerRunId: runId,
+      startedAt: "2026-08-06T00:00:00Z",
+      armedAt: "2026-08-06T00:00:02Z",
+      lastTerminal: { turnId: "turn-green", status: "completed", at: "2026-08-06T00:00:02Z" },
+    })}\n`, { mode: 0o600 });
+    fs.writeFileSync(path.join(manifest.paths.runtime, "controller.ndjson"), [
+      JSON.stringify({ ts: "2026-08-06T00:00:01Z", pid: child.pid, runId,
+        threadId, event: "surfaced", terminal: "completed" }),
+      JSON.stringify({ ts: "2026-08-06T00:00:02Z", pid: child.pid, runId,
+        threadId, event: "armed" }),
+      "",
+    ].join("\n"), { mode: 0o600 });
+    const doctor = JSON.parse(run([f.launcher, "doctor"]).stdout);
+    assert.equal(doctor.status, "GREEN");
+    assert.equal(doctor.controller.pid, child.pid);
+    assert.equal(doctor.runtimeReadiness.code, "WAKE_READY");
+  } finally {
+    await stopChild(child);
+    fs.rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test("full install refuses absent, malformed, or non-HEAD build-commit provenance", () => {
+  for (const bad of ["", "not-a-sha", "a".repeat(39), "A".repeat(40), "0".repeat(40)]) {
+    const f = fixture();
+    try {
+      const args = installArgs(f);
+      args[args.indexOf("--origin-git-sha") + 1] = bad;
+      run(args, 1);
+      assert.equal(fs.existsSync(f.installRoot), false);
+      assert.equal(fs.existsSync(f.launcher), false);
+    } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+  }
+});
+
+test("auth binding ignores token rotation, ordinary auth is advisory, and dedicated drift is required", () => {
+  const f = fixture();
+  try {
+    run(installArgs(f));
+    const dedicated = path.join(f.installRoot, "codex-home", "auth.json");
+
+    fs.writeFileSync(f.auth, authJson({ suffix: "ordinary-rotated" }), { mode: 0o600 });
+    fs.writeFileSync(dedicated, authJson({ suffix: "dedicated-rotated" }), { mode: 0o600 });
+    const rotated = JSON.parse(run([f.launcher, "doctor"]).stdout);
+    assert.equal(rotated.status, "INACTIVE");
+    assert.equal(rotated.auth.ordinary.code, "AUTH_BINDING_MATCH");
+    assert.equal(rotated.auth.dedicated.code, "AUTH_BINDING_MATCH");
+    assert.doesNotMatch(JSON.stringify(rotated), /ordinary-rotated|dedicated-rotated|access-|refresh-/);
+
+    fs.writeFileSync(f.auth, authJson({ accountId: "different-account" }), { mode: 0o600 });
+    const accountChanged = JSON.parse(run([f.launcher, "doctor"]).stdout);
+    assert.equal(accountChanged.status, "INACTIVE");
+    assert.equal(accountChanged.auth.ordinary.code, "AUTH_BINDING_MISMATCH");
+    assert.deepEqual(accountChanged.ordinaryAdvisory,
+      { status: "FAIL", code: "AUTH_BINDING_MISMATCH" });
+    assert.equal(accountChanged.ordinaryStateMatchesInstallSnapshot, false);
+
+    fs.writeFileSync(f.auth, authJson({ mode: "tampered-mode" }), { mode: 0o600 });
+    const modeChanged = JSON.parse(run([f.launcher, "doctor"]).stdout);
+    assert.equal(modeChanged.status, "INACTIVE");
+    assert.equal(modeChanged.auth.ordinary.code, "AUTH_MODE_UNSUPPORTED");
+
+    fs.unlinkSync(f.auth);
+    const ordinaryAbsent = JSON.parse(run([f.launcher, "doctor"]).stdout);
+    assert.equal(ordinaryAbsent.status, "INACTIVE");
+    assert.equal(ordinaryAbsent.auth.ordinary.code, "AUTH_EVIDENCE_ABSENT");
+
+    fs.writeFileSync(dedicated, authJson({ accountId: "different-dedicated-account" }), { mode: 0o600 });
+    const dedicatedChanged = JSON.parse(run([f.launcher, "doctor"], 1).stdout);
+    assert.equal(dedicatedChanged.status, "RED");
+    assert.equal(dedicatedChanged.auth.dedicated.code, "AUTH_BINDING_MISMATCH");
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("required-status rollup is closed-world and unknown future states block", () => {
+  assert.equal(rollupRequiredStatuses([{ status: "PASS" }]), "PASS");
+  assert.equal(rollupRequiredStatuses([{ status: "FAIL" }]), "RED");
+  assert.equal(rollupRequiredStatuses([{ status: "BLOCKED" }]), "BLOCKED");
+  assert.equal(rollupRequiredStatuses([{ status: "FUTURE_GOOD_MAYBE" }]), "BLOCKED");
+  assert.equal(rollupRequiredStatuses([]), "BLOCKED");
+});
+
+test("start observation diagnoses every non-transitional lock state immediately", () => {
+  assert.equal(controllerStartObservation({ state: "stopped" }), null);
+  assert.deepEqual(controllerStartObservation({ state: "running", pid: 7 }),
+    { state: "running", pid: 7 });
+  for (const state of ["invalid-lock", "unreadable-lock", "stale-lock", "pid-mismatch", "population-mismatch",
+    "unverifiable-lock", "future-state"]) {
+    assert.throws(() => controllerStartObservation({ state }),
+      new RegExp(`controller entered ${state}`));
+  }
+});
+
+test("an internally consistent alternate source tree cannot impersonate the reviewed commit", () => {
+  const f = fixture();
+  try {
+    const providers = path.join(f.root, "alternate-providers");
+    const alternate = path.join(providers, "codex");
+    fs.mkdirSync(providers, { mode: 0o700 });
+    fs.cpSync(packageRoot, alternate, { recursive: true });
+    fs.cpSync(path.join(packageRoot, "..", "_shared"), path.join(providers, "_shared"), { recursive: true });
+    run(["/usr/bin/git", "-C", providers, "init", "-q"]);
+    run(["/usr/bin/git", "-C", providers, "config", "user.email", "wake-test@example.invalid"]);
+    run(["/usr/bin/git", "-C", providers, "config", "user.name", "Wake Test"]);
+    run(["/usr/bin/git", "-C", providers, "add", "codex", "_shared"]);
+    run(["/usr/bin/git", "-C", providers, "commit", "-qm", "reviewed source"]);
+    const reviewedSha = run(["/usr/bin/git", "-C", providers, "rev-parse", "HEAD"]).stdout.trim();
+    const binding = path.join(alternate, "auth-binding.mjs");
+    const source = fs.readFileSync(binding, "utf8").replace(
+      "JSON.stringify({ accountId, authMode })",
+      'JSON.stringify({ parser: "alternate-source", accountId, authMode })');
+    fs.writeFileSync(binding, source, { mode: 0o600 });
+    run([path.join(alternate, "tools", "refresh-manifest.mjs")]);
+    const args = installArgs(f);
+    args[args.indexOf("--source-root") + 1] = alternate;
+    args[args.indexOf("--origin-git-sha") + 1] = reviewedSha;
+    const refused = run(args, 1);
+    assert.match(refused.stderr, /source artifact differs from reviewed commit/);
+    assert.equal(fs.existsSync(f.installRoot), false);
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("full install requires an explicit legacy census scope", () => {
+  const f = fixture();
+  try {
+    const args = installArgs(f);
+    const index = args.indexOf("--legacy-root");
+    args.splice(index, 2);
+    const refused = run(args, 1);
+    assert.match(refused.stderr, /explicit --legacy-root/);
+    assert.equal(fs.existsSync(f.installRoot), false);
+
+    const controllerless = path.join(f.root, "controllerless-legacy");
+    fs.mkdirSync(controllerless, { mode: 0o700 });
+    const scoped = installArgs(f);
+    scoped[scoped.indexOf("--legacy-root") + 1] = controllerless;
+    const missingController = run(scoped, 1);
+    assert.match(missingController.stderr, /legacy census scope contains no controller/);
+    assert.equal(fs.existsSync(f.installRoot), false);
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("canonicalization precedes census representability validation", () => {
+  const f = fixture();
+  try {
+    const realParent = path.join(f.root, "parent with space");
+    const alias = path.join(f.root, "safe-alias");
+    fs.mkdirSync(realParent, { mode: 0o700 });
+    fs.symlinkSync(realParent, alias);
+    const args = installArgs(f);
+    args[args.indexOf("--install-root") + 1] = path.join(alias, "codex-kijito-hive");
+    const refused = run(args, 1);
+    assert.match(refused.stderr, /cannot be represented safely in the macOS process census/);
+    assert.equal(fs.existsSync(path.join(realParent, "codex-kijito-hive")), false);
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("install refuses runtime paths the exact process census cannot represent", () => {
+  const f = fixture();
+  try {
+    const args = installArgs(f);
+    const unsafeEvents = path.join(f.root, "events with space.ndjson");
+    fs.writeFileSync(unsafeEvents, "", { mode: 0o600 });
+    args[args.indexOf("--events-file") + 1] = unsafeEvents;
+    const refused = run(args, 1);
+    assert.match(refused.stderr, /cannot be represented safely in the macOS process census/);
+    assert.equal(fs.existsSync(f.installRoot), false);
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("auth evidence absence, malformed JSON, and unknown binding version are BLOCKED", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-auth-binding."));
+  fs.chmodSync(root, 0o700);
+  const auth = path.join(root, "auth.json");
+  try {
+    assert.equal(inspectAuthBinding(auth).status, "BLOCKED");
+    fs.writeFileSync(auth, "{", { mode: 0o600 });
+    assert.equal(inspectAuthBinding(auth).code, "AUTH_EVIDENCE_UNPARSEABLE");
+    fs.writeFileSync(auth, authJson(), { mode: 0o600 });
+    assert.equal(compareAuthBinding(auth, { version: 999, digest: "0".repeat(64) }).code,
+      "AUTH_BINDING_VERSION_UNKNOWN");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("lock publication is complete/exclusive and malformed bodies stay in the state machine", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-lock-publish."));
+  fs.chmodSync(root, 0o700);
+  const lockFile = path.join(root, "consumer.lock");
+  const manifest = { paths: { runtime: root } };
+  try {
+    for (const body of ["", "not-json", '{"pid":']) {
+      fs.writeFileSync(lockFile, body, { mode: 0o600 });
+      const status = lockStatus(manifest);
+      assert.equal(status.state, "invalid-lock");
+      assert.equal(status.reason, "lock-json-unparseable");
+      fs.unlinkSync(lockFile);
+    }
+    const lock = acquireLock(lockFile, "codex");
+    assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(lockFile, "utf8"))).sort(),
+      ["persona", "pid", "token"]);
+    assert.throws(() => acquireLock(lockFile, "codex"), (error) => error.code === "EEXIST");
+    releaseLock(lock);
+    assert.equal(fs.existsSync(lockFile), false);
+    assert.deepEqual(fs.readdirSync(root), []);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("stale lock repair requires ESRCH, zero exact controllers, and preserves quarantined evidence", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-stale-lock."));
+  fs.chmodSync(root, 0o700);
+  const runtime = path.join(root, "runtime");
+  fs.mkdirSync(runtime, { mode: 0o700 });
+  const lockFile = path.join(runtime, "consumer.lock");
+  const manifest = { paths: {
+    runtime, codexHome: path.join(root, "home"), workspace: path.join(root, "workspace"),
+    eventsFile: path.join(root, "events.codex.ndjson"),
+  } };
+  const esrch = Object.assign(new Error("gone"), { code: "ESRCH" });
+  const probes = {
+    kill: () => { throw esrch; },
+    command: () => "",
+    population: () => ({ status: "PASS", code: "PROCESS_CENSUS_COMPLETE", matches: [] }),
+  };
+  try {
+    fs.writeFileSync(lockFile, `${JSON.stringify({ pid: 99999, token: "token", persona: "codex" })}\n`, { mode: 0o600 });
+    assert.equal(lockStatus(manifest, probes).state, "stale-lock");
+    const repaired = repairStaleLock(manifest, probes);
+    assert.equal(repaired.status, "STALE_LOCK_QUARANTINED");
+    assert.equal(repaired.recoverable, true);
+    assert.equal(fs.existsSync(lockFile), false);
+    assert.equal(fs.existsSync(repaired.quarantine), true);
+    assert.match(fs.readFileSync(repaired.quarantine, "utf8"), /99999/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("stale lock repair detects a late path swap and reports whether rollback restored it", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-stale-race."));
+  fs.chmodSync(root, 0o700);
+  const runtime = path.join(root, "runtime");
+  fs.mkdirSync(runtime, { mode: 0o700 });
+  const lockFile = path.join(runtime, "consumer.lock");
+  const aside = path.join(runtime, "verified-original.aside");
+  const manifest = { paths: { runtime, codexHome: path.join(root, "home"),
+    workspace: path.join(root, "workspace"), eventsFile: path.join(root, "events") } };
+  const esrch = Object.assign(new Error("gone"), { code: "ESRCH" });
+  const probes = {
+    kill: () => { throw esrch; }, command: () => "",
+    population: () => ({ status: "PASS", code: "PROCESS_CENSUS_COMPLETE", matches: [] }),
+    beforeQuarantineRename: () => {
+      fs.renameSync(lockFile, aside);
+      fs.writeFileSync(lockFile,
+        `${JSON.stringify({ pid: 88888, token: "replacement", persona: "codex" })}\n`, { mode: 0o600 });
+    },
+  };
+  try {
+    fs.writeFileSync(lockFile,
+      `${JSON.stringify({ pid: 99999, token: "verified", persona: "codex" })}\n`, { mode: 0o600 });
+    assert.throws(() => repairStaleLock(manifest, probes), /rollback=restored-displaced-entry/);
+    assert.match(fs.readFileSync(lockFile, "utf8"), /replacement/);
+    assert.match(fs.readFileSync(aside, "utf8"), /verified/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("stale lock repair detects mutation between its two evidence fingerprints", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-stale-fingerprint."));
+  fs.chmodSync(root, 0o700);
+  const runtime = path.join(root, "runtime");
+  fs.mkdirSync(runtime, { mode: 0o700 });
+  const lockFile = path.join(runtime, "consumer.lock");
+  const manifest = { paths: { runtime, codexHome: path.join(root, "home"),
+    workspace: path.join(root, "workspace"), eventsFile: path.join(root, "events") } };
+  const esrch = Object.assign(new Error("gone"), { code: "ESRCH" });
+  const probes = {
+    kill: () => { throw esrch; }, command: () => "",
+    population: () => ({ status: "PASS", code: "PROCESS_CENSUS_COMPLETE", matches: [] }),
+    afterFirstFingerprint: () => fs.writeFileSync(lockFile,
+      `${JSON.stringify({ pid: 99999, token: "changed", persona: "codex" })}\n`, { mode: 0o600 }),
+  };
+  try {
+    fs.writeFileSync(lockFile,
+      `${JSON.stringify({ pid: 99999, token: "verified", persona: "codex" })}\n`, { mode: 0o600 });
+    assert.throws(() => repairStaleLock(manifest, probes), /stale-lock evidence changed|changed during repair/);
+    assert.equal(fs.existsSync(lockFile), true);
+    assert.equal(fs.readdirSync(runtime).filter((name) => name.includes(".stale.")).length, 0);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("stale lock repair never hides a rollback obstruction", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-stale-rollback."));
+  fs.chmodSync(root, 0o700);
+  const runtime = path.join(root, "runtime");
+  fs.mkdirSync(runtime, { mode: 0o700 });
+  const lockFile = path.join(runtime, "consumer.lock");
+  const aside = path.join(runtime, "verified-original.aside");
+  const manifest = { paths: { runtime, codexHome: path.join(root, "home"),
+    workspace: path.join(root, "workspace"), eventsFile: path.join(root, "events") } };
+  const esrch = Object.assign(new Error("gone"), { code: "ESRCH" });
+  const probes = {
+    kill: () => { throw esrch; }, command: () => "",
+    population: () => ({ status: "PASS", code: "PROCESS_CENSUS_COMPLETE", matches: [] }),
+    beforeQuarantineRename: () => {
+      fs.renameSync(lockFile, aside);
+      fs.writeFileSync(lockFile,
+        `${JSON.stringify({ pid: 88888, token: "replacement", persona: "codex" })}\n`, { mode: 0o600 });
+    },
+    afterQuarantineRename: () => fs.writeFileSync(lockFile, "new owner\n", { mode: 0o600 }),
+  };
+  try {
+    fs.writeFileSync(lockFile,
+      `${JSON.stringify({ pid: 99999, token: "verified", persona: "codex" })}\n`, { mode: 0o600 });
+    assert.throws(() => repairStaleLock(manifest, probes),
+      /rollback=blocked-original-path-reappeared/);
+    assert.equal(fs.readFileSync(lockFile, "utf8"), "new owner\n");
+    assert.match(fs.readFileSync(aside, "utf8"), /verified/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("EPERM, failed census, and a live or duplicate population can never reap a lock", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-stale-refuse."));
+  fs.chmodSync(root, 0o700);
+  const runtime = path.join(root, "runtime");
+  fs.mkdirSync(runtime, { mode: 0o700 });
+  const lockFile = path.join(runtime, "consumer.lock");
+  const manifest = { paths: { runtime, codexHome: "h", workspace: "w", eventsFile: "e" } };
+  const writeLock = () => fs.writeFileSync(lockFile,
+    `${JSON.stringify({ pid: 99998, token: "token", persona: "codex" })}\n`, { mode: 0o600 });
+  try {
+    writeLock();
+    const eperm = Object.assign(new Error("denied"), { code: "EPERM" });
+    const unknown = { kill: () => { throw eperm; }, command: () => "", population: () => {
+      throw new Error("must not census after EPERM");
+    } };
+    assert.equal(lockStatus(manifest, unknown).state, "unverifiable-lock");
+    assert.throws(() => repairStaleLock(manifest, unknown), /refusing stale-lock repair/);
+    fs.unlinkSync(lockFile);
+
+    writeLock();
+    const esrch = Object.assign(new Error("gone"), { code: "ESRCH" });
+    const blocked = { kill: () => { throw esrch; }, command: () => "",
+      population: () => ({ status: "BLOCKED", code: "PROCESS_CENSUS_UNAVAILABLE", matches: [] }) };
+    assert.equal(lockStatus(manifest, blocked).state, "unverifiable-lock");
+    assert.throws(() => repairStaleLock(manifest, blocked), /refusing stale-lock repair/);
+    fs.unlinkSync(lockFile);
+
+    writeLock();
+    const matching = { pid: 777, args: {
+      "--codex-home": "h", "--workspace": "w", "--runtime": runtime, "--events": "e",
+    } };
+    const populated = { kill: () => { throw esrch; }, command: () => "",
+      population: () => ({ status: "PASS", code: "PROCESS_CENSUS_COMPLETE", matches: [matching] }) };
+    assert.equal(lockStatus(manifest, populated).state, "population-mismatch");
+    assert.throws(() => repairStaleLock(manifest, populated), /refusing stale-lock repair/);
+    assert.equal(fs.existsSync(lockFile), true);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("controller census binds every runtime argument and exposes duplicates", () => {
+  const manifest = { paths: {} };
+  const one = { dev: "1", ino: "1" };
+  const other = { dev: "2", ino: "2" };
+  const expectedIdentities = { "--codex-home": one, "--workspace": one,
+    "--runtime": one, "--events": one };
+  const row = (pid, overrides = {}) => ({ pid, argIdentities: {
+    "--codex-home": one, "--workspace": one, "--runtime": one, "--events": one, ...overrides,
+  } });
+  const exact = enumerateControllerInstances(manifest, () => ({
+    status: "PASS", code: "PROCESS_CENSUS_COMPLETE",
+    expectedIdentities,
+    matches: [row(1), row(2), row(3, { "--events": other })],
+  }));
+  assert.deepEqual(exact.matches.map((item) => item.pid), [1, 2]);
+});
+
+test("real census uses path identity, ignores bystanders, and blocks genuine indeterminate rows", async () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "codex-real-census.")));
+  fs.chmodSync(root, 0o700);
+  const legacyRoot = path.join(root, "legacy");
+  fs.mkdirSync(legacyRoot, { mode: 0o700 });
+  const controller = path.join(legacyRoot, "controller.mjs");
+  fs.writeFileSync(controller, "setInterval(() => {}, 1000);\n", { mode: 0o600 });
+  const controllerAlias = path.join(legacyRoot, "same-inode-different-name.mjs");
+  fs.symlinkSync(controller, controllerAlias);
+  const manifest = { paths: {
+    codexHome: path.join(root, "home"), workspace: path.join(root, "workspace"),
+    runtime: path.join(root, "runtime"), eventsFile: path.join(root, "events.codex.ndjson"),
+    nodeBin: process.execPath, legacyInstallRoots: [legacyRoot],
+  } };
+  for (const dir of [manifest.paths.codexHome, manifest.paths.workspace, manifest.paths.runtime]) {
+    fs.mkdirSync(dir, { mode: 0o700 });
+  }
+  fs.writeFileSync(manifest.paths.eventsFile, "", { mode: 0o600 });
+  const child = spawn(process.execPath, [controllerAlias,
+    "--codex-home", manifest.paths.codexHome,
+    "--workspace", manifest.paths.workspace,
+    "--runtime", `${manifest.paths.runtime}/../runtime/`,
+    "--events", manifest.paths.eventsFile], { stdio: "ignore" });
+  let nodeBystander;
+  let tailBystander;
+  let malformed;
+  try {
+    let census;
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      census = processPopulation(manifest);
+      if (census.matches.some((row) => row.pid === child.pid)) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.equal(census.status, "PASS");
+    assert.ok(census.matches.some((row) => row.pid === child.pid));
+    const exact = enumerateControllerInstances(manifest);
+    assert.ok(exact.matches.some((row) => row.pid === child.pid));
+    nodeBystander = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)",
+      "note", controller], { stdio: "ignore" });
+    tailBystander = spawn("/usr/bin/tail", ["-f", controller], { stdio: "ignore" });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const withBystanders = processPopulation(manifest);
+    assert.equal(withBystanders.status, "PASS", JSON.stringify(withBystanders));
+    assert.ok(withBystanders.matches.some((row) => row.pid === child.pid));
+    assert.ok(!withBystanders.matches.some((row) => row.pid === nodeBystander.pid
+      || row.pid === tailBystander.pid));
+    const unsafe = processPopulation({ paths: { ...manifest.paths,
+      eventsFile: path.join(root, "events with space.ndjson") } });
+    assert.equal(unsafe.code, "PROCESS_CENSUS_PATH_UNREPRESENTABLE");
+    const missingScope = processPopulation({ paths: { ...manifest.paths, legacyInstallRoots: [] } });
+    assert.equal(missingScope.code, "PROCESS_CENSUS_LEGACY_SCOPE_REQUIRED");
+
+    await stopChild(child);
+    malformed = spawn(process.execPath, [controller,
+      "--codex-home", manifest.paths.codexHome,
+      "--workspace", manifest.paths.workspace,
+      "--runtime", manifest.paths.runtime,
+      "--events", manifest.paths.eventsFile,
+      '"'], { stdio: "ignore" });
+    let blocked;
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      blocked = processPopulation(manifest);
+      if (blocked.code === "PROCESS_CENSUS_CANDIDATE_UNPARSEABLE") break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.equal(blocked.code, "PROCESS_CENSUS_CANDIDATE_UNPARSEABLE", JSON.stringify(blocked));
+    assert.ok(blocked.unparseablePids.includes(malformed.pid));
+  } finally {
+    await Promise.all([child, nodeBystander, tailBystander, malformed].map(stopChild));
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("skills deploy with their agents sidecar, idempotently, without an install root", () => {
@@ -129,6 +711,7 @@ test("doctor and uninstall fail closed on installed-byte tampering", () => {
     // validator) and fixedWakeText (the prompt-injection fence), so an ungated copy of it would be
     // the most valuable thing in the install to tamper with.
     for (const target of [path.join(f.installRoot, "codex", "controller.mjs"),
+                          path.join(f.installRoot, "codex", "auth-binding.mjs"),
                           path.join(f.installRoot, "_shared", "wake-core.mjs")]) {
       const bytes = fs.readFileSync(target);
       fs.appendFileSync(target, "\n// tamper\n");
@@ -146,9 +729,23 @@ test("doctor and uninstall fail closed on installed-byte tampering", () => {
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 
-test("smoke command fences armed evidence to bytes written after its own start", () => {
-  const cli = fs.readFileSync(path.join(packageRoot, "cli.mjs"), "utf8");
-  assert.match(cli, /const logOffset = fs\.existsSync\(logFile\) \? fs\.statSync\(logFile\)\.size : 0/);
-  assert.match(cli, /waitArmed\(manifest, 180_000, started\.logOffset\)/);
-  assert.match(cli, /bytes\.subarray\(logOffset\)/);
+test("waitArmed behavior ignores old armed evidence and returns only a post-start event", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-wait-armed."));
+  fs.chmodSync(root, 0o700);
+  const runtime = path.join(root, "runtime");
+  fs.mkdirSync(runtime, { mode: 0o700 });
+  const logFile = path.join(runtime, "controller.ndjson");
+  fs.writeFileSync(logFile,
+    `${JSON.stringify({ event: "armed", ts: "old", threadId: "old-thread" })}\n`, { mode: 0o600 });
+  const offset = fs.statSync(logFile).size;
+  const timer = setTimeout(() => fs.appendFileSync(logFile,
+    `${JSON.stringify({ event: "armed", ts: "new", threadId: "new-thread" })}\n`), 25);
+  try {
+    const armed = await waitArmed({ paths: { runtime } }, 1_000, offset);
+    assert.equal(armed.ts, "new");
+    assert.equal(armed.threadId, "new-thread");
+  } finally {
+    clearTimeout(timer);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

@@ -106,6 +106,7 @@ test("wake text is fixed, visibly synthetic, sorted, and body-free", () => {
   ]);
   assert.ok(text.startsWith(WAKE_PREFIX));
   assert.match(text, /Message IDs: 8,9/);
+  assert.match(text, /before_id=N\+1, limit=1, unread_only=false/);
   assert.doesNotMatch(text, /IGNORE PREVIOUS|rm -rf/);
   assert.match(text, /not a human-authored chat|NOT USER AUTHORED/i);
 });

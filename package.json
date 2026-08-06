@@ -1,6 +1,6 @@
 {
   "name": "kijito-claude",
-  "version": "0.1.2",
+  "version": "0.1.4",
   "description": "Installer for the kijito-claude toolkit: copies the context-tracking, session catch-up, and self-clear scripts plus the Kijito skills into ~/.claude.",
   "license": "Apache-2.0",
   "type": "commonjs",
@@ -36,9 +36,13 @@
   ],
   "scripts": {
     "prepublishOnly": "npm pack --dry-run",
-    "test:n0": "node --test providers/codex/test/n0-harness.test.mjs",
+    "test:n0-subject": "node providers/codex/test/n0-subject-boundary.mjs && node --test providers/codex/test/n0-subject-boundary.test.mjs",
+    "test:n0": "node --test providers/codex/test/n0-harness.test.mjs && echo N0_HARNESS_BASELINE_GREEN",
+    "test:n0-cli": "node --test providers/codex/test/n0-cli-refusal.test.mjs && echo N0_CLI_REFUSAL_GREEN",
+    "test:n0-notables": "node --test providers/codex/test/n0-notable-regressions.test.mjs providers/codex/test/n0-counterexample-matrix.test.mjs && echo N0_NOTABLE_REGRESSIONS_GREEN",
     "test:n0-census": "node providers/codex/test/n0-guard-census.mjs --check",
-    "test:n0-census-self": "node --test providers/codex/test/n0-guard-census.test.mjs"
+    "test:n0-census-self": "node --test providers/codex/test/n0-guard-census.test.mjs providers/codex/test/n0-guard-independent-projection.test.mjs providers/codex/test/n0-guard-mutation-operators.test.mjs providers/codex/test/n0-guard-remainder-classes.test.mjs providers/codex/test/n0-guard-sanitizer-pairs.test.mjs providers/codex/test/n0-guard-shared-context-predicates.test.mjs && echo N0_GUARD_CENSUS_SELF_GREEN",
+    "test:n0-mutation": "node providers/codex/test/n0-guard-mutation-runner.mjs"
   },
   "devDependencies": {
     "acorn": "8.18.0"

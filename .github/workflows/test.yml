@@ -30,6 +30,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: install pinned Node dependencies from the lockfile
+        run: npm ci
       # jq is required by the Claude installer; tmux by the lifecycle suite's stand-in panes.
       - run: sudo apt-get update && sudo apt-get install -y jq tmux
 
@@ -42,11 +44,31 @@ jobs:
         run: providers/codex/test/same-chat-plan-preflight.sh
 
       - name: codex disposable N0 harness adversarial suite
-        run: node --test providers/codex/test/n0-harness.test.mjs
+        run: |
+          set -euo pipefail
+          npm run test:n0-subject | tee /tmp/n0-subject.log
+          grep -q '^N0_SUBJECT_BOUNDARY_GREEN ' /tmp/n0-subject.log
+          npm run test:n0 | tee /tmp/n0-baseline.log
+          grep -qx 'N0_HARNESS_BASELINE_GREEN' /tmp/n0-baseline.log
+          npm run test:n0-cli | tee /tmp/n0-cli.log
+          grep -qx 'N0_CLI_REFUSAL_GREEN' /tmp/n0-cli.log
+          npm run test:n0-notables | tee /tmp/n0-notables.log
+          grep -qx 'N0_NOTABLE_REGRESSIONS_GREEN' /tmp/n0-notables.log
+
+      - name: codex N0 closed-world census and mutation gates
+        run: |
+          set -euo pipefail
+          npm run test:n0-census-self | tee /tmp/n0-census-self.log
+          grep -qx 'N0_GUARD_CENSUS_SELF_GREEN' /tmp/n0-census-self.log
+          npm run test:n0-census | tee /tmp/n0-census.log
+          grep -q '^N0_GUARD_CENSUS_GREEN ' /tmp/n0-census.log
+          npm run test:n0-mutation | tee /tmp/n0-mutation.log
+          grep -q '^N0_GUARD_MUTATION_GREEN ' /tmp/n0-mutation.log
 
       - name: codex controller + packaging suites
         run: |
           node --test providers/codex/test/codex-hive-watch.test.mjs \
+                       providers/codex/test/wake-recovery-v2.test.mjs \
                        providers/codex/test/release-packaging.test.mjs
 
       - name: codex gated hashes are current
@@ -91,11 +113,14 @@ jobs:
                    providers/claude/skills/kijito-qa-memory/SKILL.md \
                    providers/codex/install.mjs \
                    providers/codex/controller.mjs \
+                   providers/codex/auth-binding.mjs \
+                   providers/codex/WAKE-RECOVERY-RUNBOOK.md \
                    providers/codex/release-manifest.json \
                    providers/codex/n0-harness/README.md \
                    providers/codex/n0-harness/evidence-manifest.mjs \
                    providers/codex/test/n0-harness.test.mjs \
                    providers/codex/test/codex-hive-watch.test.mjs \
+                   providers/codex/test/wake-recovery-v2.test.mjs \
                    providers/codex/skills/kijito-qa-memory/agents/openai.yaml \
                    providers/_shared/wake-core.mjs; do
             grep -qx "package/$f" /tmp/npm-payload.txt || { echo "MISSING from npm payload: $f"; exit 1; }
@@ -114,9 +139,12 @@ jobs:
               "kijito_claude/_assets/providers/claude/skills/kijito-qa-memory/SKILL.md",
               "kijito_claude/_assets/providers/codex/install.mjs",
               "kijito_claude/_assets/providers/codex/controller.mjs",
+              "kijito_claude/_assets/providers/codex/auth-binding.mjs",
+              "kijito_claude/_assets/providers/codex/WAKE-RECOVERY-RUNBOOK.md",
               "kijito_claude/_assets/providers/codex/n0-harness/evidence-manifest.mjs",
               "kijito_claude/_assets/providers/codex/test/n0-harness.test.mjs",
               "kijito_claude/_assets/providers/codex/test/codex-hive-watch.test.mjs",
+              "kijito_claude/_assets/providers/codex/test/wake-recovery-v2.test.mjs",
               "kijito_claude/_assets/providers/_shared/wake-core.mjs",
           ]
           missing = [n for n in need if n not in names]
