@@ -61,6 +61,14 @@ f="$(date +%s%N | cksum | tr -dc '0-9' | head -c 11)"
 [ ${#f} -eq 11 ] && ok "the /dev/urandom FALLBACK is also 11 chars" 1 \
   || ok "the /dev/urandom FALLBACK is also 11 chars" 0 "len=${#f}"
 
+# The fallback is ~36 bits, BELOW the >=64-bit floor. A weak nonce is
+# byte-indistinguishable from a strong one at the point of use, so the
+# downgrade must ANNOUNCE itself or it is a silent false-calm path.
+grep -q 'HEARTBEAT_NONCE_DEGRADED' "$SCRIPT" \
+  && ok "the degraded generator LOGS when it fires" 1 \
+  || ok "the degraded generator LOGS when it fires" 0 \
+     "a silent downgrade below the bit floor is indistinguishable from the real thing"
+
 echo
 echo "== CANARY: the old byte-identical form must NOT come back =="
 # Reproduce the defect: two nudge prompts built WITHOUT a nonce are equal.

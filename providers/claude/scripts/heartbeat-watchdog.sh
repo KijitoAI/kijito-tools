@@ -92,7 +92,16 @@ while true; do
   # 11 base62 chars matches the producer's wake nonce exactly: 10 chars is
   # 59.5 bits (under the >=64-bit floor), 12 breaks the <=11 ceiling.
   _nonce="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom 2>/dev/null | head -c 11)"
-  [ ${#_nonce} -eq 11 ] || _nonce="$(date +%s%N | cksum | tr -dc '0-9' | head -c 11)"
+  if [ ${#_nonce} -ne 11 ]; then
+    # DEGRADED GENERATOR -- and it must ANNOUNCE itself. The fallback is
+    # `date+cksum`, ~36 bits, BELOW the >=64-bit floor the plan sets. A weak
+    # nonce is byte-indistinguishable from a strong one at the point of use,
+    # so a silent downgrade is the false-calm shape this whole file exists to
+    # remove: collisions would surface far downstream as two wakes that look
+    # like one, and nothing would point back here. (assay, review of 225cc0e.)
+    _nonce="$(date +%s%N | cksum | tr -dc '0-9' | head -c 11)"
+    lc_log HEARTBEAT_NONCE_DEGRADED "urandom unavailable; ~36-bit fallback nonce=$_nonce"
+  fi
 
   # The pane goes in the MESSAGE BODY, not just the lc_log prefix: that prefix
   # is built from $TMUX_PANE/$CLAUDE_CODE_SESSION_ID, which a systemd unit does
