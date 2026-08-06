@@ -30,11 +30,44 @@ nonce is the only route discriminator. This is a standing ban, not a
 preference -- a predicate keying on promptSource is wrong even when it
 happens to agree.
 
-VALIDATION STATUS, STATED PLAINLY: the producer-side nonce is not deployed
-yet (its format is still being settled with argus), so NO corpus wake
-carries one today. That means the dispatch's SHAPE CLASSIFICATION is
-exercised only by fixtures, while the WALK is exercised against real
-transcripts. Do not read the fixture greens as end-to-end validation of D1.
+VALIDATION STATUS -- UPDATED 2026-08-06; the previous text is now FALSE.
+It said the producer nonce was undeployed and that shape classification was
+"exercised only by fixtures". The nonce SHIPPED at 22:11Z and there are now
+REAL-CORPUS WITNESSES: a live `attachment` row carrying producer nonce
+`UPiOOkYlddY` classifies `queued_command-shape` off real data (ladybug), and
+river's own first wake `vMYAuAui13J` classified `dequeue-shape` -> DELIVERED.
+⚠️ Still bounded: single-digit specimens, HAPPY paths only. BOX-RETURN,
+STACK-FLUSH, ATTRIBUTION-UNCERTAIN and BLOCKED remain fixture-only. Do not
+read "has real witnesses" as "validated".
+
+🔴 CONSTRAINT ON WHOEVER WRITES THE DRIVER -- READ BEFORE SELECTING ROWS.
+`dispatch_shape` classifies ONE row you have ALREADY decided is a wake
+candidate. There is no production caller yet, so this is a design input
+arriving before the mistake rather than a bug report.
+
+  SELECT CANDIDATE ROWS BY *TYPE* FIRST -- attachment, or string-content
+  user -- AND ONLY THEN TEST FOR THE NONCE.
+  NEVER select by "any row whose JSON contains the nonce".
+
+Measured on one live transcript: 5 rows carried a real nonce and only ONE
+was the wake. The other four -- two `queue-operation`, one `user`, one
+`assistant` -- all fall through to branch (4) and PAGE: ~4 false pages per
+genuine wake, with 12 distinct real nonces already sitting on
+`queue-operation` rows in that single file.
+
+⛔ DO NOT "fix" this by widening branch (4) to swallow `queue-operation`.
+Branch (4) exists so an unanticipated shape PAGES instead of vanishing;
+widening it trades a false-page problem for a SILENT-ALARM one, which is
+strictly worse and is the direction this whole plan exists to prevent.
+
+★ WHY THE CONTAMINATION IS STRUCTURAL, NOT ONE SEAT'S UNTIDINESS: those
+`queue-operation` rows are the inbox Monitor's own `<task-notification>`
+text, which embeds the raw producer event JSON -- nonce included -- into the
+very transcript D1 reads. Every persona is instructed to tail its own event
+stream, so THE BEST-INSTRUMENTED SEATS ARE THE MOST CONTAMINATED: the
+observer's instrument writes into the record the observer is measuring.
+(The `user`/`assistant` hits are a different, non-structural class -- an
+agent quoting a nonce in prose. A quieter seat carries fewer.)
 """
 
 import json
