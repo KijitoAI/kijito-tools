@@ -220,6 +220,7 @@ PATH=/Applications/ChatGPT.app/Contents/Resources/cua_node/bin:$PATH \
   bash tests/conformance_test.sh --selftest
 PATH=/Applications/ChatGPT.app/Contents/Resources/cua_node/bin:$PATH \
   node --test providers/codex/test/codex-hive-watch.test.mjs \
+              providers/codex/test/wake-recovery-v2.test.mjs \
               providers/codex/test/release-packaging.test.mjs
 ```
 

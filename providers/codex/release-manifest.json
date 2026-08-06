@@ -3,20 +3,31 @@
   "product": "codex-kijito-hive",
   "version": "1.0.0",
   "persona": "codex",
+  "origin": {
+    "package": "kijito-claude",
+    "packageVersion": "0.1.4",
+    "repository": "https://github.com/KijitoAI/kijito-claude"
+  },
   "production": {
     "installRoot": "~/.local/share/codex-kijito-hive",
     "launcher": "~/.local/bin/codex-kijito-hive",
     "installedLayout": {
       "controller": "codex/controller.mjs",
+      "authBinding": "codex/auth-binding.mjs",
       "wakeCore": "_shared/wake-core.mjs",
       "cli": "cli.mjs"
     }
   },
   "artifacts": {
-    "controllerSha256": "6f52ab6dc041778770449c36dc54529745beb082842a936b93d972d7e51add64",
-    "wakeCoreSha256": "39632d1184827b1c356d359086e505a76e6e3f6b29b4d6681b59189324afbf75",
-    "controllerTestsSha256": "98cccbbdfeb7799c08c4c8bc1282c783ff92ca6e8d76a43a2b7d0f8e32fd7503",
-    "planSha256": "6ecb4d1db7d2db9ab55e8c2d08c8aeac14b8eb5cb4cf55dbf0f1da975b8f8daf"
+    "authBindingSha256": "15a1da5cb2463a766664b0a05cd8be4a6a410e2172dbc75839066f939245f5e6",
+    "cliSha256": "7f57037b3d9170683c720a0e546ffb032d61f7bd305af071a5870592c091c0cb",
+    "controllerSha256": "04b4b2160ab462c8d30c0585f41ac905d3d40d152252510636688bd6dc7c575a",
+    "wakeCoreSha256": "db710ea767c20baf61a38f136ba9bc1e032e218004dc9176a60940ce56d81788",
+    "controllerTestsSha256": "c9da7792c9c9e9cce0200ab5fc8ea34e354e2334361bbb551a5dc1650bcf2758",
+    "wakeRecoveryTestsSha256": "45d783e5bb27716f9844f6c4776ad1874f7bdbc4b8148150593a032f112ddcb1",
+    "recoveryRunbookSha256": "3b63ebe0a0549750d49039c62f29f73e5b4b58bf100cb29d493f26db3e79d13b",
+    "planSha256": "6ecb4d1db7d2db9ab55e8c2d08c8aeac14b8eb5cb4cf55dbf0f1da975b8f8daf",
+    "releasePackagingTestsSha256": "e4a98ac0568f72571b88d8f4753dfacefde8c6f0624f4581606eb734c9fb05ef"
   },
   "ownedPaths": [
     "~/.local/share/codex-kijito-hive",

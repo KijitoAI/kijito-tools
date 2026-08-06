@@ -28,8 +28,13 @@ const manifestFile = path.join(providerRoot, "release-manifest.json");
 
 const GATED = {
   controllerSha256: path.join(providerRoot, "controller.mjs"),
+  cliSha256: path.join(providerRoot, "cli.mjs"),
+  authBindingSha256: path.join(providerRoot, "auth-binding.mjs"),
   wakeCoreSha256: path.join(providerRoot, "..", "_shared", "wake-core.mjs"),
   controllerTestsSha256: path.join(providerRoot, "test", "codex-hive-watch.test.mjs"),
+  wakeRecoveryTestsSha256: path.join(providerRoot, "test", "wake-recovery-v2.test.mjs"),
+  releasePackagingTestsSha256: path.join(providerRoot, "test", "release-packaging.test.mjs"),
+  recoveryRunbookSha256: path.join(providerRoot, "WAKE-RECOVERY-RUNBOOK.md"),
 };
 
 const sha256 = (file) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");

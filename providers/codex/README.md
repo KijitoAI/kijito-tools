@@ -40,7 +40,9 @@ The installed layout mirrors this one, so the controller's import specifier is i
 ## Test
 
 ```sh
-node --test test/codex-hive-watch.test.mjs test/release-packaging.test.mjs
+node --test test/codex-hive-watch.test.mjs \
+            test/wake-recovery-v2.test.mjs \
+            test/release-packaging.test.mjs
 node tools/refresh-manifest.mjs --check    # gated hashes still describe the files
 ```
 
@@ -68,7 +70,7 @@ The release manifest owns only `~/.local/share/codex-kijito-hive` and
 runtime, then use the explicit launcher:
 
 ```sh
-node install.mjs                 # or, from the repo root: ./install.sh --provider codex
+node install.mjs --origin-git-sha <reviewed-full-sha> --legacy-root <old-install-root>
 codex-kijito-hive doctor
 codex-kijito-hive smoke
 codex-kijito-hive start
