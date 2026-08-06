@@ -49,6 +49,31 @@ arriving before the mistake rather than a bug report.
   user -- AND ONLY THEN TEST FOR THE NONCE.
   NEVER select by "any row whose JSON contains the nonce".
 
+⚠️ TYPE-FIRST IS NECESSARY BUT *NOT SUFFICIENT*, and a live specimen proves
+it. The heartbeat watchdog now emits its own 11-base62 nonce, minted RANDOM
+per emission, in the SAME SHAPE as the derived producer nonce. A nudge is
+typed into an IDLE pane, so it lands as a string-content `user` row with NO
+enqueue -- it passes the type filter, fails branch (2), and hits branch (3):
+
+    2026-08-06T02:08:19Z  HEARTBEAT_NUDGE target_pane=%3 nonce=0EYe4TKViLy
+    -> transcript 02:08:20.761Z, type=user, promptSource=typed
+    -> score_d1: BOX-RETURN  "no enqueue row contains it"
+
+A HEALTHY heartbeat scored as a delivery FAILURE. And `promptSource` cannot
+rescue it either -- the machine-injected row reads `typed`, which is exactly
+the origin-not-route trap: `typed` is equally true of a genuine human prompt.
+
+⇒ UNTIL THE NUDGE NONCE CARRIES A DISTINGUISHING PREFIX (ruled: `hb-<11>`,
+queued post-window because the watchdog is installed wake machinery under
+the §5t freeze), THE ONLY SAFE SELECTOR IS **TYPE + SUCCESSFUL DERIVATION**:
+a producer nonce recomputes from its `event_id`; a nudge nonce has no
+preimage and will not. Verified both directions -- a real producer nonce
+reproduces exactly, and a 1,680-candidate sweep returns ZERO hits for a real
+nudge nonce.
+⚠️ Exposure today is n=1 (one nudge has ever carried a nonce) and grows at
+nudge cadence on nonce-era panes. Exclude it by DERIVABILITY, never by
+presence.
+
 Measured on one live transcript: 5 rows carried a real nonce and only ONE
 was the wake. The other four -- two `queue-operation`, one `user`, one
 `assistant` -- all fall through to branch (4) and PAGE: ~4 false pages per
