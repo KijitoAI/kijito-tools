@@ -145,7 +145,7 @@ task list:
     all but one.
   • You have NO inbox Monitor (brand-new session; the tail is a sibling's or a leaked orphan that will
     NOT wake YOU) → arm exactly one for yourself:
-      Monitor(command="tail -n 0 -F $_events | grep --line-buffered -E '\"event\": ?\"(new|alert|recovered)\"'", persistent=true)
+      Monitor(command="tail -n 0 -F $_events | grep --line-buffered -E '\"event\": ?\"(new|alert|recovered|state_corrupt|baseline_skipped|seed_ahead|replay_capped|persona_added)\"'", persistent=true)
 Dedupe with TaskStop (agent-scoped), NOT \`pkill -f …events…\` (that can kill a sibling's or your own live consumer). $_prod
 EOF
 elif [ -n "$_safe" ]; then
@@ -156,7 +156,7 @@ background \`tail\` is CAPTURE-ONLY (it writes to a file and never re-invokes yo
 woken). Arm the wake-capable consumer with the Monitor TOOL (persistent) — it streams each event
 as a live notification. Your persona for this project is "$_persona":
 
-  Monitor(command="tail -n 0 -F $_events | grep --line-buffered -E '\"event\": ?\"(new|alert|recovered)\"'", persistent=true)
+  Monitor(command="tail -n 0 -F $_events | grep --line-buffered -E '\"event\": ?\"(new|alert|recovered|state_corrupt|baseline_skipped|seed_ahead|replay_capped|persona_added)\"'", persistent=true)
 
 First confirm nothing is already monitoring that stream this session (avoid double-arming). $_prod
 EOF
@@ -168,7 +168,7 @@ background \`tail\` is CAPTURE-ONLY (it writes to a file and never re-invokes yo
 woken). Arm the wake-capable consumer for YOUR persona with the Monitor TOOL (persistent) — it
 streams each event as a live notification. Substitute your persona name for <persona>:
 
-  Monitor(command="tail -n 0 -F $_events_tmpl | grep --line-buffered -E '\"event\": ?\"(new|alert|recovered)\"'", persistent=true)
+  Monitor(command="tail -n 0 -F $_events_tmpl | grep --line-buffered -E '\"event\": ?\"(new|alert|recovered|state_corrupt|baseline_skipped|seed_ahead|replay_capped|persona_added)\"'", persistent=true)
 
 (No .kijito_persona marker found in this project — add a one-line \`.kijito_persona\` file with your
 persona name in the project root so this resolves automatically next session.) $_prod

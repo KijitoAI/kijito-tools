@@ -55,7 +55,7 @@ Run `kijito_startup(persona="<P>", project="<J>")` with the persona/project your
        "you already hit the trap" — and the remedy it prescribed would have killed a **working**
        inbox. Anchoring on `^tail` excludes the shell and returns exactly one line per monitor.
        - **prints nothing →** arm exactly ONE, wake-capable, via the Monitor tool (persistent):
-         `Monitor(command="tail -n 0 -F $STREAM | grep --line-buffered -E '\"event\": ?\"(new|alert|recovered)\"'", persistent=true)`
+         `Monitor(command="tail -n 0 -F $STREAM | grep --line-buffered -E '\"event\": ?\"(new|alert|recovered|state_corrupt|baseline_skipped|seed_ahead|replay_capped|persona_added)\"'", persistent=true)`
        - **prints one line →** already armed by a prior (pre-`/clear`) session; **STOP — do not start another.**
        - **prints two or more lines →** genuinely stacked; keep the newest, kill the rest:
          ```bash
