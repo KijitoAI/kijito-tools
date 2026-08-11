@@ -7,6 +7,13 @@ import { spawnSync } from "node:child_process";
 
 const NOW = Date.parse("2026-07-30T23:10:00.000Z");
 
+function requirePositiveContract(condition, detail) {
+  if (condition) return;
+  const error = new Error(detail);
+  error.code = "POSITIVE_CONTRACT";
+  throw error;
+}
+
 async function validationCase(mutate) {
   const [{ fixtureSpecimen }, { sha256 }, { requiredCaseNames, validateSpecimen }, { renderPrompt }] = await Promise.all([
     import("../n0-harness/fixture.mjs"),
@@ -17,7 +24,8 @@ async function validationCase(mutate) {
   const specimen = fixtureSpecimen();
   mutate(specimen, { sha256 });
   rebuildPrompts(specimen, { requiredCaseNames, renderPrompt, sha256 });
-  validateSpecimen(specimen);
+  const validated = validateSpecimen(specimen);
+  requirePositiveContract(validated === specimen, "validateSpecimen must return the exact validated specimen");
   return { accepted: true, code: "VALIDATE_SPECIMEN_ACCEPTED" };
 }
 
@@ -28,7 +36,8 @@ async function validationNoRebuildCase(mutate) {
   ]);
   const specimen = fixtureSpecimen();
   mutate(specimen);
-  validateSpecimen(specimen);
+  const validated = validateSpecimen(specimen);
+  requirePositiveContract(validated === specimen, "validateSpecimen must return the exact validated specimen");
   return { accepted: true, code: "VALIDATE_SPECIMEN_ACCEPTED" };
 }
 
@@ -97,15 +106,18 @@ async function readFileCase(configure = () => {}) {
   const target = path.join(root, "a.json");
   fs.writeFileSync(target, "{}\n");
   const context = { args: { root, target, options: {} }, cleanup: [], restorers: [] };
-  const patch = (object, key, replacement) => {
+  const patch = (object, key, wrap) => {
     const original = object[key];
-    object[key] = replacement(original);
+    object[key] = wrap(original);
     context.restorers.push(() => { object[key] = original; });
   };
   try {
     configure(context, patch);
     const lib = await import("../n0-harness/lib.mjs");
-    lib.readOwnedRegularFile(context.args.root, context.args.target, context.args.options);
+    const result = lib.readOwnedRegularFile(context.args.root, context.args.target, context.args.options);
+    requirePositiveContract(Buffer.isBuffer(result?.data), "readOwnedRegularFile must return data bytes");
+    requirePositiveContract(result.stat?.size === result.data.length, "readOwnedRegularFile stat size must bind returned bytes");
+    requirePositiveContract(typeof result.path === "string" && path.isAbsolute(result.path), "readOwnedRegularFile must return an absolute real path");
     return { accepted: true, code: "READ_FILE_ACCEPTED" };
   } finally {
     for (const restore of context.restorers.reverse()) restore();
@@ -125,7 +137,10 @@ async function parserModules() {
 
 async function parseRolloutCase(input) {
   const { parser } = await parserModules();
-  parser.parseRollout(input);
+  const parsed = parser.parseRollout(input);
+  requirePositiveContract(typeof parsed?.sessionId === "string" && parsed.sessionId.length > 0, "parseRollout must return a session id");
+  requirePositiveContract(Array.isArray(parsed.records) && parsed.records.length > 0, "parseRollout must return nonempty records");
+  requirePositiveContract(parsed.records[0]?.type === "session_meta", "parseRollout must retain the leading session record");
   return { accepted: true, code: "PARSE_ROLLOUT_ACCEPTED" };
 }
 
@@ -196,15 +211,19 @@ async function snapshotCase(configure = () => {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "n0-snapshot-pair."));
   fs.writeFileSync(path.join(root, "a.jsonl"), `${JSON.stringify({ type: "session_meta", payload: { id: "session" } })}\n`);
   const context = { args: { root, options: {} }, cleanup: [], restorers: [] };
-  const patch = (object, key, replacement) => {
+  const patch = (object, key, wrap) => {
     const original = object[key];
-    object[key] = replacement(original);
+    object[key] = wrap(original);
     context.restorers.push(() => { object[key] = original; });
   };
   try {
     configure(context, patch);
     const snapshot = await import("../n0-harness/snapshot.mjs");
-    snapshot.snapshotTree(context.args.root, context.args.options);
+    const result = snapshot.snapshotTree(context.args.root, context.args.options);
+    requirePositiveContract(result?.schema === "N0_ROLLOUT_SNAPSHOT_V1", "snapshotTree must return the exact schema");
+    requirePositiveContract(result.root === fs.realpathSync(context.args.root), "snapshotTree must bind the exact real root");
+    requirePositiveContract(Array.isArray(result.entries), "snapshotTree must return entries");
+    requirePositiveContract(result.totalBytes === result.entries.reduce((sum, entry) => sum + entry.size, 0), "snapshotTree totalBytes must bind entries");
     return { accepted: true, code: "SNAPSHOT_ACCEPTED" };
   } finally {
     for (const restore of context.restorers.reverse()) restore();
@@ -257,7 +276,19 @@ async function cliCase(configure = () => {}) {
     configure(context, { fixture });
     const cli = fileURLToPath(new URL("../n0-harness/cli.mjs", import.meta.url));
     const result = spawnSync(process.execPath, [cli, ...context.argv], { cwd: root, encoding: "utf8" });
-    return { accepted: result.status === 0, code: result.status === 0 ? "CLI_ACCEPTED" : `CLI_EXIT_${result.status}` };
+    let payload;
+    try { payload = JSON.parse(result.stdout); } catch {}
+    const command = context.argv[0];
+    const validOracle = command === "oracle" && payload?.status === "N0_TEST_CAPABLE";
+    const validSnapshot = command === "snapshot" && payload?.schema === "N0_ROLLOUT_SNAPSHOT_V1"
+      && payload.root === fs.realpathSync(root) && Array.isArray(payload.entries);
+    const accepted = result.status === 0 && result.stderr === "" && (validOracle || validSnapshot);
+    if (accepted) return { accepted: true, code: "CLI_ACCEPTED" };
+    let detail = result.stderr.match(/^([A-Z0-9_]+):/)?.[1];
+    if (!detail && payload && typeof payload.code === "string") detail = payload.code;
+    if (!detail && result.stderr.startsWith("N0_TEST_ORACLE")) detail = "USAGE";
+    if (!detail && result.status === 0 && result.stdout.trim() === "") detail = "EMPTY_OUTPUT";
+    return { accepted: false, code: `CLI_EXIT_${result.status}:${detail ?? "INVALID_OUTPUT"}` };
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }
 
@@ -267,6 +298,12 @@ async function specimenCase(kind) {
   if (kind === "build") {
     const input = fixture.fixtureSpecimen();
     input.target.clean = false;
+    specimenModule.buildSpecimen(input);
+    return { accepted: true, code: "BUILD_SPECIMEN_ACCEPTED" };
+  }
+  if (kind === "build-prompt-nonce") {
+    const input = fixture.fixtureSpecimen();
+    input.cases["N0a-M"].nonce = "g".repeat(32);
     specimenModule.buildSpecimen(input);
     return { accepted: true, code: "BUILD_SPECIMEN_ACCEPTED" };
   }
@@ -360,11 +397,30 @@ const cases = {
   "lib.exact-keys.extra": () => libCase("assertExactKeys", [{ extra: true }, [], "X", "value"]),
   "lib.path.outside": () => libCase("requirePathInside", ["/root/base", "/root/outside", "X"]),
   "lib.path.parent": () => libCase("requirePathInside", ["/root/base", "/root", "X"]),
+  "lib.path.relative-absolute-injection": async () => {
+    const root = path.resolve(os.tmpdir(), "n0-relative-root");
+    const target = path.join(root, "child");
+    const relative = path.relative(root, target);
+    const original = path.isAbsolute;
+    path.isAbsolute = (candidate) => candidate === relative || original(candidate);
+    try {
+      return await libCase("requirePathInside", [root, target, "X"]);
+    } finally {
+      path.isAbsolute = original;
+    }
+  },
   "lib.read.root-directory": () => readFileCase((context, patch) => {
     patch(fs, "lstatSync", patchLstatCall(1, () => ({ isDirectory: () => false })));
   }),
   "lib.read.root-owner": () => readFileCase((context, patch) => {
     patch(fs, "lstatSync", patchLstatCall(1, (stat) => ({ uid: stat.uid + 1 })));
+  }),
+  "lib.read.root-symlink": () => readFileCase((context) => {
+    const alias = `${context.args.root}.alias`;
+    fs.symlinkSync(context.args.root, alias, "dir");
+    context.cleanup.push(alias);
+    context.args.root = alias;
+    context.args.target = path.join(alias, "a.json");
   }),
   "lib.read.lexical-alias": () => readFileCase((context) => {
     const alias = `${context.args.root}.alias`;
@@ -381,7 +437,7 @@ const cases = {
     patch(fs, "lstatSync", patchLstatCall(2, () => ({ isFile: () => false, isSymbolicLink: () => false })));
   }),
   "lib.read.file-owner": () => readFileCase((context, patch) => {
-    patch(fs, "lstatSync", patchLstatCall(3, (stat) => ({ uid: stat.uid + 1 })));
+    patch(fs, "lstatSync", patchLstatCall(2, (stat) => ({ uid: stat.uid + 1 })));
   }),
   "lib.read.file-size": () => readFileCase((context) => { context.args.options.maxBytes = 0; }),
   "lib.read.realpath-alias": () => readFileCase((context) => {
@@ -417,6 +473,7 @@ const cases = {
     return parseRolloutCase(`${lines.join("\n")}\n`);
   },
   "parser.rollout.invalid-json-late": () => parseRolloutCase(`${JSON.stringify({ type: "session_meta", payload: { id: "session" } })}\n{\n`),
+  "parser.rollout.empty": () => parseRolloutCase(""),
   "parser.rollout.session-type": () => parseRolloutCase(`${JSON.stringify({ type: "wrong", payload: { id: "session" } })}\n`),
   "parser.rollout.session-id-type": () => parseRolloutCase(`${JSON.stringify({ type: "session_meta", payload: { id: 7 } })}\n`),
   "parser.rollout.session-id-empty": () => parseRolloutCase(`${JSON.stringify({ type: "session_meta", payload: { id: "" } })}\n`),
@@ -425,6 +482,12 @@ const cases = {
     args.records[1].payload.content[0].text = "a".repeat(32);
   }),
   "parser.nonce.total": () => nonceCase((args) => { args.records[1].payload.content[0].text = `${args.nonce} ${args.nonce}`; }),
+  "parser.nonce.multiple-turns": () => nonceCase((args) => {
+    const second = structuredClone(args.records[1]);
+    second.payload.content[0].text = `SECOND USER TURN ${args.nonce}`;
+    second.payload.internal_chat_message_metadata_passthrough.turn_id = "second-turn";
+    args.records.push(second);
+  }),
   "parser.nonce.turn": () => nonceCase((args) => { args.options.expectedTurnId = "wrong-turn"; }),
   "parser.nonce.task": () => nonceCase((args) => { args.options.expectedTaskId = "wrong-task"; }),
   "parser.nonce.run": () => nonceCase((args) => { args.options.expectedRunId = "wrong-run"; }),
@@ -498,6 +561,12 @@ const cases = {
   "snapshot.read.after-mtime": () => snapshotCase((context, patch) => { patch(fs, "fstatSync", patchFstat("after", "mtimeMs")); }),
   "snapshot.root.directory": () => snapshotCase((context, patch) => { patch(fs, "lstatSync", patchLstatCall(1, () => ({ isDirectory: () => false }))); }),
   "snapshot.root.owner": () => snapshotCase((context, patch) => { patch(fs, "lstatSync", patchLstatCall(1, (stat) => ({ uid: stat.uid + 1 }))); }),
+  "snapshot.root.symlink": () => snapshotCase((context) => {
+    const alias = `${context.args.root}.alias`;
+    fs.symlinkSync(context.args.root, alias, "dir");
+    context.cleanup.push(alias);
+    context.args.root = alias;
+  }),
   "snapshot.entry.symlink": () => snapshotCase((context) => { fs.symlinkSync(path.join(context.args.root, "a.jsonl"), path.join(context.args.root, "link.jsonl"), "file"); }),
   "snapshot.entry.realpath": () => snapshotCase((context) => {
     const outside = fs.mkdtempSync(path.join(os.tmpdir(), "n0-snapshot-outside."));
@@ -505,9 +574,22 @@ const cases = {
     fs.symlinkSync(path.join(outside, "outside.jsonl"), path.join(context.args.root, "escape.jsonl"), "file");
     context.cleanup.push(outside);
   }),
-  "snapshot.entry.owner": () => snapshotCase((context, patch) => { patch(fs, "lstatSync", patchLstatCall(3, (stat) => ({ uid: stat.uid + 1 }))); }),
+  "snapshot.entry.realpath-regular": () => snapshotCase((context, patch) => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "n0-snapshot-realpath-outside."));
+    const escaped = path.join(outside, "outside.jsonl");
+    fs.writeFileSync(escaped, `${JSON.stringify({ type: "session_meta", payload: { id: "outside" } })}\n`);
+    context.cleanup.push(outside);
+    patch(fs, "realpathSync", (original) => {
+      return function patchedRealpath(...args) {
+        return path.basename(String(args[0])) === "a.jsonl"
+          ? escaped
+          : original.apply(this, args);
+      };
+    });
+  }),
+  "snapshot.entry.owner": () => snapshotCase((context, patch) => { patch(fs, "lstatSync", patchLstatCall(2, (stat) => ({ uid: stat.uid + 1 }))); }),
   "snapshot.entry.nonregular": () => snapshotCase((context, patch) => {
-    patch(fs, "lstatSync", patchLstatCall(3, () => ({ isDirectory: () => false, isFile: () => false })));
+    patch(fs, "lstatSync", patchLstatCall(2, () => ({ isDirectory: () => false, isFile: () => false })));
   }),
   "snapshot.entry.child-walk": () => snapshotCase((context) => {
     const child = path.join(context.args.root, "child");
@@ -538,6 +620,7 @@ const cases = {
   "cli.args.missing-inputs": () => cliCase((context) => {
     context.argv = ["oracle", "--root", context.root, "--now-ms", String(NOW)];
   }),
+  "cli.root.missing": () => cliCase((context) => { context.argv = ["snapshot"]; }),
   "cli.root.relative": () => cliCase((context) => { context.argv = ["snapshot", "--root", "."]; }),
   "cli.snapshot.symlink": () => cliCase((context) => {
     fs.symlinkSync(path.join(context.root, "specimen.json"), path.join(context.root, "link.json"), "file");
@@ -546,11 +629,9 @@ const cases = {
   "cli.specimen.read": () => cliCase((context) => { context.argv[4] = path.join(context.root, "..", "outside.json"); }),
   "cli.evidence.read": () => cliCase((context) => { context.argv[6] = path.join(context.root, "..", "outside.json"); }),
   "cli.specimen.parse": () => cliCase((context) => {
-    fs.copyFileSync(path.join(context.root, "specimen.json"), path.join(context.root, "specimen-valid.json"));
     fs.writeFileSync(path.join(context.root, "specimen.json"), "{");
   }),
   "cli.evidence.parse": () => cliCase((context) => {
-    fs.copyFileSync(path.join(context.root, "evidence.json"), path.join(context.root, "evidence-valid.json"));
     fs.writeFileSync(path.join(context.root, "evidence.json"), "{");
   }),
   "cli.oracle.red": () => cliCase((context) => {
@@ -558,6 +639,7 @@ const cases = {
     fs.writeFileSync(path.join(context.root, "evidence.json"), JSON.stringify(context.evidence));
   }),
   "specimen.build.invalid": () => specimenCase("build"),
+  "specimen.build.prompt-nonce": () => specimenCase("build-prompt-nonce"),
   "specimen.mail.nonce": () => specimenCase("mail"),
   "specimen.mail.row": () => specimenCase("cleanup"),
   "oracle.specimen.keys": () => validationNoRebuildCase((specimen) => { specimen.extra = true; }),
@@ -719,6 +801,15 @@ const cases = {
   "oracle.canary.path-type": () => validationNoRebuildCase((specimen) => {
     specimen.canaries["control-read"].path = new String(specimen.canaries["control-read"].path);
   }),
+  "oracle.canary.path-relative": () => validationNoRebuildCase((specimen) => {
+    specimen.canaries["control-read"].path = "relative-control-read";
+  }),
+  "oracle.canary.value-null": () => validationNoRebuildCase((specimen) => {
+    specimen.canaries["control-read"] = null;
+  }),
+  "oracle.canary.value-primitive": () => validationNoRebuildCase((specimen) => {
+    specimen.canaries["control-read"] = "invalid-canary";
+  }),
   "oracle.canary.nonce-type": () => validationNoRebuildCase((specimen) => {
     specimen.canaries["control-read"].nonce = new String(specimen.canaries["control-read"].nonce);
   }),
@@ -763,6 +854,7 @@ const cases = {
   "oracle.case.prompt": () => oracleCase(({ evidence }) => { evidence.cases["N0a-M"].promptDigest = "f".repeat(64); }),
   "oracle.case.expected": () => oracleCase(({ evidence }) => { evidence.cases["N0a-M"].expected.chatSessionId = "wrong"; }),
   "oracle.case.status": () => oracleCase(({ evidence }) => { evidence.cases["N0a-M"].status = "INVALID"; }),
+  "oracle.case.status-null": () => oracleCase(({ evidence }) => { evidence.cases["N0a-M"].status = null; }),
   "oracle.case.time-invalid": () => oracleCase(({ evidence }) => { evidence.cases["N0a-M"].terminalAt = "invalid"; }),
   "oracle.case.time-order": () => oracleCase(({ evidence }) => {
     evidence.cases["N0a-M"].terminalAt = evidence.cases["N0a-W"].terminalAt;
@@ -825,6 +917,7 @@ const cases = {
   "oracle.diagnostic.before": () => oracleCase(({ evidence }) => { evidence.productionCodexUnreadMutation = { before: new Number(0), after: 0 }; }),
   "oracle.diagnostic.after": () => oracleCase(({ evidence }) => { evidence.productionCodexUnreadMutation = { before: 0, after: new Number(0) }; }),
   "oracle.evidence.case-call": () => oracleCase(({ evidence }) => { evidence.cases = JSON.stringify(evidence.cases); }),
+  "oracle.case.cases-null": () => oracleCase(({ evidence }) => { evidence.cases = null; }),
   "oracle.evidence.catch": () => oracleCase((context) => { context.evidence = null; }),
   "oracle.success": () => oracleCase(() => {}),
   "oracle.meta.object": () => oracleCase(({ evidence }) => { evidence.meta = JSON.stringify(evidence.meta); }),
@@ -834,6 +927,7 @@ const cases = {
   "oracle.meta.app": () => oracleCase(({ evidence }) => { evidence.meta.appVersion = "wrong"; }),
   "oracle.meta.cli": () => oracleCase(({ evidence }) => { evidence.meta.cliVersion = "wrong"; }),
   "oracle.integrity.object": () => oracleCase(({ evidence }) => { evidence.integrity = JSON.stringify(evidence.integrity); }),
+  "oracle.integrity.null": () => oracleCase(({ evidence }) => { evidence.integrity = null; }),
   "oracle.integrity.set": () => oracleCase(({ evidence }) => { evidence.integrity.extra = { ...evidence.integrity.controlPreexisting }; }),
   "oracle.integrity.item-object": () => oracleCase(({ evidence }) => { evidence.integrity.controlPreexisting = JSON.stringify(evidence.integrity.controlPreexisting); }),
   "oracle.integrity.item-extra": () => oracleCase(({ evidence }) => { evidence.integrity.controlPreexisting.extra = true; }),
@@ -854,6 +948,8 @@ const cases = {
   "manifest.build.files-empty": () => buildManifestCase((args) => { args.files = []; }),
   "manifest.build.time": () => buildManifestCase((args) => { args.createdAt = "invalid"; }),
   "manifest.build.path-absolute": () => buildManifestCase((args) => { args.files = [`${path.sep}a.json`]; }),
+  "manifest.build.path-parent": () => buildManifestCase((args) => { args.files = [".."]; }),
+  "manifest.build.path-parent-prefix": () => buildManifestCase((args) => { args.files = [`..${path.sep}child`]; }),
   "manifest.build.path-normalized": () => buildManifestCase((args) => { args.files = ["sub/../a.json"]; }),
   "manifest.build.path-duplicate": () => buildManifestCase((args) => { args.files = ["a.json", "a.json"]; }),
   "manifest.validate.schema": () => validateManifestCase((manifest) => { manifest.schema = "WRONG"; }),
@@ -897,7 +993,36 @@ const cases = {
   "specimen.canary.cwd.path-class": () => validationCase((specimen) => { specimen.canaries["cwd-create"].path = `${specimen.paths.control}/cwd`; }),
   "evidence.meta.producer": () => oracleCase(({ evidence }) => { evidence.meta.producer = "UNTRUSTED_PRODUCER"; }),
   "evidence.meta.target-path": () => oracleCase(({ evidence }) => { evidence.meta.targetPath = "/wrong"; }),
+  "positive.lib.read": () => readFileCase(),
+  "positive.parser.rollout": async () => {
+    const { fixture } = await parserModules();
+    return parseRolloutCase(fixture.fixtureRollout());
+  },
+  "positive.snapshot.tree": () => snapshotCase(),
+  "positive.cli.oracle": () => cliCase(),
+  "positive.cli.snapshot": () => cliCase((context) => {
+    context.argv = ["snapshot", "--root", context.root];
+  }),
+  "positive.specimen.validate": () => validationNoRebuildCase(() => {}),
 };
+
+const POSITIVE_CASES = Object.freeze({
+  "oracle.success": "ALL_SYNTHETIC_EVIDENCE_GREEN",
+  "positive.cli.oracle": "CLI_ACCEPTED",
+  "positive.cli.snapshot": "CLI_ACCEPTED",
+  "positive.lib.read": "READ_FILE_ACCEPTED",
+  "positive.parser.rollout": "PARSE_ROLLOUT_ACCEPTED",
+  "positive.snapshot.tree": "SNAPSHOT_ACCEPTED",
+  "positive.specimen.validate": "VALIDATE_SPECIMEN_ACCEPTED",
+});
+
+export function expectedPositiveCases() {
+  return { ...POSITIVE_CASES };
+}
+
+export function counterexampleUniverse() {
+  return { ids: counterexampleIds(), positiveCases: expectedPositiveCases() };
+}
 
 export function counterexampleIds() {
   return Object.keys(cases).sort();
@@ -914,9 +1039,29 @@ export async function runCounterexample(id) {
   }
 }
 
+export async function runCounterexampleMatrix() {
+  const output = {};
+  for (const id of counterexampleIds()) {
+    try {
+      output[id] = await runCounterexample(id);
+    } catch (error) {
+      output[id] = {
+        accepted: false,
+        crashed: true,
+        code: error?.code ?? error?.name ?? "COUNTEREXAMPLE_CRASH",
+        message: error?.message ?? String(error),
+      };
+    }
+  }
+  return output;
+}
+
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
   try {
-    process.stdout.write(`${JSON.stringify(await runCounterexample(process.argv[2]))}\n`);
+    const result = process.argv[2] === "--all"
+      ? await runCounterexampleMatrix()
+      : await runCounterexample(process.argv[2]);
+    process.stdout.write(`${JSON.stringify(result)}\n`);
   } catch (error) {
     process.stderr.write(`${error?.stack ?? error}\n`);
     process.exitCode = 1;

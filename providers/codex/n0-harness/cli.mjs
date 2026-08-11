@@ -15,18 +15,30 @@ function args(argv) {
   for (let index = 0; index < rest.length; index += 2) {
     const key = rest[index];
     const value = rest[index + 1];
-    if (!key?.startsWith("--") || value === undefined) usage();
+    if (!key?.startsWith("--") || value === undefined) {
+      usage();
+      return null;
+    }
     options[key.slice(2)] = value;
   }
   return { command, options };
 }
 
-try {
-  const { command, options } = args(process.argv.slice(2));
-  if (!path.isAbsolute(options.root ?? "")) usage();
+function main(argv) {
+  const parsed = args(argv);
+  if (!parsed) return;
+  const { command, options } = parsed;
+  if (!options.root || !path.isAbsolute(options.root)) {
+    usage();
+    return;
+  }
   if (command === "snapshot") {
     process.stdout.write(`${JSON.stringify(snapshotTree(options.root))}\n`);
-  } else if (command === "oracle") { if (!options.specimen || !options.evidence) usage(); options.specimen ??= path.join(options.root, "specimen.json"); options.evidence ??= path.join(options.root, "evidence.json");
+  } else if (command === "oracle") {
+    if (!options.specimen || !options.evidence) {
+      usage();
+      return;
+    }
     const specimen = parseJsonBuffer(readOwnedRegularFile(options.root, options.specimen).data);
     const evidence = parseJsonBuffer(readOwnedRegularFile(options.root, options.evidence).data);
     const nowMs = options["now-ms"] === undefined ? Date.now() : Number(options["now-ms"]);
@@ -36,6 +48,10 @@ try {
   } else {
     usage();
   }
+}
+
+try {
+  main(process.argv.slice(2));
 } catch (error) {
   process.stderr.write(`${error?.code ?? "N0_CLI_ERROR"}: ${error?.message ?? String(error)}\n`);
   process.exitCode = 1;
