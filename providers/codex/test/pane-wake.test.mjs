@@ -23,7 +23,7 @@ import path from "node:path";
 import test from "node:test";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { PaneDelivery, PaneWakeConsumer, descendants, parseArgs, readLiveness, HIVE_SEND_URL, hiveNoteBody } from "../pane-wake.mjs";
 import { WAKE_PREFIX, fixedWakeText, acquireLock } from "../../_shared/wake-core.mjs";
@@ -1162,6 +1162,66 @@ test("F8: the runtime directory and the state file must both be private, and sta
     assert.equal(loaded.pendingSubmit, null);
     assert.equal(loaded.lastIssuedText, null);
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("the pane state FILE's schema is pinned at 1, independent of wake-core's schema number", async () => {
+  // TWO schema surfaces exist in this driver, and only one was safe (argus, 2026-08-11). The
+  // heartbeat writes a HARDCODED schema 1; the pane state file used to inherit wake-core's number
+  // through the `{...initialState()}` spread in paneState(). An in-flight wake-core bump to
+  // schema 2 would therefore make this driver persist a state file that its own loadPrivateState
+  // (which requires schema===1) refuses on the next start: "state identity mismatch" — a wedged
+  // driver, no wakes, and the comment beside paneState() claiming the schema was "deliberately
+  // unchanged" the whole time. Arm 1 proves the pin against a wake-core whose schema really is 2;
+  // arm 2 pins the refusal itself, so the seam cannot quietly return.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-pane-wake-pin."));
+  try {
+    // ARM 1: the driver beside a schema-2 wake-core — the exact shape of the in-flight branch —
+    // must still persist schema 1 and round-trip through its own loader.
+    const providers = path.join(root, "providers");
+    fs.mkdirSync(path.join(providers, "codex"), { recursive: true });
+    fs.mkdirSync(path.join(providers, "_shared"), { recursive: true });
+    const coreSource = fs.readFileSync(wakeCoreFile, "utf8");
+    const bumped = coreSource
+      .replaceAll("schema: 1,", "schema: 2,")
+      .replaceAll("parsed.schema !== 1", "parsed.schema !== 2");
+    assert.notEqual(bumped, coreSource, "the simulated bump must actually rewrite wake-core");
+    fs.writeFileSync(path.join(providers, "_shared", "wake-core.mjs"), bumped);
+    const installed = path.join(providers, "codex", "pane-wake.mjs");
+    fs.copyFileSync(driverFile, installed);
+    const mod = await import(pathToFileURL(installed).href);
+    const f = fixture();
+    try {
+      const options = {
+        eventsFile: f.eventsFile,
+        stateFile: f.stateFile,
+        lockFile: f.lockFile,
+        heartbeatFile: f.heartbeatFile,
+        tokenFile: path.join(f.root, "token"),
+        tmux: "tmux",
+        paneSession: "codex",
+        expectThread: THREAD,
+        pollMs: 1000,
+        alertAfter: 10,
+        token: null,
+        output: () => {},
+      };
+      const consumer = new mod.PaneWakeConsumer(options);
+      assert.equal(consumer.persist({ lastMailId: 7 }), true, "the fresh state must reach disk");
+      const raw = JSON.parse(fs.readFileSync(f.stateFile, "utf8"));
+      assert.equal(raw.schema, 1, "the persisted pane state must carry the PIN, not wake-core's schema");
+      const reloaded = new mod.PaneWakeConsumer(options);
+      assert.equal(reloaded.state.lastMailId, 7, "the pinned state must round-trip, not be refused");
+    } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+
+    // ARM 2: the failure mode the pin prevents, pinned directly. A state file carrying schema 2 —
+    // what an UNPINNED driver beside a bumped wake-core persists — must be refused loudly, never
+    // half-adopted.
+    const g = fixture();
+    try {
+      fs.writeFileSync(g.stateFile, JSON.stringify({ schema: 2, persona: "codex", lastMailId: 7 }), { mode: 0o600 });
+      assert.throws(() => consumerFor(g), /state identity mismatch/);
+    } finally { fs.rmSync(g.root, { recursive: true, force: true }); }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 test("F13: the driver still runs itself when its install path needs URL encoding", () => {

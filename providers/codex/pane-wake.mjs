@@ -1025,13 +1025,16 @@ function ensurePrivateRuntimeDirectory(dir, label) {
   }
 }
 
-// wake-core's state shape plus two fields this driver owns. The SCHEMA NUMBER IS DELIBERATELY
-// UNCHANGED: schema 1 is a seam shared with the controller and with an in-flight branch that bumps
-// it for its own reasons, and additive fields on a `{...defaults, ...parsed}` load need no bump.
+// wake-core's state shape plus two fields this driver owns. The SCHEMA NUMBER IS PINNED HERE at 1,
+// EXPLICITLY, because the spread would otherwise inherit wake-core's number: this file's own
+// loadPrivateState requires schema===1, so a wake-core schema bump (one is in flight) would make
+// an unpinned driver persist a state file it then refuses on its next start — "state identity
+// mismatch", a wedged driver, no wakes. The pane state file is versioned by THIS driver,
+// independently of wake-core; bump this pin only with a migration in loadPrivateState.
 //   lastIssuedText — what we last put in the composer, so residue is recognisable across attempts
 //   pendingSubmit  — a submit was ISSUED and is awaiting confirmation (the irreversible-step ledger)
 function paneState() {
-  return { ...initialState(), lastIssuedText: null, pendingSubmit: null };
+  return { ...initialState(), schema: 1, lastIssuedText: null, pendingSubmit: null };
 }
 
 function loadPrivateState(file) {
