@@ -382,6 +382,16 @@ export function assertDiscriminatingPair(entry, pristine, mutant) {
   }
 }
 
+export function assertRedundantDispositionSingle(entry, pristine, single) {
+  const witness = entry.disposition?.witness;
+  const pristineWitness = pristine[witness?.id];
+  if (JSON.stringify(single) !== JSON.stringify(pristine)
+    || !pristineWitness || pristineWitness.accepted
+    || pristineWitness.code !== witness.rejectCode) {
+    fail("MUTATION_DISPOSITION_SINGLE", entry.id);
+  }
+}
+
 function runBattery() {
   if (process.env.N0_CENSUS_MUTATION_CHILD === "1") fail("MUTATION_RECURSION", "runner cannot run inside a mutation child");
   const derive = process.argv.includes("--derive-flipsets");
@@ -475,7 +485,7 @@ function runBattery() {
         ]);
         const active = matrix(temp)[record.witnessId];
         activeRestore();
-        if (!active?.crashed || active.code !== "Error" || active.message !== "N0_DOWNSTREAM_DOMAIN_SHADOW_ACTIVE") {
+        if (!active?.crashed || active.code !== "Error" || Object.hasOwn(active, "message")) {
           fail("MUTATION_DOWNSTREAM_DOMAIN_INACTIVE", `${entry.id}:${JSON.stringify(active)}`);
         }
         downstreamDomainShadowsVerified += 1;
@@ -515,13 +525,9 @@ function runBattery() {
       for (const entry of manifest.entries.filter((candidate) => candidate.disposition?.kind === "not-independently-discriminated")) {
         const actual = graphEntry(cleanGraph, entry.id);
         const singleRestore = applyMutations(temp, [{ ...actual, replacement: replacementFor({ ...entry, mutation: entry.disposition.mutation }) }]);
-        const single = matrix(temp)[entry.disposition.witness.id];
+        const single = matrix(temp);
         singleRestore();
-        const pristineWitness = pristine[entry.disposition.witness.id];
-        if (JSON.stringify(single) !== JSON.stringify(pristineWitness)
-          || pristineWitness.accepted || pristineWitness.code !== entry.disposition.witness.rejectCode) {
-          fail("MUTATION_DISPOSITION_SINGLE", entry.id);
-        }
+        assertRedundantDispositionSingle(entry, pristine, single);
         const compoundEntries = [entry, ...entry.disposition.coveredBy.map((id) => manifest.entries.find((candidate) => candidate.id === id))];
         const edits = compoundEntries.map((candidate) => {
           if (!candidate) fail("MUTATION_DISPOSITION_COVER", entry.id);

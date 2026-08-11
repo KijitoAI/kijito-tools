@@ -106,9 +106,20 @@ test("wake text is fixed, visibly synthetic, sorted, and body-free", () => {
   ]);
   assert.ok(text.startsWith(WAKE_PREFIX));
   assert.match(text, /Message IDs: 8,9/);
-  assert.match(text, /before_id=N\+1, limit=1, unread_only=false/);
+  assert.match(text, /Message ID 8 -> before_id=9, limit=1/);
+  assert.match(text, /Message ID 9 -> before_id=10, limit=1/);
+  assert.match(text, /Confirm every returned row id equals the requested Message ID/);
   assert.doesNotMatch(text, /IGNORE PREVIOUS|rm -rf/);
   assert.match(text, /not a human-authored chat|NOT USER AUTHORED/i);
+});
+
+test("mixed mail and reconcile batches require both exact-row reads and a durable sweep", () => {
+  const text = fixedWakeText([
+    { kind: "reconcile", id: null, key: "reconcile:startup", trigger: "reconcile" },
+    { kind: "new", id: 601, key: "new:601", trigger: "mail" },
+  ]);
+  assert.match(text, /Message ID 601 -> before_id=602, limit=1/);
+  assert.match(text, /unread_only=true, mark_read=false to reconcile the durable inbox/);
 });
 
 test("state is atomic and lock is single-owner", () => {

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { analyzeGuardGraph, mergeManifest, validateManifest } from "./n0-guard-census-core.mjs";
-import { assertDiscriminatingPair } from "./n0-guard-mutation-runner.mjs";
+import { assertDiscriminatingPair, assertRedundantDispositionSingle } from "./n0-guard-mutation-runner.mjs";
 
 function fixture(source) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "n0-census-self."));
@@ -136,6 +136,22 @@ test("named two-sided pairs reject unrelated attribution and strengthening mutan
   errorCode(() => assertDiscriminatingPair(entry,
     { accepted: false, code: "EXACT_RED" },
     { accepted: false, code: "EXACT_RED" }), "MUTATION_NOT_DISCRIMINATED");
+});
+
+test("redundancy disposition singles must preserve the full matrix, not only their witness", () => {
+  const entry = {
+    id: "fixture:disposed",
+    disposition: { witness: { id: "named", rejectCode: "BAD" } },
+  };
+  const pristine = {
+    named: { accepted: false, code: "BAD" },
+    independentlyDiscriminated: { accepted: false, code: "OTHER_BAD" },
+  };
+  assert.equal(assertRedundantDispositionSingle(entry, pristine, structuredClone(pristine)), undefined);
+  const changed = structuredClone(pristine);
+  changed.independentlyDiscriminated = { accepted: true, code: "GREEN" };
+  errorCode(() => assertRedundantDispositionSingle(entry, pristine, changed),
+    "MUTATION_DISPOSITION_SINGLE");
 });
 
 test("bare throw, process termination, dynamic negative verdicts, and second success are visible", () => {
@@ -290,6 +306,25 @@ test("count and redundancy-disposition ratchets fail in the dangerous direction"
       coveredBy: [cover.id],
     };
     errorCode(() => validateManifest(graph, disposition, { requirePairs: false, requireBaseline: false }), "CENSUS_DISPOSITION_GROWTH");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("manifest regeneration preserves a floor when the last node of a kind disappears", () => {
+  const root = fixture(`export function p(x){if(x) process.exit(1); return {status:"N0_TEST_CAPABLE"};}`);
+  try {
+    const priorGraph = analyzeGuardGraph(root);
+    const prior = mergeManifest(priorGraph);
+    assert.equal(prior.floors.counts["termination-site"], 1);
+    fs.writeFileSync(path.join(root, "fixture.mjs"),
+      `export function p(){return {status:"N0_TEST_CAPABLE"};}`);
+    const currentGraph = analyzeGuardGraph(root);
+    assert.equal(currentGraph.counts["termination-site"] ?? 0, 0);
+    const regenerated = mergeManifest(currentGraph, prior);
+    assert.equal(regenerated.floors.counts["termination-site"], 1);
+    errorCode(() => validateManifest(currentGraph, regenerated, {
+      requirePairs: false,
+      requireBaseline: false,
+    }), "CENSUS_COUNT_REGRESSION");
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

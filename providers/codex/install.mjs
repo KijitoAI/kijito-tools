@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 // This installer used to live at <root>/release/install.mjs, so its source root was one level up.
 // Folded into kijito-claude it sits AT the provider root (providers/codex/), so `here` IS the source
@@ -17,12 +17,25 @@ function sha256(file) {
   return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 }
 
+function verifiedModuleDataUrl(file, expectedSha256) {
+  if (!Number.isInteger(fs.constants.O_NOFOLLOW)) throw new Error("O_NOFOLLOW is required for executable module verification");
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.nlink !== 1) throw new Error("verified module must be one regular file");
+    const bytes = fs.readFileSync(fd);
+    const actual = createHash("sha256").update(bytes).digest("hex");
+    if (actual !== expectedSha256) throw new Error("verified module hash mismatch");
+    return `data:text/javascript;base64,${bytes.toString("base64")}`;
+  } finally { fs.closeSync(fd); }
+}
+
 function parseArgs(argv) {
   const values = {};
   const legacyRoots = [];
   // Boolean flags first: the loop below consumes strict `--key value` pairs and would reject a bare
   // flag as an invalid argument.
-  const flags = new Set(["skills-only"]);
+  const flags = new Set(["skills-only", "acknowledge-legacy-notifier"]);
   const bare = new Set();
   argv = argv.filter((token) => {
     const isFlag = token.startsWith("--") && flags.has(token.slice(2));
@@ -51,6 +64,7 @@ function parseArgs(argv) {
     originGitSha: values["origin-git-sha"] ?? process.env.KIJITO_BUILD_GIT_SHA ?? "",
     legacyInstallRoots: legacyRoots.map(expand),
     skillsOnly: bare.has("skills-only"),
+    acknowledgeLegacyNotifier: bare.has("acknowledge-legacy-notifier"),
   };
 }
 
@@ -320,7 +334,7 @@ async function install(options) {
   // would execute before this check and could differ from an overridden --source-root, producing
   // an install whose baseline and shipped parser disagree.
   const { requireAuthBinding } = await import(
-    `${pathToFileURL(authBindingSource).href}?sha256=${release.artifacts.authBindingSha256}`);
+    verifiedModuleDataUrl(authBindingSource, release.artifacts.authBindingSha256));
   // The parity plan is RECORDED, not gated. It used to be hash-gated here, from a path OUTSIDE the
   // installable directory (`<sourceRoot>/../codex-kijito-parity-plan.md`), which meant every install
   // threw the moment the source root moved -- and gated an install on a prose document. The hash is
@@ -427,11 +441,14 @@ async function install(options) {
 
 try {
   const options = parseArgs(process.argv.slice(2));
+  if (!options.skillsOnly && !options.acknowledgeLegacyNotifier) {
+    throw new Error("WITHDRAWN: dedicated-thread notifier is not same-running-session wake; full install requires explicit --acknowledge-legacy-notifier");
+  }
   // --skills-only updates the skills on a machine whose install root already exists, which a full
   // install deliberately refuses to touch.
   const result = options.skillsOnly
     ? { status: "SKILLS_INSTALLED", skillsRoot: options.skillsRoot, skills: installSkills(options) }
-    : (process.stderr.write("WITHDRAWN: dedicated-thread notifier is not same-running-session wake; do not install for continuation. See same-chat-continuation-plan.md.\n"), await install(options));
+    : (process.stderr.write("WITHDRAWN: dedicated-thread notifier is not same-running-session wake; explicit legacy acknowledgement accepted. See same-chat-continuation-plan.md.\n"), await install(options));
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 } catch (error) {
   process.stderr.write(`${error.stack ?? error.message}\n`);

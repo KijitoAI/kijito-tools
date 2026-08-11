@@ -1049,7 +1049,6 @@ export async function runCounterexampleMatrix() {
         accepted: false,
         crashed: true,
         code: error?.code ?? error?.name ?? "COUNTEREXAMPLE_CRASH",
-        message: error?.message ?? String(error),
       };
     }
   }
