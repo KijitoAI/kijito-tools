@@ -225,6 +225,16 @@ Liveness detection (M223) — a DETECTOR, and a narrow carve-out for how it is s
 - It pages on stale / absent / dead-pid / unreadable, once per outage, re-arming the latch on recovery so a second outage pages again; the latch closes on a SUCCESSFUL send, not on the attempt. It does not page on `degraded` (beating, input path broken) because the driver alarms about that itself. It imports `readLiveness`, `hiveNoteBody` and `HIVE_SEND_URL` from the driver module rather than re-declaring them.
 - `--heartbeat <installRoot>/runtime-pane/heartbeat.json` is now part of the STANDARD launch argv, so every future arm is watchable by construction; the status tool reads the same path from the same definition, with the pre-M223 location read as a fallback so an older arm is not reported as a false death.
 - SUPERVISION CARVE-OUT, NARROW AND DELIBERATE: `forbiddenMechanisms` lists "LaunchAgent" and "KeepAlive", and that prohibition STANDS for anything that can start, resume, wake or type into a Codex session. It does not extend to a process that can do none of those things. `providers/codex/com.kijito.pane-wake-watchdog.plist` is therefore shipped as a TEMPLATE with placeholders: nothing installs it, nothing loads it, `doctor` still asserts the product installs no LaunchAgent of its own, and an operator who does not want the carve-out can simply delete the file — the watchdog runs under any supervisor, or in a tmux pane. Its KeepAlive resurrects the OBSERVER, never the driver.
+
+**AMENDMENT (assay ruling, 2026-08-11, msg 5996) — forbiddenMechanisms is a PROPERTY, and a read-only liveness observer is permitted under a self-revoking guardrail.**
+
+`forbiddenMechanisms` binds any mechanism that can START, RESUME, WAKE, or TYPE-INTO a Codex session (the hook-incident class). It is NOT a blanket launchd ban (the fleet's inbox-monitor is itself a launchd agent). A launchd-supervised READ-ONLY liveness OBSERVER (the M223 pane-wake-watchdog) is PERMITTED, contingent on ALL of:
+  (i) test-asserted to contain none of spawn/spawnSync/exec/execSync/execFile/process.kill/launchctl/send-keys/tmux (the forbidden-token assertion in pane-wake-watchdog.test.mjs);
+  (ii) it does nothing but read a liveness file and POST a fixed-shape hive page;
+  (iii) it holds no capability to restart/resume/type-into the driver or its pane; its KeepAlive resurrects the observer, never the driver;
+  (iv) the driver's OWN agent stays uninstalled — `doctor` continues to assert launchAgentInstalled:false for the wake path.
+GUARDRAIL (load-bearing): this permission is TIED to the forbidden-token assertion remaining a gate. If that test is removed, or the watchdog gains any listed capability, the plist REVERTS to forbidden — the permission self-revokes the instant the read-only property breaks. The narrowing creates no standing hole.
+
 - Not covered here: killing the driver and observing a page arrive is an operational, by-effect acceptance and is this row's done-when.
 
 Reconciliation with the pre-implementation gate:

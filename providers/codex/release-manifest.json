@@ -28,7 +28,7 @@
     "postSubmitCaptureSha256": "1614bdee8e0291d72354ad5afe9dc15174c43b951da27aa47221eecf51229a13",
     "postSubmitCapturePlainSha256": "95fc45b28a24e1ca0823e66b9852925aaff8e965a196c43b6ac1f8cba218a90d",
     "workflowSha256": "00adc322b28e6e0edd13270707bc2b2510b4a0bd44688816ff4442beee3d3060",
-    "planSha256": "3a1a91830a494abc181a1bfb106b495f600c813f4c2ff976ac9f21d358e6ded4"
+    "planSha256": "8b6aad2e298a31beac0f785705add6c62ddfd98cefd98c35710b0fb0d7848e78"
   },
   "ownedPaths": [
     "~/.local/share/codex-kijito-hive",
