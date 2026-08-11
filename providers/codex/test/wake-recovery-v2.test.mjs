@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -47,6 +48,29 @@ function cleanup(value) {
   fs.rmSync(value.root, { recursive: true, force: true });
 }
 
+function legacyState(overrides = {}) {
+  return {
+    schema: 1,
+    persona: "codex",
+    threadId: null,
+    eventFile: null,
+    offset: 0,
+    partialBase64: "",
+    lastMailId: 0,
+    recentKeys: [],
+    lastAttempt: null,
+    ambiguous: null,
+    ...overrides,
+  };
+}
+
+async function stopChild(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  const exited = new Promise((resolve) => child.once("exit", resolve));
+  child.kill("SIGTERM");
+  await exited;
+}
+
 function acceptedClient(batches, terminal = "completed") {
   return {
     status: "idle",
@@ -61,7 +85,7 @@ function acceptedClient(batches, terminal = "completed") {
 }
 
 test("schema-2 migration accepts exactly one known legacy latch and refuses zero or two", () => {
-  const base = { ...initialState(), schema: 1 };
+  const base = legacyState();
   const latch = {
     at: "2026-08-01T11:34:00Z",
     reason: LEGACY_POST_TERMINAL_REASON,
@@ -74,6 +98,20 @@ test("schema-2 migration accepts exactly one known legacy latch and refuses zero
   assert.throws(() => migrateExactLegacyLatch({
     ...base, ambiguous: latch, recoveredAmbiguities: [latch],
   }, "codex"), /count must be exactly 1 \(found 2\)/);
+});
+
+test("schema-1 migration projects known fields and rejects schema-2 field smuggling", () => {
+  const f = fixture();
+  try {
+    saveState(f.stateFile, legacyState({ unknownForeignField: "ignored" }));
+    const migrated = loadState(f.stateFile);
+    assert.equal(migrated.schema, 2);
+    assert.equal(migrated.migration.status, "completed");
+    assert.equal(Object.hasOwn(migrated, "unknownForeignField"), false);
+
+    saveState(f.stateFile, legacyState({ inFlight: "NOT-AN-OBJECT" }));
+    assert.throws(() => loadState(f.stateFile), /state inFlight is invalid/);
+  } finally { cleanup(f); }
 });
 
 test("accepted turn is persisted as keyed inFlight before terminal completion", async () => {
@@ -244,13 +282,14 @@ test("terminal notification for another thread is ignored", async () => {
 test("exact legacy latch cold-starts on the same idle thread, owns its batch, and reconciles once", async () => {
   const f = fixture();
   const logs = [];
-  const legacy = { ...initialState(), schema: 1 };
-  legacy.threadId = "mock-thread-1";
-  legacy.ambiguous = {
-    at: "2026-08-01T11:34:00Z",
-    reason: LEGACY_POST_TERMINAL_REASON,
-    batch: [{ kind: "new", id: 501, key: "new:501", trigger: "mail" }],
-  };
+  const legacy = legacyState({
+    threadId: "mock-thread-1",
+    ambiguous: {
+      at: "2026-08-01T11:34:00Z",
+      reason: LEGACY_POST_TERMINAL_REASON,
+      batch: [{ kind: "new", id: 501, key: "new:501", trigger: "mail" }],
+    },
+  });
   saveState(f.stateFile, legacy);
   const controller = new HiveWakeController({
     ...f,
@@ -258,7 +297,7 @@ test("exact legacy latch cold-starts on the same idle thread, owns its batch, an
     codexBin: process.execPath,
     codexArgs: [mockAppServer],
     childEnv: { MOCK_TRACE_FILE: f.traceFile },
-    pollMs: 10,
+    pollMs: 100,
     output: (line) => logs.push(JSON.parse(line)),
   });
   try {
@@ -279,9 +318,80 @@ test("exact legacy latch cold-starts on the same idle thread, owns its batch, an
   }
 });
 
+test("legacy latch recovery refuses a newly-created thread when no prior thread id exists", async () => {
+  const f = fixture();
+  saveState(f.stateFile, legacyState({
+    ambiguous: {
+      at: "2026-08-01T11:34:00Z",
+      reason: LEGACY_POST_TERMINAL_REASON,
+      batch: [{ kind: "new", id: 502, key: "new:502", trigger: "mail" }],
+    },
+  }));
+  const controller = new HiveWakeController({
+    ...f,
+    token: "test-token",
+    codexBin: process.execPath,
+    codexArgs: [mockAppServer],
+    childEnv: { MOCK_TRACE_FILE: f.traceFile },
+    pollMs: 100,
+    output: () => {},
+  });
+  try {
+    await assert.rejects(() => controller.start(), /exact resumed thread proven idle/);
+    assert.equal(fs.existsSync(f.lockFile), false);
+    const onDisk = loadState(f.stateFile);
+    assert.notEqual(onDisk.ambiguous, null);
+    assert.equal(onDisk.lastMailId, 0);
+  } finally {
+    await controller.stop();
+    cleanup(f);
+  }
+});
+
+test("events read while delivery is unavailable persist and resume from the durable pending queue", async () => {
+  const f = fixture();
+  try {
+    const first = new HiveWakeController({ ...f, pollMs: 100, output: () => {} });
+    first.client = { status: "unavailable", proc: null };
+    first.initializeEventCursor();
+    fs.appendFileSync(f.eventsFile, `${JSON.stringify({
+      source: "kijito-inbox", persona: "codex", event: "new", id: 550,
+    })}\n`);
+    first.poll();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(first.state.offset, fs.statSync(f.eventsFile).size);
+    assert.deepEqual(loadState(f.stateFile).pending.map((item) => item.key), ["new:550"]);
+
+    const batches = [];
+    const second = new HiveWakeController({ ...f, pollMs: 100, output: () => {} });
+    second.client = acceptedClient(batches);
+    await second.flush();
+    assert.deepEqual(batches.map((batch) => batch.map((item) => item.key)), [["new:550"]]);
+    assert.deepEqual(loadState(f.stateFile).pending, []);
+    assert.equal(second.state.lastMailId, 550);
+  } finally { cleanup(f); }
+});
+
+test("restart after a network-attempt checkpoint preserves pending work but blocks uncertain replay", () => {
+  const f = fixture();
+  try {
+    const state = initialState();
+    const item = { kind: "new", id: 551, key: "new:551", trigger: "mail" };
+    state.pending = [item];
+    state.lastAttempt = {
+      batch: [item], at: new Date().toISOString(), networkAttempted: true, accepted: false,
+    };
+    saveState(f.stateFile, state);
+    const controller = new HiveWakeController({ ...f, pollMs: 100, output: () => {} });
+    assert.equal(controller.state.ambiguous.classification, "acceptance-unknown");
+    assert.deepEqual(controller.pending.map((pending) => pending.key), ["new:551"]);
+  } finally { cleanup(f); }
+});
+
 test("startup drains a pre-existing backlog instead of seeking to EOF", async () => {
   const f = fixture();
   const logs = [];
+  const logFile = path.join(f.runtime, "controller.ndjson");
   fs.appendFileSync(f.eventsFile, `${JSON.stringify({
     source: "kijito-inbox", persona: "codex", event: "new", id: 601,
   })}\n`);
@@ -291,8 +401,11 @@ test("startup drains a pre-existing backlog instead of seeking to EOF", async ()
     codexBin: process.execPath,
     codexArgs: [mockAppServer],
     childEnv: { MOCK_TRACE_FILE: f.traceFile },
-    pollMs: 10,
-    output: (line) => logs.push(JSON.parse(line)),
+    pollMs: 100,
+    output: (line) => {
+      fs.appendFileSync(logFile, line, { mode: 0o600 });
+      logs.push(JSON.parse(line));
+    },
   });
   try {
     await controller.start();
@@ -302,6 +415,23 @@ test("startup drains a pre-existing backlog instead of seeking to EOF", async ()
     assert.ok(logs.some((row) => row.event === "surfaced"
       && row.batch.some((item) => item.id === 601)));
     assert.ok(logs.some((row) => row.event === "armed"));
+    const readiness = inspectRuntimeReadiness(
+      { paths: { runtime: f.runtime, eventsFile: f.eventsFile } },
+      { state: "running", pid: process.pid },
+    );
+    assert.equal(readiness.code, "WAKE_READY", JSON.stringify(readiness));
+
+    const child = controller.client.proc;
+    const exited = new Promise((resolve) => child.once("exit", resolve));
+    child.kill("SIGKILL");
+    await exited;
+    const dead = inspectRuntimeReadiness(
+      { paths: { runtime: f.runtime, eventsFile: f.eventsFile } },
+      { state: "running", pid: process.pid },
+    );
+    assert.notEqual(dead.code, "WAKE_READY");
+    assert.ok(["APP_SERVER_LIVENESS_UNPROVEN", "APP_SERVER_EXITED_AFTER_ARM"].includes(dead.code),
+      JSON.stringify(dead));
   } finally {
     await controller.stop();
     cleanup(f);
@@ -321,33 +451,51 @@ test("backlog check distinguishes empty from an unreadable/missing stream", () =
   } finally { cleanup(f); }
 });
 
-test("doctor readiness requires one exact process, schema-2 state, clear stream, and wake effect", () => {
+test("doctor readiness requires a fresh supervised child, clear durable queue, and wake effect", async () => {
   const f = fixture();
+  let child;
   try {
+    child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+    await new Promise((resolve) => setTimeout(resolve, 50));
     const eventStat = fs.statSync(f.eventsFile);
     const state = initialState();
+    const now = new Date().toISOString();
     Object.assign(state, {
       threadId: "thread-ready",
       eventFile: { dev: eventStat.dev, ino: eventStat.ino },
       offset: eventStat.size,
-      controllerPid: 12345,
+      controllerPid: process.pid,
       controllerRunId: "a".repeat(32),
-      startedAt: "2026-08-06T00:00:00Z",
-      armedAt: "2026-08-06T00:00:02Z",
-      streamStatus: { status: "clear", unreadBytes: 0, checkedAt: "2026-08-06T00:00:01Z" },
-      lastTerminal: { turnId: "turn-ready", status: "completed", at: "2026-08-06T00:00:02Z" },
+      startedAt: now,
+      armedAt: now,
+      streamStatus: { status: "clear", unreadBytes: 0, pendingCount: 0, checkedAt: now },
+      clientStatus: { status: "idle", childPid: child.pid, checkedAt: now, pollMs: 500, reason: null },
+      lastTerminal: { turnId: "turn-ready", status: "completed", at: now },
     });
     saveState(f.stateFile, state);
     fs.writeFileSync(path.join(f.runtime, "controller.ndjson"), [
-      JSON.stringify({ ts: "2026-08-06T00:00:01Z", pid: 12345, runId: "a".repeat(32),
+      JSON.stringify({ ts: now, pid: process.pid, runId: "a".repeat(32),
         threadId: "thread-ready", event: "surfaced", terminal: "completed" }),
-      JSON.stringify({ ts: "2026-08-06T00:00:02Z", pid: 12345, runId: "a".repeat(32),
+      JSON.stringify({ ts: now, pid: process.pid, runId: "a".repeat(32),
         threadId: "thread-ready", event: "armed" }),
       "",
     ].join("\n"), { mode: 0o600 });
     const manifest = { paths: { runtime: f.runtime, eventsFile: f.eventsFile } };
-    const running = { state: "running", pid: 12345 };
-    assert.equal(inspectRuntimeReadiness(manifest, running).code, "WAKE_READY");
+    const running = { state: "running", pid: process.pid };
+    const ready = inspectRuntimeReadiness(manifest, running);
+    assert.equal(ready.code, "WAKE_READY", JSON.stringify(ready));
+
+    fs.appendFileSync(path.join(f.runtime, "controller.ndjson"), `${JSON.stringify({
+      ts: new Date().toISOString(), pid: process.pid, runId: "a".repeat(32), event: "app-server-exit",
+    })}\n`);
+    assert.equal(inspectRuntimeReadiness(manifest, running).code, "APP_SERVER_EXITED_AFTER_ARM");
+    fs.writeFileSync(path.join(f.runtime, "controller.ndjson"), [
+      JSON.stringify({ ts: now, pid: process.pid, runId: "a".repeat(32),
+        threadId: "thread-ready", event: "surfaced", terminal: "completed" }),
+      JSON.stringify({ ts: now, pid: process.pid, runId: "a".repeat(32),
+        threadId: "thread-ready", event: "armed" }),
+      "",
+    ].join("\n"), { mode: 0o600 });
 
     state.ambiguous = { classification: "acceptance-unknown" };
     saveState(f.stateFile, state);
@@ -367,5 +515,8 @@ test("doctor readiness requires one exact process, schema-2 state, clear stream,
     saveState(f.stateFile, state);
     fs.unlinkSync(f.eventsFile);
     assert.equal(inspectRuntimeReadiness(manifest, running).code, "STREAM_UNAVAILABLE");
-  } finally { cleanup(f); }
+  } finally {
+    await stopChild(child);
+    cleanup(f);
+  }
 });

@@ -7,19 +7,31 @@ function verdict(status, code, extra = {}) {
   return { status, code, ...extra };
 }
 
-function privateRegular(file) {
+function openPrivateRegular(file) {
+  if (!Number.isInteger(fs.constants.O_NOFOLLOW)) {
+    return { verdict: verdict("BLOCKED", "AUTH_NOFOLLOW_UNAVAILABLE"), fd: null };
+  }
+  let fd;
   let stat;
-  try { stat = fs.lstatSync(file); }
+  try {
+    fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    stat = fs.fstatSync(fd);
+  }
   catch (error) {
-    return error.code === "ENOENT"
-      ? verdict("BLOCKED", "AUTH_EVIDENCE_ABSENT")
-      : verdict("BLOCKED", "AUTH_EVIDENCE_UNREADABLE");
+    if (fd !== undefined) fs.closeSync(fd);
+    return {
+      verdict: error.code === "ENOENT"
+        ? verdict("BLOCKED", "AUTH_EVIDENCE_ABSENT")
+        : verdict("BLOCKED", "AUTH_EVIDENCE_UNREADABLE"),
+      fd: null,
+    };
   }
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1
+  if (!stat.isFile() || stat.nlink !== 1
       || stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0) {
-    return verdict("BLOCKED", "AUTH_EVIDENCE_NOT_PRIVATE_REGULAR");
+    fs.closeSync(fd);
+    return { verdict: verdict("BLOCKED", "AUTH_EVIDENCE_NOT_PRIVATE_REGULAR"), fd: null };
   }
-  return verdict("PASS", "AUTH_FILE_PRIVATE");
+  return { verdict: verdict("PASS", "AUTH_FILE_PRIVATE"), fd };
 }
 
 function canonicalDigest(authMode, accountId) {
@@ -30,12 +42,13 @@ function canonicalDigest(authMode, accountId) {
 }
 
 export function inspectAuthBinding(file) {
-  const fileVerdict = privateRegular(file);
-  if (fileVerdict.status !== "PASS") return fileVerdict;
+  const opened = openPrivateRegular(file);
+  if (opened.verdict.status !== "PASS") return opened.verdict;
 
   let parsed;
-  try { parsed = JSON.parse(fs.readFileSync(file, "utf8")); }
+  try { parsed = JSON.parse(fs.readFileSync(opened.fd, "utf8")); }
   catch { return verdict("BLOCKED", "AUTH_EVIDENCE_UNPARSEABLE"); }
+  finally { fs.closeSync(opened.fd); }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return verdict("BLOCKED", "AUTH_SCHEMA_UNKNOWN");
   }
@@ -50,14 +63,14 @@ export function inspectAuthBinding(file) {
   }
   for (const key of ["id_token", "access_token", "refresh_token", "account_id"]) {
     if (typeof tokens[key] !== "string" || tokens[key].length === 0) {
-      return verdict("FAIL", "AUTH_TOKEN_INTEGRITY_FAILED");
+      return verdict("FAIL", "AUTH_REQUIRED_FIELD_INVALID");
     }
   }
   if (typeof parsed.last_refresh !== "string" || !Number.isFinite(Date.parse(parsed.last_refresh))) {
     return verdict("FAIL", "AUTH_REFRESH_EVIDENCE_INVALID");
   }
 
-  return verdict("PASS", "AUTH_BINDING_VALID", {
+  return verdict("PASS", "AUTH_BINDING_SHAPE_VALID", {
     binding: {
       version: AUTH_BINDING_VERSION,
       digest: canonicalDigest(parsed.auth_mode, tokens.account_id),

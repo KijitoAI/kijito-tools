@@ -4,7 +4,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 const installRoot = path.dirname(fileURLToPath(import.meta.url));
 const manifestFile = path.join(installRoot, "installed-manifest.json");
@@ -16,6 +16,19 @@ const authBindingFile = path.join(installRoot, "codex", "auth-binding.mjs");
 
 function sha256(file) {
   return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+}
+
+function verifiedModuleDataUrl(file, expectedSha256) {
+  if (!Number.isInteger(fs.constants.O_NOFOLLOW)) throw new Error("O_NOFOLLOW is required for executable module verification");
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.nlink !== 1) throw new Error("verified module must be one regular file");
+    const bytes = fs.readFileSync(fd);
+    const actual = createHash("sha256").update(bytes).digest("hex");
+    if (actual !== expectedSha256) throw new Error("verified module hash mismatch");
+    return `data:text/javascript;base64,${bytes.toString("base64")}`;
+  } finally { fs.closeSync(fd); }
 }
 
 function loadManifest() {
@@ -325,7 +338,10 @@ export function repairStaleLock(manifest, probes) {
     throw new Error(`refusing stale-lock repair in state ${before.state}`);
   }
   checkPrivateFile(before.lockFile, "stale consumer lock");
-  const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0);
+  if (!Number.isInteger(fs.constants.O_NOFOLLOW)) {
+    throw new Error("O_NOFOLLOW is required for stale-lock repair");
+  }
+  const flags = fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW;
   const fd = fs.openSync(before.lockFile, flags);
   try {
     // Keep the verified inode open across both the repeated evidence check and the rename. The
@@ -405,6 +421,7 @@ export function inspectRuntimeReadiness(manifest, controllerStatus) {
       && (typeof state.ambiguous !== "object" || Array.isArray(state.ambiguous)))
     || !Object.hasOwn(state, "inFlight") || (state.inFlight !== null
       && (typeof state.inFlight !== "object" || Array.isArray(state.inFlight)))
+    || !Array.isArray(state.pending)
     || !state.streamStatus || typeof state.streamStatus !== "object"
     || Array.isArray(state.streamStatus)) {
     return { status: "BLOCKED", code: "STATE_SHAPE_UNKNOWN" };
@@ -415,6 +432,32 @@ export function inspectRuntimeReadiness(manifest, controllerStatus) {
   }
   if (state.ambiguous !== null) return { status: "FAIL", code: "ACCEPTANCE_AMBIGUOUS" };
   if (state.inFlight !== null) return { status: "FAIL", code: "TURN_UNRESOLVED" };
+  if (state.pending.length !== 0) {
+    return { status: "FAIL", code: "DELIVERY_BACKLOG", pendingCount: state.pending.length };
+  }
+  const client = state.clientStatus;
+  if (!client || typeof client !== "object" || Array.isArray(client)
+    || client.status !== "idle" || !Number.isSafeInteger(client.childPid) || client.childPid <= 1
+    || !Number.isSafeInteger(client.pollMs) || client.pollMs < 100 || client.pollMs > 60_000
+    || typeof client.checkedAt !== "string" || !Number.isFinite(Date.parse(client.checkedAt))) {
+    return { status: "FAIL", code: "APP_SERVER_LIVENESS_UNPROVEN" };
+  }
+  const clientAgeMs = Date.now() - Date.parse(client.checkedAt);
+  const freshnessMs = Math.max(5_000, client.pollMs * 4);
+  if (clientAgeMs < -client.pollMs * 2 || clientAgeMs > freshnessMs) {
+    return { status: "FAIL", code: "APP_SERVER_HEARTBEAT_STALE", ageMs: clientAgeMs, freshnessMs };
+  }
+  const parent = spawnSync("/bin/ps", ["-p", String(client.childPid), "-o", "ppid="], {
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  if (parent.error) {
+    return { status: "BLOCKED", code: "APP_SERVER_PROCESS_UNVERIFIABLE", reason: parent.error.code ?? parent.error.message };
+  }
+  const parentPid = Number(parent.stdout.trim());
+  if (parent.status !== 0 || !Number.isSafeInteger(parentPid) || parentPid !== controllerStatus.pid) {
+    return { status: "FAIL", code: "APP_SERVER_PROCESS_MISMATCH", childPid: client.childPid };
+  }
   if (state.streamStatus?.status === "blocked") {
     return { status: "BLOCKED", code: "STREAM_CHECK_BLOCKED", reason: state.streamStatus.reason };
   }
@@ -446,8 +489,9 @@ export function inspectRuntimeReadiness(manifest, controllerStatus) {
   catch (error) {
     return { status: "BLOCKED", code: "LIFECYCLE_EVIDENCE_UNAVAILABLE", reason: error.code ?? error.message };
   }
-  const current = rows.filter((row) => row.pid === state.controllerPid
-    && row.runId === state.controllerRunId && row.threadId === state.threadId);
+  const currentRun = rows.filter((row) => row.pid === state.controllerPid
+    && row.runId === state.controllerRunId);
+  const current = currentRun.filter((row) => row.threadId === state.threadId);
   const armed = current.findLast((row) => row.event === "armed" || row.event === "rearmed-after-codex-restart");
   const surfaced = current.findLast((row) => row.event === "surfaced"
     && row.terminal === "completed");
@@ -456,12 +500,19 @@ export function inspectRuntimeReadiness(manifest, controllerStatus) {
     return { status: "FAIL", code: "WAKE_EFFECT_UNPROVEN",
       armedSeen: Boolean(armed), surfaceSeen: Boolean(surfaced) };
   }
+  const armedIndex = currentRun.findLastIndex((row) => row.threadId === state.threadId
+    && (row.event === "armed" || row.event === "rearmed-after-codex-restart"));
+  const exitIndex = currentRun.findLastIndex((row) => row.event === "app-server-exit");
+  if (exitIndex > armedIndex) {
+    return { status: "FAIL", code: "APP_SERVER_EXITED_AFTER_ARM" };
+  }
   return {
     status: "PASS",
     code: "WAKE_READY",
     pid: state.controllerPid,
     runId: state.controllerRunId,
     threadId: state.threadId,
+    childPid: client.childPid,
     stream: { dev: first.dev, ino: first.ino, offset: state.offset, unreadBytes: 0 },
     armedAt: armed.ts,
     surfacedAt: surfaced.ts,
@@ -512,7 +563,7 @@ async function doctor(manifest) {
   // Execute the parser only after its installed bytes pass the manifest hash gate. Importing first
   // would let a tampered parser run arbitrary code before doctor had a chance to reject it.
   const { compareAuthBinding } = await import(
-    `${pathToFileURL(authBindingFile).href}?sha256=${manifest.hashes.authBindingModuleSha256}`);
+    verifiedModuleDataUrl(authBindingFile, manifest.hashes.authBindingModuleSha256));
   const config = fs.readFileSync(files.config, "utf8");
   if (!config.includes("hooks = false") || config.includes("[hooks") || config.includes("LaunchAgent") || config.includes("KeepAlive")) throw new Error("dedicated config violates the no-hooks boundary");
   const token = fs.readFileSync(files.token, "utf8").trim();
@@ -525,13 +576,13 @@ async function doctor(manifest) {
   const dedicatedAuth = compareAuthBinding(files.auth, manifest.authBinding);
   const ordinaryAuth = compareAuthBinding(
     manifest.paths.ordinaryAuth, manifest.hashes.ordinaryAuthBindingAtInstall);
-  const ordinaryStateMatchesInstallSnapshot = ordinaryNow.configSha256 === manifest.hashes.ordinaryConfigBeforeSha256
+  const ordinaryBindingMatchesInstallSnapshot = ordinaryNow.configSha256 === manifest.hashes.ordinaryConfigBeforeSha256
     && ordinaryAuth.status === "PASS";
   const status = lockStatus(manifest);
   const runtimeReadiness = inspectRuntimeReadiness(manifest, status);
   // Only the dedicated install is a required health input. The user's ordinary Codex auth is
   // intentionally outside this runtime: logout, removal, or a mode change remains visible as an
-  // advisory and in ordinaryStateMatchesInstallSnapshot, but cannot make the dedicated wake path
+  // advisory and in ordinaryBindingMatchesInstallSnapshot (plus its compatibility alias), but cannot make the dedicated wake path
   // RED/BLOCKED.
   const authStatus = rollupRequiredStatuses([dedicatedAuth]);
   const doctorStatus = authStatus !== "PASS"
@@ -552,7 +603,10 @@ async function doctor(manifest) {
     launchAgentInstalled: false,
     workspaceEmpty: true,
     eventStreamReady: runtimeReadiness.status === "PASS",
-    ordinaryStateMatchesInstallSnapshot,
+    ordinaryBindingMatchesInstallSnapshot,
+    // Backward-compatible alias retained for existing operators; this proves config + stable auth
+    // binding identity, not byte identity of rotating token state.
+    ordinaryStateMatchesInstallSnapshot: ordinaryBindingMatchesInstallSnapshot,
     auth: { dedicated: dedicatedAuth, ordinary: ordinaryAuth },
     ordinaryAdvisory: ordinaryAuth.status === "PASS"
       ? null
@@ -604,10 +658,20 @@ export function controllerStartObservation(current) {
 async function start(manifest) {
   const before = lockStatus(manifest);
   if (before.state !== "stopped") throw new Error(`controller cannot start from state ${before.state}`);
+  checkRealPrivateDirectory(manifest.paths.runtime, "runtime directory");
+  if (!Number.isInteger(fs.constants.O_NOFOLLOW)) throw new Error("O_NOFOLLOW is required for controller logging");
   const logFile = path.join(manifest.paths.runtime, "controller.ndjson");
-  const logOffset = fs.existsSync(logFile) ? fs.statSync(logFile).size : 0;
-  const fd = fs.openSync(logFile, "a", 0o600);
-  fs.chmodSync(logFile, 0o600);
+  const fd = fs.openSync(logFile,
+    fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | fs.constants.O_NOFOLLOW,
+    0o600);
+  const logStat = fs.fstatSync(fd);
+  if (!logStat.isFile() || logStat.nlink !== 1 || logStat.uid !== process.getuid()
+    || (logStat.mode & 0o077) !== 0) {
+    fs.closeSync(fd);
+    throw new Error("controller log is not one private user-owned regular file");
+  }
+  fs.fchmodSync(fd, 0o600);
+  const logOffset = logStat.size;
   let child;
   try {
     child = spawn(process.execPath, controllerArgs(manifest), {
@@ -629,7 +693,11 @@ async function stop(manifest) {
   const current = lockStatus(manifest);
   if (current.state === "stopped") return { status: "ALREADY_STOPPED" };
   if (current.state !== "running") throw new Error(`refusing to signal controller in state ${current.state}`);
-  process.kill(current.pid, "SIGTERM");
+  const confirmed = lockStatus(manifest);
+  if (confirmed.state !== "running" || confirmed.pid !== current.pid) {
+    throw new Error("refusing to signal controller after ownership changed during confirmation");
+  }
+  process.kill(confirmed.pid, "SIGTERM");
   await waitFor(() => lockStatus(manifest).state === "stopped", 30_000, "controller shutdown");
   return { status: "STOPPED", pid: current.pid };
 }

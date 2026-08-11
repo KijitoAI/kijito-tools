@@ -19,15 +19,15 @@
     }
   },
   "artifacts": {
-    "authBindingSha256": "15a1da5cb2463a766664b0a05cd8be4a6a410e2172dbc75839066f939245f5e6",
-    "cliSha256": "7f57037b3d9170683c720a0e546ffb032d61f7bd305af071a5870592c091c0cb",
-    "controllerSha256": "04b4b2160ab462c8d30c0585f41ac905d3d40d152252510636688bd6dc7c575a",
-    "wakeCoreSha256": "db710ea767c20baf61a38f136ba9bc1e032e218004dc9176a60940ce56d81788",
-    "controllerTestsSha256": "c9da7792c9c9e9cce0200ab5fc8ea34e354e2334361bbb551a5dc1650bcf2758",
-    "wakeRecoveryTestsSha256": "45d783e5bb27716f9844f6c4776ad1874f7bdbc4b8148150593a032f112ddcb1",
-    "recoveryRunbookSha256": "3b63ebe0a0549750d49039c62f29f73e5b4b58bf100cb29d493f26db3e79d13b",
+    "authBindingSha256": "d61cb2184a1bf2741cde6ff9049450f37bdc2635bd80934ee87a9c97ade25e1a",
+    "cliSha256": "7d6b72e19da8da7332275096a653ec3031d5e9ce7955c0846406e49c72829155",
+    "controllerSha256": "14a0f3bb1f9fffe21078d82e601dd44e802110968ebbf5e7a59849974d20b335",
+    "wakeCoreSha256": "4a7e3a4582688a50bcd44549b9c888f745f7761136cbff04c29618c6ec0bf4cc",
+    "controllerTestsSha256": "c9c667937d16dce54e5d38a87151f8461c52414f9cdfa065d691c8468ad8991f",
+    "wakeRecoveryTestsSha256": "e302b3f8e2dc9503838caa4ee0ea263d3b013c865d4f89ea1e63921c87c30e6f",
+    "recoveryRunbookSha256": "d6f378f3cf60c7e038578993473a4b6624280b3050c06abe3d50a361d10ad3e6",
     "planSha256": "6ecb4d1db7d2db9ab55e8c2d08c8aeac14b8eb5cb4cf55dbf0f1da975b8f8daf",
-    "releasePackagingTestsSha256": "e4a98ac0568f72571b88d8f4753dfacefde8c6f0624f4581606eb734c9fb05ef"
+    "releasePackagingTestsSha256": "524945ce909d7027a9ffc0a5a715fc57acc011ac279b8ffa25dc864dfcf0725c"
   },
   "ownedPaths": [
     "~/.local/share/codex-kijito-hive",

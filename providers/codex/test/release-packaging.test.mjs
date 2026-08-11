@@ -89,6 +89,7 @@ function fixture() {
 
 function installArgs(f) {
   return [installer,
+    "--acknowledge-legacy-notifier",
     "--source-root", packageRoot,
     "--install-root", f.installRoot,
     "--launcher", f.launcher,
@@ -103,6 +104,17 @@ function installArgs(f) {
     "--legacy-root", f.legacyRoot,
   ];
 }
+
+test("full install refuses without an explicit legacy-notifier acknowledgement", () => {
+  const f = fixture();
+  try {
+    const args = installArgs(f).filter((value) => value !== "--acknowledge-legacy-notifier");
+    const refused = run(args, 1);
+    assert.match(refused.stderr, /WITHDRAWN.*--acknowledge-legacy-notifier/);
+    assert.equal(fs.existsSync(f.installRoot), false);
+    assert.equal(fs.existsSync(f.launcher), false);
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
 
 test("release install, doctor, duplicate refusal, and manifest-bound uninstall", () => {
   const f = fixture();
@@ -148,6 +160,14 @@ test("installed CLI runs through a symlink and status fails closed on an unhealt
   const f = fixture();
   try {
     run(installArgs(f));
+    const logTarget = path.join(f.root, "must-not-be-controller-log");
+    fs.writeFileSync(logTarget, "unchanged\n", { mode: 0o600 });
+    const controllerLog = path.join(f.installRoot, "runtime", "controller.ndjson");
+    fs.symlinkSync(logTarget, controllerLog);
+    const unsafeLogStart = run([f.launcher, "start"], 1);
+    assert.match(unsafeLogStart.stderr, /ELOOP|symbolic link|controller log/);
+    assert.equal(fs.readFileSync(logTarget, "utf8"), "unchanged\n");
+    fs.unlinkSync(controllerLog);
     const cliLink = path.join(f.root, "installed-cli-link");
     fs.symlinkSync(path.join(f.installRoot, "cli.mjs"), cliLink);
     const symlinkDoctor = JSON.parse(run([process.execPath, cliLink, "doctor"]).stdout);
@@ -194,7 +214,7 @@ test("installed repair-stale-lock command uses real ESRCH and exact zero-control
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 
-test("installed doctor reaches GREEN from one real exact controller and matching schema-2 evidence", async () => {
+test("installed doctor rejects self-reported schema-2 evidence without a supervised app-server child", async () => {
   const f = fixture();
   let child;
   try {
@@ -230,6 +250,7 @@ test("installed doctor reaches GREEN from one real exact controller and matching
       eventFile: { dev: eventStat.dev, ino: eventStat.ino },
       ambiguous: null,
       inFlight: null,
+      pending: [],
       streamStatus: { status: "clear", unreadBytes: 0, checkedAt: "2026-08-06T00:00:01Z" },
       controllerPid: child.pid,
       controllerRunId: runId,
@@ -244,10 +265,10 @@ test("installed doctor reaches GREEN from one real exact controller and matching
         threadId, event: "armed" }),
       "",
     ].join("\n"), { mode: 0o600 });
-    const doctor = JSON.parse(run([f.launcher, "doctor"]).stdout);
-    assert.equal(doctor.status, "GREEN");
+    const doctor = JSON.parse(run([f.launcher, "doctor"], 1).stdout);
+    assert.equal(doctor.status, "RED");
     assert.equal(doctor.controller.pid, child.pid);
-    assert.equal(doctor.runtimeReadiness.code, "WAKE_READY");
+    assert.equal(doctor.runtimeReadiness.code, "APP_SERVER_LIVENESS_UNPROVEN");
   } finally {
     await stopChild(child);
     fs.rmSync(f.root, { recursive: true, force: true });
@@ -413,6 +434,10 @@ test("auth evidence absence, malformed JSON, and unknown binding version are BLO
     fs.writeFileSync(auth, authJson(), { mode: 0o600 });
     assert.equal(compareAuthBinding(auth, { version: 999, digest: "0".repeat(64) }).code,
       "AUTH_BINDING_VERSION_UNKNOWN");
+    const alias = path.join(root, "auth-alias.json");
+    fs.symlinkSync(auth, alias);
+    assert.equal(inspectAuthBinding(alias).status, "BLOCKED");
+    assert.equal(fs.readFileSync(auth, "utf8"), authJson());
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

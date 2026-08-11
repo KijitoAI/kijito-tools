@@ -946,7 +946,11 @@ export function mergeManifest(graph, prior = null, projection = null, counterexa
   const sinkProjection = graph.entries.filter((entry) => entry.kind === "rejection-site"
     && (entry.spelling === "fail" || entry.spelling === "verdict:RED"));
   const priorFloors = prior?.floors?.counts ?? {};
-  const floors = Object.fromEntries(Object.entries(graph.counts).map(([kind, count]) => [kind, Math.max(count, priorFloors[kind] ?? 0)]));
+  const floorKinds = [...new Set([...Object.keys(priorFloors), ...Object.keys(graph.counts)])].sort();
+  const floors = Object.fromEntries(floorKinds.map((kind) => [
+    kind,
+    Math.max(graph.counts[kind] ?? 0, priorFloors[kind] ?? 0),
+  ]));
   const priorDispositionCeiling = prior?.floors?.maxRedundancyDispositions;
   return {
     schema: CENSUS_SCHEMA,

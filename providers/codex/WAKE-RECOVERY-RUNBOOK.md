@@ -65,8 +65,10 @@ other reason is a refusal. Keep the archived latch forever.
 
 Do not call recovery complete until all are true:
 
-- doctor is GREEN with schema 2, no ambiguity, no unresolved \`inFlight\`, a clear independently
-  rechecked stream, current PID/run-stamped lifecycle evidence, and one successful surface;
+- doctor is GREEN with schema 2, no ambiguity, no unresolved \`inFlight\`, an empty durable pending
+  queue, a clear independently rechecked stream, a fresh idle app-server heartbeat whose live child
+  process is parented by the exact controller PID, no child-exit record newer than the arm record,
+  current PID/run-stamped lifecycle evidence, and one successful surface;
 - startup drains any existing event backlog from byte zero rather than seeking to EOF;
 - exactly one startup reconciliation is recorded;
 - two new, real urgent hive messages each become a matching completed turn by effect, without body
