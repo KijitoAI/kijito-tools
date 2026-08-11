@@ -4,7 +4,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const installRoot = path.dirname(fileURLToPath(import.meta.url));
 const manifestFile = path.join(installRoot, "installed-manifest.json");
@@ -12,6 +12,7 @@ const manifestFile = path.join(installRoot, "installed-manifest.json");
 // controller's import specifier is the same in the repo and in the install.
 const controllerFile = path.join(installRoot, "codex", "controller.mjs");
 const wakeCoreFile = path.join(installRoot, "_shared", "wake-core.mjs");
+const paneWakeFile = path.join(installRoot, "codex", "pane-wake.mjs");
 
 function sha256(file) {
   return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
@@ -45,6 +46,10 @@ function processCommand(pid) {
   return result.status === 0 ? result.stdout.trim() : "";
 }
 
+// ⛔ ONE LOCK, TWO POSSIBLE HOLDERS. The controller and the same-session pane driver share this
+// file by construction (that is what makes them mutually exclusive), so a status tool that only
+// recognises the controller reports `pid-mismatch` — a hard error — for the perfectly correct state
+// "the pane driver is armed". The holder is now named instead of assumed.
 function lockStatus(manifest) {
   const lockFile = path.join(manifest.paths.runtime, "consumer.lock");
   let lock;
@@ -55,11 +60,88 @@ function lockStatus(manifest) {
   try { process.kill(lock.pid, 0); } catch { alive = false; }
   if (!alive) return { state: "stale-lock", pid: lock.pid, lockFile };
   const command = processCommand(lock.pid);
-  if (!command.includes(controllerFile)) return { state: "pid-mismatch", pid: lock.pid, command, lockFile };
-  return { state: "running", pid: lock.pid, command, lockFile };
+  if (command.includes(controllerFile)) return { state: "running", holder: "controller", pid: lock.pid, command, lockFile };
+  // The pane driver may legitimately run from the repo checkout as well as from the install root,
+  // so it is recognised by module name rather than by absolute path.
+  if (command.includes(paneWakeFile) || /pane-wake\.mjs(\s|$)/.test(command)) {
+    return { state: "running", holder: "pane-wake", pid: lock.pid, command, lockFile };
+  }
+  return { state: "pid-mismatch", pid: lock.pid, command, lockFile };
 }
 
-function doctor(manifest) {
+// ⛔ ONE IMPLEMENTATION OF LIVENESS, IMPORTED — NOT A SECOND COPY.
+// This used to be a hand-copy of the driver's `readLiveness` with two small divergences already
+// (a hard-coded staleness floor, a dropped field), which is a drift surface on the one signal an
+// operator uses to decide whether the wake pipeline is alive — and the copy in this file is the one
+// they actually run. It now calls the installed driver's own function, and says so plainly when
+// there is no installed driver to ask.
+async function paneWakeLiveness(manifest, now = Date.now()) {
+  const heartbeatFile = path.join(manifest.paths.runtime, "pane-wake.heartbeat");
+  if (!fs.existsSync(paneWakeFile)) return { status: "not-installed", heartbeatFile };
+  try {
+    const { readLiveness } = await import(pathToFileURL(paneWakeFile).href);
+    return readLiveness(heartbeatFile, now);
+  } catch (error) {
+    return { status: "unreadable", heartbeatFile, reason: "driver-module-unloadable" };
+  }
+}
+
+// The supervisor entry point. "Who watches the watcher" had no answer: the heartbeat was pull-only,
+// nothing restarted a dead pane driver, and `stop` explicitly refuses to signal it. This gives the
+// dead state an owner — a command an operator or a periodic job can call, which decides from the
+// SAME liveness signal and refuses rather than guesses.
+async function paneSupervise(manifest, options) {
+  const liveness = await paneWakeLiveness(manifest);
+  if (liveness.status === "not-installed") return { status: "UNAVAILABLE", reason: "pane driver is not installed", liveness };
+  if (liveness.status === "alive") return { status: "ALIVE", liveness };
+  const lock = lockStatus(manifest);
+  if (lock.state === "running" && lock.holder === "controller") {
+    return { status: "REFUSED", reason: "the single-consumer lock is held by the controller", lock, liveness };
+  }
+  if (lock.state === "running" && lock.holder === "pane-wake" && liveness.status !== "dead") {
+    return { status: "REFUSED", reason: `the lock is held by a running pane-wake (pid ${lock.pid}) whose heartbeat is ${liveness.status}`, lock, liveness };
+  }
+  const threadId = options.expectThread ?? persistedThreadId(manifest);
+  if (!threadId) return { status: "REFUSED", reason: "no --expect-thread and no persisted thread id", liveness };
+  const args = paneWakeArgs(manifest, threadId, options);
+  if (options.dryRun) return { status: "WOULD_START", reason: liveness.status, command: [options.nodeBin ?? manifest.paths.nodeBin, ...args], liveness };
+  if (lock.state === "stale-lock") return { status: "REFUSED", reason: `a stale lock from pid ${lock.pid} must be removed by a human`, lock, liveness };
+  const logFile = path.join(manifest.paths.runtime, "pane-wake.ndjson");
+  const fd = fs.openSync(logFile, "a", 0o600);
+  fs.chmodSync(logFile, 0o600);
+  let child;
+  try {
+    child = spawn(manifest.paths.nodeBin, args, { detached: true, env: safeEnv(), stdio: ["ignore", fd, fd] });
+    child.unref();
+  } finally { fs.closeSync(fd); }
+  const started = await waitFor(async () => {
+    const current = await paneWakeLiveness(manifest);
+    return ["alive", "degraded"].includes(current.status) ? current : null;
+  }, 15_000, "pane-wake heartbeat");
+  return { status: "STARTED", pid: started.pid, logFile, liveness: started };
+}
+
+function paneWakeArgs(manifest, threadId, options = {}) {
+  return [
+    paneWakeFile,
+    "--install-root", manifest.paths.installRoot,
+    "--events", manifest.paths.eventsFile,
+    "--token-file", manifest.paths.tokenFile,
+    "--expect-thread", threadId,
+    ...(options.paneSession ? ["--pane-session", options.paneSession] : []),
+    ...(options.tmux ? ["--tmux", options.tmux] : []),
+  ];
+}
+
+function persistedThreadId(manifest) {
+  const stateFile = path.join(manifest.paths.paneRuntime ?? path.join(manifest.paths.installRoot, "runtime-pane"), "state.json");
+  try {
+    const parsed = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+    return typeof parsed.threadId === "string" && parsed.threadId.length > 0 ? parsed.threadId : null;
+  } catch { return null; }
+}
+
+async function doctor(manifest) {
   checkRealPrivateDirectory(installRoot, "install root");
   checkRealPrivateDirectory(manifest.paths.codexHome, "dedicated Codex home");
   checkRealPrivateDirectory(manifest.paths.workspace, "dedicated workspace");
@@ -77,6 +159,18 @@ function doctor(manifest) {
     token: manifest.paths.tokenFile,
   };
   for (const [label, file] of Object.entries(files)) checkPrivateFile(file, label);
+  // ⛔ FAIL-CLOSED IN BOTH DIRECTIONS, because this file is present on installs made before it was
+  // gated. If the manifest declares a hash, the file MUST exist and match; if the file exists, the
+  // manifest MUST declare a hash. Only "neither" is legal, and it is reported rather than assumed.
+  const paneWakeInstalled = fs.existsSync(paneWakeFile);
+  const paneWakeDeclared = typeof manifest.hashes.paneWakeSha256 === "string";
+  if (paneWakeDeclared !== paneWakeInstalled) {
+    throw new Error(paneWakeDeclared ? "pane wake driver is gated but missing" : "pane wake driver is installed but ungated");
+  }
+  if (paneWakeInstalled) {
+    files.paneWake = paneWakeFile;
+    checkPrivateFile(paneWakeFile, "paneWake");
+  }
   for (const [label, expected] of [
     ["controller", manifest.hashes.controllerSha256],
     ["wakeCore", manifest.hashes.wakeCoreSha256],
@@ -84,6 +178,7 @@ function doctor(manifest) {
     ["config", manifest.hashes.configSha256],
     ["auth", manifest.hashes.authSha256],
     ["launcher", manifest.hashes.launcherSha256],
+    ...(paneWakeInstalled ? [["paneWake", manifest.hashes.paneWakeSha256]] : []),
   ]) if (sha256(files[label]) !== expected) throw new Error(`${label} hash mismatch`);
   const config = fs.readFileSync(files.config, "utf8");
   if (!config.includes("hooks = false") || config.includes("[hooks") || config.includes("LaunchAgent") || config.includes("KeepAlive")) throw new Error("dedicated config violates the no-hooks boundary");
@@ -98,6 +193,7 @@ function doctor(manifest) {
   const ordinaryStateMatchesInstallSnapshot = ordinaryNow.configSha256 === manifest.hashes.ordinaryConfigBeforeSha256
     && ordinaryNow.authSha256 === manifest.hashes.ordinaryAuthBeforeSha256;
   const status = lockStatus(manifest);
+  const paneWake = await paneWakeLiveness(manifest);
   return {
     status: "GREEN",
     product: manifest.product,
@@ -109,7 +205,11 @@ function doctor(manifest) {
     workspaceEmpty: true,
     eventStreamReady: eventExists,
     ordinaryStateMatchesInstallSnapshot,
+    paneWakeSha256: manifest.hashes.paneWakeSha256 ?? null,
+    paneWakeGated: paneWakeInstalled,
+    consumer: status,
     controller: status,
+    paneWake,
   };
 }
 
@@ -139,7 +239,7 @@ function safeEnv() {
 async function waitFor(predicate, timeoutMs, label) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const value = predicate();
+    const value = await predicate();
     if (value) return value;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
@@ -148,7 +248,9 @@ async function waitFor(predicate, timeoutMs, label) {
 
 async function start(manifest) {
   const before = lockStatus(manifest);
-  if (before.state !== "stopped") throw new Error(`controller cannot start from state ${before.state}`);
+  if (before.state !== "stopped") {
+    throw new Error(`controller cannot start from state ${before.state}${before.holder ? ` (lock held by ${before.holder}, pid ${before.pid})` : ""}`);
+  }
   const logFile = path.join(manifest.paths.runtime, "controller.ndjson");
   const logOffset = fs.existsSync(logFile) ? fs.statSync(logFile).size : 0;
   const fd = fs.openSync(logFile, "a", 0o600);
@@ -166,7 +268,7 @@ async function start(manifest) {
   const running = await waitFor(() => {
     const current = lockStatus(manifest);
     if (["invalid-lock", "stale-lock", "pid-mismatch"].includes(current.state)) throw new Error(`controller entered ${current.state}`);
-    return current.state === "running" ? current : null;
+    return current.state === "running" && current.holder === "controller" ? current : null;
   }, 10_000, "controller ownership");
   return { status: "STARTED", ...running, logFile, logOffset };
 }
@@ -175,6 +277,9 @@ async function stop(manifest) {
   const current = lockStatus(manifest);
   if (current.state === "stopped") return { status: "ALREADY_STOPPED" };
   if (current.state !== "running") throw new Error(`refusing to signal controller in state ${current.state}`);
+  // The lock is shared, so "running" is not enough — signalling the pane driver from a controller
+  // command would stop the wrong consumer.
+  if (current.holder !== "controller") throw new Error(`refusing to signal ${current.holder} (pid ${current.pid}); stop it with its own supervisor`);
   process.kill(current.pid, "SIGTERM");
   await waitFor(() => lockStatus(manifest).state === "stopped", 30_000, "controller shutdown");
   return { status: "STOPPED", pid: current.pid };
@@ -210,8 +315,18 @@ async function main() {
   const manifest = loadManifest();
   const [command = "status", ...rest] = process.argv.slice(2);
   let result;
-  if (command === "doctor") result = doctor(manifest);
-  else if (command === "status") result = { status: lockStatus(manifest) };
+  if (command === "doctor") result = await doctor(manifest);
+  else if (command === "status") result = { status: lockStatus(manifest), paneWake: await paneWakeLiveness(manifest) };
+  else if (command === "pane-supervise") {
+    const flags = new Map();
+    for (let index = 0; index < rest.length; index += 2) flags.set(rest[index], rest[index + 1]);
+    result = await paneSupervise(manifest, {
+      expectThread: flags.get("--expect-thread"),
+      paneSession: flags.get("--pane-session"),
+      tmux: flags.get("--tmux"),
+      dryRun: rest.includes("--dry-run"),
+    });
+  }
   else if (command === "run") {
     const child = spawn(process.execPath, controllerArgs(manifest), { cwd: manifest.paths.workspace, env: safeEnv(), stdio: "inherit" });
     process.on("SIGINT", () => child.kill("SIGINT"));

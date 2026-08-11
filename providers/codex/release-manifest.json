@@ -9,14 +9,21 @@
     "installedLayout": {
       "controller": "codex/controller.mjs",
       "wakeCore": "_shared/wake-core.mjs",
-      "cli": "cli.mjs"
+      "cli": "cli.mjs",
+      "paneWake": "codex/pane-wake.mjs"
     }
   },
   "artifacts": {
     "controllerSha256": "6f52ab6dc041778770449c36dc54529745beb082842a936b93d972d7e51add64",
     "wakeCoreSha256": "39632d1184827b1c356d359086e505a76e6e3f6b29b4d6681b59189324afbf75",
     "controllerTestsSha256": "98cccbbdfeb7799c08c4c8bc1282c783ff92ca6e8d76a43a2b7d0f8e32fd7503",
-    "planSha256": "b1fc0953d94b1e9712097dd382b32360d57f09815cc47a3be591c8000c819537"
+    "paneWakeSha256": "93044b0dfce4411b24a355263f2a2af19b44380bba254480676c6f850716e453",
+    "paneWakeTestsSha256": "b4c8ff8cc5d309ac522895e687be4afcbd1383593d5229724296a2cbfc110af6",
+    "cliSha256": "7e81b14d93e80b0f56a8a198aecc7d8895c8971b0648b4d6da6d885a8c7a8a52",
+    "postSubmitCaptureSha256": "1614bdee8e0291d72354ad5afe9dc15174c43b951da27aa47221eecf51229a13",
+    "postSubmitCapturePlainSha256": "95fc45b28a24e1ca0823e66b9852925aaff8e965a196c43b6ac1f8cba218a90d",
+    "workflowSha256": "4670d72c875a6a9b94b761a9d3e7958bb4cfd8de27c9fd244bb14bee36cc4873",
+    "planSha256": "37732458b12098567138bf84371f21c5a8d6b430801f14ff19cefb937f2b639f"
   },
   "ownedPaths": [
     "~/.local/share/codex-kijito-hive",
