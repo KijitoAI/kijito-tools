@@ -49,6 +49,12 @@ const GATED = {
   // The same flow captured WITHOUT -e. Retained because the difference between the two is itself a
   // property: with no intensity attribute the gate must fail CLOSED rather than confirm.
   postSubmitCapturePlainSha256: path.join(providerRoot, "test", "fixtures", "post-submit-capture-plain.txt"),
+  // M223: the liveness DETECTOR, its fixtures and its launchd template. The watchdog is the only
+  // thing that will notice the wake driver dying, so an ungated watchdog is an unguarded guard —
+  // and the plist is gated too, because a supervisor definition is executable intent.
+  watchdogSha256: path.join(providerRoot, "pane-wake-watchdog.mjs"),
+  watchdogTestsSha256: path.join(providerRoot, "test", "pane-wake-watchdog.test.mjs"),
+  watchdogPlistSha256: path.join(providerRoot, "com.kijito.pane-wake-watchdog.plist"),
   // The CI workflow is the thing that RUNS all of the above. It was a modified companion of every
   // recent round and declared nowhere, so a change to what CI executes left no trace in the
   // manifest that records what the release is.

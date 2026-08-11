@@ -98,12 +98,25 @@ test("release install, doctor, duplicate refusal, and manifest-bound uninstall",
     assert.equal(createHash("sha256").update(fs.readFileSync(installedPaneWake)).digest("hex"), release.artifacts.paneWakeSha256);
     assert.equal(manifest.hashes.paneWakeSha256, release.artifacts.paneWakeSha256);
     assert.equal(manifest.hashes.paneWakeTestsSha256, release.artifacts.paneWakeTestsSha256);
+    // M223: the detector is installed beside the driver (so its import resolves) and hash-recorded.
+    const installedWatchdog = path.join(manifest.paths.installRoot, release.production.installedLayout.watchdog);
+    const installedPlist = path.join(manifest.paths.installRoot, release.production.installedLayout.watchdogPlistTemplate);
+    for (const [file, key] of [[installedWatchdog, "watchdogSha256"], [installedPlist, "watchdogPlistSha256"]]) {
+      assert.equal(fs.existsSync(file), true, key);
+      assert.equal(createHash("sha256").update(fs.readFileSync(file)).digest("hex"), release.artifacts[key], key);
+      assert.equal(manifest.hashes[key], release.artifacts[key], key);
+    }
+    // The installer realpath-resolves its root, so the recorded paths are compared against the
+    // manifest's own resolved value rather than the fixture's unresolved one.
+    assert.equal(manifest.paths.paneHeartbeat, path.join(manifest.paths.installRoot, "runtime-pane", "heartbeat.json"));
+    assert.equal(manifest.paths.watchdog, installedWatchdog);
     const doctor = JSON.parse(run([f.launcher, "doctor"]).stdout);
     assert.equal(doctor.status, "GREEN");
     assert.equal(doctor.hooksDisabled, true);
     assert.equal(doctor.launchAgentInstalled, false);
     assert.equal(doctor.workspaceEmpty, true);
     assert.equal(doctor.paneWakeGated, true);
+    assert.equal(doctor.watchdogGated, true, "the detector is covered by the install integrity table");
     assert.equal(doctor.paneWake.status, "absent", "no pane driver armed against a fresh install");
     assert.equal(doctor.ordinaryStateMatchesInstallSnapshot, true);
     run(installArgs(f), 1);
@@ -154,6 +167,7 @@ test("doctor and uninstall fail closed on installed-byte tampering", () => {
     for (const target of [path.join(f.installRoot, "codex", "controller.mjs"),
                           path.join(f.installRoot, "_shared", "wake-core.mjs"),
                           path.join(f.installRoot, "codex", "pane-wake.mjs"),
+                          path.join(f.installRoot, "codex", "pane-wake-watchdog.mjs"),
                           // ⛔ AND THE CLI, which IS `doctor`/`status`/`lockStatus`/liveness — the
                           // only external observer of everything else. It was outside this loop for
                           // the same reason it was outside the gate.
@@ -196,6 +210,9 @@ test("the health-reporting binary is gated at the SOURCE, not against a hash der
   const sha = (file) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
   for (const [key, file] of [
     ["cliSha256", path.join(packageRoot, "cli.mjs")],
+    ["watchdogSha256", path.join(packageRoot, "pane-wake-watchdog.mjs")],
+    ["watchdogTestsSha256", path.join(packageRoot, "test", "pane-wake-watchdog.test.mjs")],
+    ["watchdogPlistSha256", path.join(packageRoot, "com.kijito.pane-wake-watchdog.plist")],
     ["postSubmitCaptureSha256", path.join(packageRoot, "test", "fixtures", "post-submit-capture-e.txt")],
     ["postSubmitCapturePlainSha256", path.join(packageRoot, "test", "fixtures", "post-submit-capture-plain.txt")],
     ["workflowSha256", path.join(packageRoot, "..", "..", ".github", "workflows", "test.yml")],
@@ -213,6 +230,9 @@ test("the health-reporting binary is gated at the SOURCE, not against a hash der
     path.join("test", "pane-wake.test.mjs"),
     // The captured post-submit frame: it is the evidence the read-state-advancing gate is validated
     // against, so an edited capture is an edited safety argument.
+    "pane-wake-watchdog.mjs",
+    "com.kijito.pane-wake-watchdog.plist",
+    path.join("test", "pane-wake-watchdog.test.mjs"),
     path.join("test", "fixtures", "post-submit-capture-e.txt"),
     path.join("test", "fixtures", "post-submit-capture-plain.txt"),
   ]) {
@@ -295,6 +315,12 @@ test("status names the pane driver as a lock holder, and the supervisor decides 
     const wouldStart = JSON.parse(run([f.launcher, "pane-supervise", "--expect-thread", THREAD, "--dry-run"]).stdout);
     assert.equal(wouldStart.status, "WOULD_START");
     assert.ok(wouldStart.command.includes("--expect-thread"));
+    // ⛔ EVERY FUTURE ARM IS WATCHABLE BY CONSTRUCTION. `--heartbeat` is part of the standard launch
+    // argv rather than something an operator must remember, and it points at the one canonical path
+    // the status tool and the watchdog also use.
+    const heartbeatIndex = wouldStart.command.indexOf("--heartbeat");
+    assert.notEqual(heartbeatIndex, -1, "the launch argv must carry --heartbeat");
+    assert.equal(wouldStart.command[heartbeatIndex + 1], path.join(manifest.paths.installRoot, "runtime-pane", "heartbeat.json"));
     assert.ok(wouldStart.command.some((part) => part.endsWith("codex/pane-wake.mjs")));
     assert.ok(wouldStart.command.includes(manifest.paths.eventsFile));
     // Without a thread identity there is nothing safe to start.
