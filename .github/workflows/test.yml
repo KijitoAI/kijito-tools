@@ -42,7 +42,8 @@ jobs:
         run: |
           node --test providers/codex/test/codex-hive-watch.test.mjs \
                        providers/codex/test/release-packaging.test.mjs \
-                       providers/codex/test/pane-wake.test.mjs
+                       providers/codex/test/pane-wake.test.mjs \
+                       providers/codex/test/pane-wake-watchdog.test.mjs
 
       - name: codex gated hashes are current
         run: node providers/codex/tools/refresh-manifest.mjs --check
@@ -87,6 +88,8 @@ jobs:
                    providers/codex/install.mjs \
                    providers/codex/controller.mjs \
                    providers/codex/pane-wake.mjs \
+                   providers/codex/pane-wake-watchdog.mjs \
+                   providers/codex/com.kijito.pane-wake-watchdog.plist \
                    providers/codex/release-manifest.json \
                    providers/codex/test/codex-hive-watch.test.mjs \
                    providers/codex/test/pane-wake.test.mjs \

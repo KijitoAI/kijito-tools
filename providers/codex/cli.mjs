@@ -13,6 +13,7 @@ const manifestFile = path.join(installRoot, "installed-manifest.json");
 const controllerFile = path.join(installRoot, "codex", "controller.mjs");
 const wakeCoreFile = path.join(installRoot, "_shared", "wake-core.mjs");
 const paneWakeFile = path.join(installRoot, "codex", "pane-wake.mjs");
+const watchdogFile = path.join(installRoot, "codex", "pane-wake-watchdog.mjs");
 
 function sha256(file) {
   return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
@@ -75,12 +76,32 @@ function lockStatus(manifest) {
 // operator uses to decide whether the wake pipeline is alive — and the copy in this file is the one
 // they actually run. It now calls the installed driver's own function, and says so plainly when
 // there is no installed driver to ask.
+// ⛔ ONE DEFINITION OF WHERE THE HEARTBEAT LIVES. The launcher passes `--heartbeat`, `status` and
+// `doctor` read it, and the watchdog is pointed at it: three consumers, and if any of them derives
+// the path independently the failure is silent in the worst direction — a watchdog watching a file
+// nobody writes reports a healthy driver as dead, or worse, a dead one as absent-and-therefore-
+// somebody-else's-problem. The path is <installRoot>/runtime-pane/heartbeat.json.
+function paneHeartbeatFile(manifest) {
+  const paneRuntime = manifest.paths.paneRuntime ?? path.join(manifest.paths.installRoot, "runtime-pane");
+  return path.join(paneRuntime, "heartbeat.json");
+}
+
+// An arm made BEFORE `--heartbeat` joined the launch argv writes to the driver's own default, next
+// to the lock. Reporting that as "absent" would be a false death, so the legacy location is read as
+// a fallback and named when it is what answered.
+function legacyPaneHeartbeatFile(manifest) {
+  return path.join(manifest.paths.runtime, "pane-wake.heartbeat");
+}
+
 async function paneWakeLiveness(manifest, now = Date.now()) {
-  const heartbeatFile = path.join(manifest.paths.runtime, "pane-wake.heartbeat");
+  const canonical = paneHeartbeatFile(manifest);
+  const legacy = legacyPaneHeartbeatFile(manifest);
+  const heartbeatFile = fs.existsSync(canonical) || !fs.existsSync(legacy) ? canonical : legacy;
   if (!fs.existsSync(paneWakeFile)) return { status: "not-installed", heartbeatFile };
   try {
     const { readLiveness } = await import(pathToFileURL(paneWakeFile).href);
-    return readLiveness(heartbeatFile, now);
+    const liveness = readLiveness(heartbeatFile, now);
+    return heartbeatFile === legacy ? { ...liveness, legacyHeartbeatPath: true } : liveness;
   } catch (error) {
     return { status: "unreadable", heartbeatFile, reason: "driver-module-unloadable" };
   }
@@ -127,6 +148,9 @@ function paneWakeArgs(manifest, threadId, options = {}) {
     "--install-root", manifest.paths.installRoot,
     "--events", manifest.paths.eventsFile,
     "--token-file", manifest.paths.tokenFile,
+    // Part of the STANDARD launch argv, so every future arm is watchable by construction rather
+    // than by somebody remembering to add a flag.
+    "--heartbeat", paneHeartbeatFile(manifest),
     "--expect-thread", threadId,
     ...(options.paneSession ? ["--pane-session", options.paneSession] : []),
     ...(options.tmux ? ["--tmux", options.tmux] : []),
@@ -171,6 +195,19 @@ async function doctor(manifest) {
     files.paneWake = paneWakeFile;
     checkPrivateFile(paneWakeFile, "paneWake");
   }
+  // M223: the detector gets the same declared-XOR-installed treatment as the driver. An installed
+  // watchdog whose bytes nobody checks is an unguarded guard — it is the only thing that will
+  // notice the driver dying, so `doctor` reporting GREEN over a modified one is the worst shape of
+  // false reassurance available in this install.
+  const watchdogInstalled = fs.existsSync(watchdogFile);
+  const watchdogDeclared = typeof manifest.hashes.watchdogSha256 === "string";
+  if (watchdogDeclared !== watchdogInstalled) {
+    throw new Error(watchdogDeclared ? "watchdog is gated but missing" : "watchdog is installed but ungated");
+  }
+  if (watchdogInstalled) {
+    files.watchdog = watchdogFile;
+    checkPrivateFile(watchdogFile, "watchdog");
+  }
   for (const [label, expected] of [
     ["controller", manifest.hashes.controllerSha256],
     ["wakeCore", manifest.hashes.wakeCoreSha256],
@@ -179,6 +216,7 @@ async function doctor(manifest) {
     ["auth", manifest.hashes.authSha256],
     ["launcher", manifest.hashes.launcherSha256],
     ...(paneWakeInstalled ? [["paneWake", manifest.hashes.paneWakeSha256]] : []),
+    ...(watchdogInstalled ? [["watchdog", manifest.hashes.watchdogSha256]] : []),
   ]) if (sha256(files[label]) !== expected) throw new Error(`${label} hash mismatch`);
   const config = fs.readFileSync(files.config, "utf8");
   if (!config.includes("hooks = false") || config.includes("[hooks") || config.includes("LaunchAgent") || config.includes("KeepAlive")) throw new Error("dedicated config violates the no-hooks boundary");
@@ -207,6 +245,8 @@ async function doctor(manifest) {
     ordinaryStateMatchesInstallSnapshot,
     paneWakeSha256: manifest.hashes.paneWakeSha256 ?? null,
     paneWakeGated: paneWakeInstalled,
+    watchdogGated: watchdogInstalled,
+    watchdogSha256: manifest.hashes.watchdogSha256 ?? null,
     consumer: status,
     controller: status,
     paneWake,
