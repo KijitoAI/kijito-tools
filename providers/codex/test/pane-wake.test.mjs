@@ -234,6 +234,30 @@ function delivery(options = {}) {
 
 // ── the F3 table, and the region it is allowed to read ──────────────────────────────────────────
 
+test("M227: an idle pane whose transcript contains full-width rules classifies IDLE, not BUSY", () => {
+  // A REAL captured frame (tmux capture-pane -e -p), hash-gated in release-manifest.json so it
+  // cannot be edited into agreement with the code. Codex's idle pane shows its last transcript,
+  // which here contains full-width ──── rules AND framed tool-output blocks (└, U+2514). The
+  // pre-fix readChrome scanned UPWARD without bound for the first rule above the fixed window,
+  // anchored on a TRANSCRIPT rule ~34 lines up, dragged the framed └ lines into the idleSignature
+  // band, and the `unframed` clause then failed → BUSY. On the live driver this livelocked wake
+  // delivery: 150+ deferrals, every queued wake stuck, because codex's next task (which would clear
+  // the frame) normally arrives via a wake. The bounded upward search (CHROME_RULE_LOOKUP_LINES)
+  // stops before the transcript rule, so the band is the composer+chrome only and the pane reads
+  // idle. This fixture is the positive control the livelock is gone.
+  const frameFile = fileURLToPath(new URL("./fixtures/idle-with-transcript-rules-M227.txt", import.meta.url));
+  const frame = fs.readFileSync(frameFile, "utf8");
+  assert.equal(createHash("sha256").update(frame).digest("hex"),
+    "58df1a8ffc92c2263b83f724564ae9a5fafaa3f056b553f4bdffd6c569c7327e",
+    "the M227 fixture must be the exact captured frame, not an edited copy");
+  const release = JSON.parse(fs.readFileSync(path.join(providerRoot, "release-manifest.json"), "utf8"));
+  assert.equal(release.artifacts.idleTranscriptRulesCaptureSha256,
+    "58df1a8ffc92c2263b83f724564ae9a5fafaa3f056b553f4bdffd6c569c7327e",
+    "the M227 fixture must be gated in the release manifest");
+  const d = new PaneDelivery({ tmux: "tmux", paneSession: "codex", expectThread: THREAD });
+  assert.equal(d.classifyPane(frame, 0), "idle");
+});
+
 test("classifyPane is three-valued and every measured running-turn rendering is BUSY", () => {
   const d = delivery();
   // Rows 1-2 were already caught by the original 4-line window; rows 3-6 were the measured misses,

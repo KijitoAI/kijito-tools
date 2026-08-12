@@ -49,6 +49,11 @@ const GATED = {
   // The same flow captured WITHOUT -e. Retained because the difference between the two is itself a
   // property: with no intensity attribute the gate must fail CLOSED rather than confirm.
   postSubmitCapturePlainSha256: path.join(providerRoot, "test", "fixtures", "post-submit-capture-plain.txt"),
+  // M227: a REAL idle-pane capture whose transcript carries full-width rules and framed tool-output.
+  // It is the positive control that the classifier no longer mis-reads transcript as chrome and
+  // livelocks wake delivery; ungated, a future edit could make the classifier "pass" against a frame
+  // the TUI never produces.
+  idleTranscriptRulesCaptureSha256: path.join(providerRoot, "test", "fixtures", "idle-with-transcript-rules-M227.txt"),
   // M223: the liveness DETECTOR, its fixtures and its launchd template. The watchdog is the only
   // thing that will notice the wake driver dying, so an ungated watchdog is an unguarded guard —
   // and the plist is gated too, because a supervisor definition is executable intent.
