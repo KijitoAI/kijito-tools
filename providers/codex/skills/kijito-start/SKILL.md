@@ -56,7 +56,8 @@ duplicate `PostCompact` without the ticket is also a no-op.
      flag is the system working). Disposition, not eyeballs, decides.
 6. Verify wake readiness separately from hosted Kijito reachability. If the
    installed hookless launcher exists at
-   `/Users/jason/.local/bin/codex-kijito-hive`:
+   `~/.local/bin/codex-kijito-hive` (the install-time launcher path; substitute the launcher
+   named in `installed-manifest.json` if the install was parameterized differently):
    - Run `status` and `doctor`. Re-run these read-only checks outside the
      restricted sandbox when `EPERM` could make a live owned process look stale.
    - Do NOT run `start` by default. The isolated-thread controller is a
