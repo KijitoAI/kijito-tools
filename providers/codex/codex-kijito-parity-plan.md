@@ -1,8 +1,28 @@
 # Codex Kijito parity: bounded C1-C4 release plan
 
-Status: **C1 GREEN; C3 PRE-IMPLEMENTATION GATE**
+Status: **SUPERSEDED IN PART — see 2026-08-12 status correction below** (original header
+read "C1 GREEN; C3 PRE-IMPLEMENTATION GATE" and went stale)
 
-Date: 2026-07-28
+Date: 2026-07-28 (amended 2026-08-11; status corrected 2026-08-12)
+
+> **STATUS CORRECTION (codex, 2026-08-12).** The header above described C3 as
+> pre-implementation while the 2026-08-11 amendments below record shipped, certified code.
+> Current reality, so no reader executes stale gates:
+> - **C3's isolated-thread architecture (controller.mjs) is measured-RED and DEPRECATED** —
+>   replaced by the pane-wake tmux driver (same-session delivery, byte-certified, watchdogged).
+>   Its C3 gate items as originally written must NOT be picked up as work.
+> - **Shipped since the header:** pane-wake delivery path, CSPRNG verification tokens,
+>   /api/send transport fix, three-outcome arm probe, M223 watchdog + `--heartbeat` argv,
+>   pane-state schema-1 pin (b47ba730, certified + live-swapped).
+> - **Live successor gate:** PR #6 (`codex/same-chat-continuation-plan` @ c38648d) —
+>   act-on-mail machinery under two-consecutive-clean adversarial review (assay), merge order
+>   M224 → pin → PR #6.
+> - **Still open from this plan:** the M223 kill-driver-and-observe-a-page operational
+>   acceptance (to run during the packaged re-arm), and C2/C4 as re-cut under PR #6's scope.
+> - `release-manifest.json`'s `planSha256` records the PRIOR revision of this file by design
+>   (provenance, not a gate — do not re-stamp it for this prose edit).
+> - Under Jason's 2026-08-12 kijito-tools directive [[27367]], this provider tree becomes an
+>   installable peer provider; packaging work supersedes any remaining seat-local steps here.
 
 Program lead: River. Codex owns the OpenAI/Codex surface. Jason's direct
 instructions and platform safety policy remain controlling.
