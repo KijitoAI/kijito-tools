@@ -70,8 +70,57 @@ while true; do
   if [ "$cur" = "$last" ]; then unchanged=$((unchanged+1)); else unchanged=0; last="$cur"; fi
   [ "$unchanged" -ge "$QUIET_CHECKS" ] || continue
 
-  lc_log HEARTBEAT_NUDGE "pane idle ~$((unchanged*POLL))s"
-  prompt="Backup heartbeat: this pane has been idle. Re-read your current-state pointer by ID (never by recall) and CONTINUE the active work autonomously to its DONE-WHEN. If your measured context is at or past the self-clear target, run the kijito-qa-memory skill and then self-clear. If there is genuinely no active work left, say so and stop."
+  # ── WAKE NONCE ────────────────────────────────────────────────────────────
+  # Every nudge carries an identity. Without one, EVERY heartbeat nudge is
+  # BYTE-IDENTICAL to every other heartbeat nudge, which breaks three things
+  # that were each reported separately as if they were different bugs:
+  #   1. D1 cannot tell nudge #1 from nudge #47, so nudges are invisible to
+  #      the wake population by construction.
+  #   2. Content-identity attribution collapses them onto one another -- the
+  #      same duplicate-payload hazard found in the D1 batch keys (L3-F2).
+  #   3. Byte-identical NUDGE log lines at the same timestamp cannot be
+  #      resolved into "two panes coinciding" vs "one pane double-firing",
+  #      so a double-fire is a real bug the log is structurally unable to
+  #      reveal (argus).
+  #
+  # RANDOM, not derived -- and this is the ONE place in the design where that
+  # is correct. The derived-nonce ruling covers producer events, which have an
+  # `event_id` to derive FROM and an equivalence class where a re-delivery is
+  # the SAME wake. A nudge has no event and no dedupe key: one EMISSION is one
+  # wake (signal-class), so a per-emission identity is the right semantics.
+  #
+  # 11 base62 chars matches the producer's wake nonce exactly: 10 chars is
+  # 59.5 bits (under the >=64-bit floor), 12 breaks the <=11 ceiling.
+  _nonce="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom 2>/dev/null | head -c 11)"
+  if [ ${#_nonce} -ne 11 ]; then
+    # DEGRADED GENERATOR -- and it must ANNOUNCE itself. The fallback is
+    # `date+cksum`, ~36 bits, BELOW the >=64-bit floor the plan sets. A weak
+    # nonce is byte-indistinguishable from a strong one at the point of use,
+    # so a silent downgrade is the false-calm shape this whole file exists to
+    # remove: collisions would surface far downstream as two wakes that look
+    # like one, and nothing would point back here. (assay, review of 225cc0e.)
+    _nonce="$(date +%s%N | cksum | tr -dc '0-9' | head -c 11)"
+    lc_log HEARTBEAT_NONCE_DEGRADED "urandom unavailable; ~36-bit fallback nonce=$_nonce"
+  fi
+
+  # The pane goes in the MESSAGE BODY, not just the lc_log prefix: that prefix
+  # is built from $TMUX_PANE/$CLAUDE_CODE_SESSION_ID, which a systemd unit does
+  # not have, so it renders `pane=? sid=?` in production -- 147 such lines on
+  # this seat. The one context where the prefix IS populated is a hand-run,
+  # which is the one context that never runs in production.
+  #
+  # ⚠️ IT IS `target_pane=`, NOT `pane=`, AND THAT IS NOT COSMETIC (cadence,
+  # caught pre-install). lc_log ALWAYS emits `pane=` in its prefix, so a body
+  # field of the same name puts TWO `pane=` on one line:
+  #     … sid=? pane=?  HEARTBEAT_NUDGE  pane=%4 nonce=…
+  # and `grep -o 'pane=[^ ]*'` returns the PREFIX one -- `pane=?` -- because
+  # it comes first. A consumer parsing naively would read "pane unknown" on
+  # precisely the lines this change exists to make attributable. That is one
+  # label with two meanings on a single line, which is the defect class this
+  # fleet has hit repeatedly; a distinct name avoids it without touching the
+  # shared lc_log prefix, whose blast radius is every log line we emit.
+  lc_log HEARTBEAT_NUDGE "target_pane=$PANE nonce=$_nonce idle ~$((unchanged*POLL))s"
+  prompt="Backup heartbeat [wake-nonce: $_nonce]: this pane has been idle. Re-read your current-state pointer by ID (never by recall) and CONTINUE the active work autonomously to its DONE-WHEN. If your measured context is at or past the self-clear target, run the kijito-qa-memory skill and then self-clear. If there is genuinely no active work left, say so and stop."
 
   # Same paste-buffer discipline as session-autosend: a gap before the Enter, then verify, because
   # an Enter inside the TUI's ingest burst is absorbed as a newline and the nudge would sit unsent —

@@ -219,3 +219,44 @@ explicit launcher and its documentation. Production installation may add only
 the dedicated launcher/home named by the manifest. It may not alter the
 ordinary `~/.codex/config.toml`, installed plugins, hook trust, model catalog,
 context limits, or the user's current thread.
+
+---
+## Amendment — 2026-08-11: same-session pane wake NARROWLY supersedes the "no automation on the user's current thread" boundary
+
+Authority: Jason's in-session direction (via codex msg 5695) + assay ruling 5717. The "Safety boundary inherited from the hook incident" above is SUPERSEDED for exactly one case: same-session wake delivery.
+
+- The codex provider MAY deliver wake-core's fixedWakeText — event METADATA ONLY (the WAKE_PREFIX and a read-only inbox-peek instruction; NEVER a hive message body) — into the operator's send-time-verified live Codex pane via tmux (providers/codex/pane-wake.mjs).
+- The injected text is EXACTLY that template PLUS one appended verification line of the fixed form `Wake-verification: <token>`. The token is 128 bits from the CSPRNG (`crypto.randomBytes(16)`, rendered as 32 lowercase hex characters and validated against `/^[0-9a-f]{32}$/` before it can be composed into the line), minted FRESH for every submission, never reused, and discarded when the confirmation phase for that submission ends. It is driver-generated randomness, not content: no event field, no pane content and no hive data can reach that line. The line exists so that the driver can prove the turn it consumes a message id for is ITS OWN — a constant marker is reproducible by anything rendered on screen, including a hive message body the wake itself asks the agent to summarise, and a per-submission random token is not.
+- The injection-surface property is therefore unchanged and still holds: the only two things ever typed into the operator's pane are a closed template and a random token this driver minted.
+- Everything else in the original boundary STANDS UNCHANGED: no thread/inject_items, no thread/steer, no transcript-history injection, never a hive message body in injected input, nothing starts at login.
+- Rationale: the operator requires parity with the working Claude/OpenCode same-session wake; the isolated dedicated-thread approach (controller.mjs) delivered wakes into a thread the operator never saw (measured RED).
+
+Alert transport and its arm-time probe:
+- The bounded-silence alert is delivered in-process to `https://api.kijito.ai/api/send` with the body `{to, content, from}` — the REST route that twins the `kijito_hive_send` MCP tool, and the field names that route actually reads. The original bytes used the tool-shaped path `/api/hive/send` and a `persona` field; the route answered 404 to every alert the driver ever raised, and an unknown field would have re-attributed the alarm to the token identity rather than to codex.
+- At arm time the driver PROBES that route with a GET (no body, so nothing can be sent), bounded at 4 seconds, carrying the same bearer the transport uses — this API authenticates BEFORE it routes, so an unauthenticated probe answers 401 for every path including paths that do not exist, and could not tell present from absent. The probe NEVER blocks arming; every outcome arms, and there are exactly three:
+  - NON-404 (405 / 401 / 2xx) → the route exists → arm normally, logged as verified present;
+  - 404 → the route is confirmed absent → arm and announce DEAD, in a line that cannot be misread as healthy;
+  - timeout / network error / any throw inside the probe → arm and announce UNVERIFIED, in a DISTINCT line. A failed observation is not an observed failure: collapsing "could not reach the server" into "the route is dead" teaches an operator that the DEAD line sometimes means nothing, and it then means nothing when it is true.
+- The outcome is stamped on every bounded-silence alarm line, so an alert can never look healthier than the transport that carries it.
+
+Liveness detection (M223) — a DETECTOR, and a narrow carve-out for how it is supervised:
+- `providers/codex/pane-wake-watchdog.mjs` watches the driver's heartbeat and PAGES when the wake path has stopped. It is detection-only: it never starts, restarts, resumes, signals or types into anything, its own test asserts the file contains no spawn/exec/kill/tmux at all, and auto-restart is a separate registry row on purpose — a supervisor that re-arms a wake driver can re-arm it into a pane whose state nobody verified, which is exactly what the driver's send-time checks exist to prevent.
+- The window is the driver's own measured cadence: the driver beats at most every 5s, a record is stale after 30s (max(30s, pollMs x 6)), the watchdog checks every 15s ⇒ a death is DETECTED AND PAGED within roughly 30-45s of the last beat. The lower bound is the staleness threshold (a driver between beats must not be paged); the upper bound is that threshold plus one check interval.
+- It pages on stale / absent / dead-pid / unreadable, once per outage, re-arming the latch on recovery so a second outage pages again; the latch closes on a SUCCESSFUL send, not on the attempt. It does not page on `degraded` (beating, input path broken) because the driver alarms about that itself. It imports `readLiveness`, `hiveNoteBody` and `HIVE_SEND_URL` from the driver module rather than re-declaring them.
+- `--heartbeat <installRoot>/runtime-pane/heartbeat.json` is now part of the STANDARD launch argv, so every future arm is watchable by construction; the status tool reads the same path from the same definition, with the pre-M223 location read as a fallback so an older arm is not reported as a false death.
+- SUPERVISION CARVE-OUT, NARROW AND DELIBERATE: `forbiddenMechanisms` lists "LaunchAgent" and "KeepAlive", and that prohibition STANDS for anything that can start, resume, wake or type into a Codex session. It does not extend to a process that can do none of those things. `providers/codex/com.kijito.pane-wake-watchdog.plist` is therefore shipped as a TEMPLATE with placeholders: nothing installs it, nothing loads it, `doctor` still asserts the product installs no LaunchAgent of its own, and an operator who does not want the carve-out can simply delete the file — the watchdog runs under any supervisor, or in a tmux pane. Its KeepAlive resurrects the OBSERVER, never the driver.
+
+**AMENDMENT (assay ruling, 2026-08-11, msg 5996) — forbiddenMechanisms is a PROPERTY, and a read-only liveness observer is permitted under a self-revoking guardrail.**
+
+`forbiddenMechanisms` binds any mechanism that can START, RESUME, WAKE, or TYPE-INTO a Codex session (the hook-incident class). It is NOT a blanket launchd ban (the fleet's inbox-monitor is itself a launchd agent). A launchd-supervised READ-ONLY liveness OBSERVER (the M223 pane-wake-watchdog) is PERMITTED, contingent on ALL of:
+  (i) test-asserted to contain none of spawn/spawnSync/exec/execSync/execFile/process.kill/launchctl/send-keys/tmux (the forbidden-token assertion in pane-wake-watchdog.test.mjs);
+  (ii) it does nothing but read a liveness file and POST a fixed-shape hive page;
+  (iii) it holds no capability to restart/resume/type-into the driver or its pane; its KeepAlive resurrects the observer, never the driver;
+  (iv) the driver's OWN agent stays uninstalled — `doctor` continues to assert launchAgentInstalled:false for the wake path.
+GUARDRAIL (load-bearing): this permission is TIED to the forbidden-token assertion remaining a gate. If that test is removed, or the watchdog gains any listed capability, the plist REVERTS to forbidden — the permission self-revokes the instant the read-only property breaks. The narrowing creates no standing hole.
+
+- Not covered here: killing the driver and observing a page arrive is an operational, by-effect acceptance and is this row's done-when.
+
+Reconciliation with the pre-implementation gate:
+After issuing the submit keystroke the driver enters a BOUNDED confirmation phase: it OBSERVES, never re-issues blindly, until it positively confirms the turn started (→ consumes the id) OR positively observes the submit did not take (composer still holds our text → one bounded re-issue) OR hits a hard cap (→ alarms and abandons WITHOUT consuming the id, leaving recovery to the next reconcile). Positive confirmation means ONE thing: the composer is empty AND this submission's own fresh verification token is rendered above it. A live-turn indicator is corroborating evidence only and can never advance read-state, because a turn may start for reasons that have nothing to do with us. A persisted confirmation record older than the phase's own worst-case duration is refused on sight rather than confirmed against a screen it cannot be evidence about. A message id is consumed ONLY on positive confirmation; no blind resubmission of an id-bearing wake ever occurs.
+---
