@@ -41,7 +41,9 @@ jobs:
       - name: codex controller + packaging suites
         run: |
           node --test providers/codex/test/codex-hive-watch.test.mjs \
-                       providers/codex/test/release-packaging.test.mjs
+                       providers/codex/test/release-packaging.test.mjs \
+                       providers/codex/test/pane-wake.test.mjs \
+                       providers/codex/test/pane-wake-watchdog.test.mjs
 
       - name: codex gated hashes are current
         run: node providers/codex/tools/refresh-manifest.mjs --check
@@ -85,8 +87,14 @@ jobs:
                    providers/claude/skills/kijito-qa-memory/SKILL.md \
                    providers/codex/install.mjs \
                    providers/codex/controller.mjs \
+                   providers/codex/pane-wake.mjs \
+                   providers/codex/pane-wake-watchdog.mjs \
+                   providers/codex/com.kijito.pane-wake-watchdog.plist \
                    providers/codex/release-manifest.json \
                    providers/codex/test/codex-hive-watch.test.mjs \
+                   providers/codex/test/pane-wake.test.mjs \
+                   providers/codex/test/fixtures/post-submit-capture-e.txt \
+                   providers/codex/test/fixtures/post-submit-capture-plain.txt \
                    providers/codex/skills/kijito-qa-memory/agents/openai.yaml \
                    providers/_shared/wake-core.mjs; do
             grep -qx "package/$f" /tmp/npm-payload.txt || { echo "MISSING from npm payload: $f"; exit 1; }
@@ -105,7 +113,9 @@ jobs:
               "kijito_claude/_assets/providers/claude/skills/kijito-qa-memory/SKILL.md",
               "kijito_claude/_assets/providers/codex/install.mjs",
               "kijito_claude/_assets/providers/codex/controller.mjs",
+              "kijito_claude/_assets/providers/codex/pane-wake.mjs",
               "kijito_claude/_assets/providers/codex/test/codex-hive-watch.test.mjs",
+              "kijito_claude/_assets/providers/codex/test/pane-wake.test.mjs",
               "kijito_claude/_assets/providers/_shared/wake-core.mjs",
           ]
           missing = [n for n in need if n not in names]

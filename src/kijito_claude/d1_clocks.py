@@ -1,0 +1,678 @@
+"""Triple-stamp clock primitives for the D1 wake ledger.
+
+Implements assay's binding Clause-0 schema ruling (hive 3902, Kijito [[24453]],
+which replaced the dual-stamp ruling [[24438]]): every wake-ledger row carries
+CLOCK_REALTIME + CLOCK_MONOTONIC + CLOCK_BOOTTIME, and the true boot wall
+instant is captured from the on-disk boot record at window/soak OPEN.
+
+WHY THREE AND NOT TWO
+---------------------
+The dual-stamp design (wall + monotonic) was refuted by ladybug/argus
+measurement: under a hypervisor pause the guest's wall clock and its monotonic
+clock CO-FREEZE, so the "assert the wall-monotonic delta is constant" check
+cannot see the pause at all. This seat executes a measured ~39.7% of wall time
+under Parallels pauses that no in-guest instrument records. Two co-freezing
+quantities are ONE instrument, not two.
+
+The third clock breaks the tie, because BOOTTIME and MONOTONIC freeze
+differently:
+
+    freeze_cumulative = (wall - boot_wall) - boottime
+
+Differencing freeze_cumulative across two rows attributes frozen time to the
+interval BETWEEN them -- pure ledger arithmetic, no live probe. And:
+
+    boottime - monotonic   nonzero -> guest suspend (guest knew it slept)
+                           ~zero with freeze -> hypervisor pause (guest did not)
+
+Unchanged from the earlier ruling: a monotonic RESET (reboot) voids the
+in-flight window or soak segment; a freeze does NOT void it.
+
+THE PER-OS TRAP -- READ BEFORE EDITING
+--------------------------------------
+The POSIX clock names do NOT mean the same thing on Linux and macOS, and the
+mapping is INVERTED between them. Getting this wrong does not raise; it
+silently swaps "guest suspend" and "hypervisor pause" in every verdict.
+
+    semantic wanted        Linux                  macOS
+    ---------------------  ---------------------  -----------------------
+    excludes sleep/suspend CLOCK_MONOTONIC        CLOCK_UPTIME_RAW
+    includes sleep/suspend CLOCK_BOOTTIME         CLOCK_MONOTONIC
+
+So macOS CLOCK_MONOTONIC is Linux CLOCK_BOOTTIME's semantic, and macOS has no
+CLOCK_BOOTTIME at all. Mac compatibility is a hard constraint (kijito-claude is
+a published public package; per-OS paths are permitted, breaking either OS is
+not), so this module resolves the SEMANTIC it wants per platform rather than
+naming a constant and hoping.
+
+FAIL CLOSED
+-----------
+Every function here returns an explicit "unmeasurable" rather than a plausible
+number. A meter that cannot distinguish "zero" from "cannot measure" is worse
+than no meter -- that defect shipped in myctx.sh and printed a confident
+0.0%/free-100% to the caller deciding whether to recycle.
+"""
+
+import os
+import platform
+import re
+import subprocess
+import time
+
+__all__ = [
+    "ClockError",
+    "Stamps",
+    "read_stamps",
+    "boot_wall_instant",
+    "freeze_cumulative",
+    "suspend_kind",
+    "segment_voided",
+]
+
+
+class ClockError(Exception):
+    """A clock could not be READ. Never raised to mean 'the value is zero'."""
+
+
+_IS_MAC = platform.system() == "Darwin"
+
+
+def _clock_excluding_sleep():
+    """Seconds on a clock that does NOT advance while the machine sleeps."""
+    if _IS_MAC:
+        cid = getattr(time, "CLOCK_UPTIME_RAW", None)
+        if cid is None:
+            raise ClockError(
+                "macOS without CLOCK_UPTIME_RAW: cannot obtain a sleep-excluding "
+                "clock. Refusing to substitute CLOCK_MONOTONIC, which on macOS "
+                "INCLUDES sleep and would invert the suspend verdict."
+            )
+        return time.clock_gettime(cid)
+    cid = getattr(time, "CLOCK_MONOTONIC", None)
+    if cid is None:
+        raise ClockError("Linux without CLOCK_MONOTONIC")
+    return time.clock_gettime(cid)
+
+
+def _clock_including_sleep():
+    """Seconds on a clock that DOES advance while the machine sleeps."""
+    if _IS_MAC:
+        cid = getattr(time, "CLOCK_MONOTONIC", None)
+        if cid is None:
+            raise ClockError("macOS without CLOCK_MONOTONIC")
+        return time.clock_gettime(cid)
+    cid = getattr(time, "CLOCK_BOOTTIME", None)
+    if cid is None:
+        raise ClockError(
+            "Linux without CLOCK_BOOTTIME: cannot obtain a sleep-including "
+            "clock. Refusing to substitute CLOCK_MONOTONIC, which on Linux "
+            "EXCLUDES suspend and would hide guest-suspend entirely."
+        )
+    return time.clock_gettime(cid)
+
+
+class Stamps(object):
+    """One row's three clocks. Immutable by convention.
+
+    `wall` is CLOCK_REALTIME (seconds, float). `mono` excludes sleep.
+    `boot` includes sleep. The semantic -- not the constant name -- is what is
+    guaranteed across platforms; see the module docstring.
+    """
+
+    __slots__ = ("wall", "mono", "boot", "platform")
+
+    def __init__(self, wall, mono, boot, platform_name):
+        self.wall = wall
+        self.mono = mono
+        self.boot = boot
+        self.platform = platform_name
+
+    def as_dict(self):
+        return {
+            "wall": self.wall,
+            "mono": self.mono,
+            "boot": self.boot,
+            "platform": self.platform,
+        }
+
+    def __repr__(self):
+        return "Stamps(wall=%.6f, mono=%.6f, boot=%.6f, platform=%r)" % (
+            self.wall,
+            self.mono,
+            self.boot,
+            self.platform,
+        )
+
+
+def read_stamps():
+    """Sample all three clocks as close together as the runtime allows.
+
+    Read order is deliberate: the two derived clocks are sampled adjacently so
+    that `boot - mono` -- the suspend discriminator -- carries the least
+    sampling skew of the three pairs.
+    """
+    mono = _clock_excluding_sleep()
+    boot = _clock_including_sleep()
+    wall = time.time()
+    return Stamps(wall, mono, boot, platform.system())
+
+
+# --------------------------------------------------------------------------
+# Boot wall instant. Captured at window/soak OPEN, from an ON-DISK record --
+# it must survive a freeze, so it may not be derived from an in-process clock.
+# --------------------------------------------------------------------------
+
+# A witness is TRUSTED only if it is a record WRITTEN AT BOOT and left alone
+# afterwards. A witness is DERIVED if it is recomputed from the current wall
+# clock -- those inherit every clock step and are useless as a boot instant,
+# but they are excellent STEP DETECTORS, so they are read and reported rather
+# than merely banned.
+#
+# MEASURED ON THIS SEAT 2026-08-05 (the reason this section was rewritten):
+#     /proc/stat btime   2026-08-03T20:52:03Z   == now - uptime, EXACTLY
+#     uptime -s          2026-08-03 14:52:03    same derived value
+#     who -b             2026-07-31 14:04       agrees with wtmp
+#     last -F reboot     Fri Jul 31 14:04:30    on-disk wtmp record
+#     journalctl boot 0  Fri 2026-07-31 14:04:30
+# The first two had absorbed a ~3-day clock step. Sourcing the boot instant
+# from btime makes (wall - boot_wall) equal boottime BY CONSTRUCTION, so
+# freeze_cumulative reads ~0 forever, on any host, under any pause. The first
+# version of this module did exactly that -- while its own docstring refused
+# "wall minus boottime" -- because btime ARRIVES UNDER A DIFFERENT NAME. The
+# rename defeated the guard.
+
+
+def _run(cmd):
+    try:
+        out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL)
+        return out.decode("utf-8", "replace")
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
+def _parse_wtmp_reboot(text):
+    # "reboot   system boot  7.0.0-28  Fri Jul 31 14:04:30 2026   still running"
+    m = re.search(r"([A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d+\s+\d{2}:\d{2}:\d{2}\s+\d{4})", text or "")
+    if not m:
+        return None
+    try:
+        return time.mktime(time.strptime(m.group(1), "%a %b %d %H:%M:%S %Y"))
+    except ValueError:
+        return None
+
+
+def _witness_wtmp():
+    return _parse_wtmp_reboot(_run(["last", "-F", "reboot"]))
+
+
+def _witness_journal():
+    text = _run(["journalctl", "--list-boots", "--no-pager"])
+    if not text:
+        return None
+    for line in text.splitlines():
+        # the current boot is index 0
+        if re.match(r"\s*0\s+[0-9a-f]{8,}", line):
+            m = re.search(r"(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})", line)
+            if m:
+                try:
+                    return time.mktime(time.strptime(m.group(1), "%Y-%m-%d %H:%M:%S"))
+                except ValueError:
+                    return None
+    return None
+
+
+def _witness_utmp():
+    # `who -b` reads utmp's BOOT_TIME record, written at boot. Measured to
+    # agree with wtmp and to DISagree with btime on a stepped host, which is
+    # what places it on the trusted side. Minute resolution -- hence the
+    # 120 s agreement tolerance.
+    text = _run(["who", "-b"])
+    m = re.search(r"(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})", text or "")
+    if not m:
+        return None
+    try:
+        return time.mktime(time.strptime(m.group(1) + " " + m.group(2), "%Y-%m-%d %H:%M"))
+    except ValueError:
+        return None
+
+
+def _parse_darwin_reboot(text):
+    """Parse Darwin's `last reboot`, whose line shape differs from Linux's.
+
+        Linux  : reboot   system boot  7.0.0-28  Fri Jul 31 14:04:30 2026
+        Darwin : reboot   time                   Sun Jul 19 15:42
+
+    Three differences, all fatal to the Linux parser: NO YEAR, NO SECONDS, and
+    the literal word `time` where a tty is expected. It returned None, None is
+    indistinguishable from "witness absent", and the module therefore REFUSED
+    on a perfectly healthy Mac (ladybug, measured on real Darwin).
+
+    THE YEAR IS DERIVED FROM THE CURRENT DATE, WITH ROLLOVER -- never from the
+    sibling witness. Borrowing `kern.boottime`'s year would make the two
+    witnesses non-independent in exactly the field most likely to be wrong at a
+    year boundary, and a dual-witness rule whose witnesses share a value is not
+    dual. (ladybug caught this in their own drill, where the answer was right
+    and the method was not.)
+    """
+    m = re.search(
+        r"reboot\s+\S+\s+([A-Z][a-z]{2})\s+([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{1,2}):(\d{2})",
+        text or "",
+    )
+    if not m:
+        return None
+    _dow, mon, day, hh, mm = m.groups()
+    import datetime
+    now = datetime.datetime.now()
+    for year in (now.year, now.year - 1):
+        try:
+            cand = datetime.datetime.strptime(
+                "%s %s %s %s:%s" % (mon, day, year, hh, mm), "%b %d %Y %H:%M"
+            )
+        except ValueError:
+            continue
+        # A boot cannot be in the future; if it parses ahead of now, the line
+        # belongs to the previous year (Dec boot read in Jan).
+        if cand <= now + datetime.timedelta(minutes=5):
+            return time.mktime(cand.timetuple())
+    return None
+
+
+def _witness_mac_utmpx():
+    return _parse_darwin_reboot(_run(["last", "reboot"]))
+
+
+def _witness_mac_sysctl():
+    text = _run(["sysctl", "-n", "kern.boottime"])
+    m = re.search(r"sec\s*=\s*(\d+)", text or "")
+    return float(m.group(1)) if m else None
+
+
+def _derived_btime():
+    try:
+        with open("/proc/stat", "r") as fh:
+            for line in fh:
+                if line.startswith("btime "):
+                    return float(line.split()[1])
+    except (IOError, OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+# (name, callable). macOS note: kern.boottime's INDEPENDENCE FROM CLOCK STEPS
+# IS UNVERIFIED -- no one has yet measured a stepped Mac. It is listed as a
+# trusted witness so the Mac path works, and this comment is the standing
+# marker that the measurement is owed. If it turns out to be step-inheriting,
+# it moves to the derived list and macOS needs a second real witness.
+_TRUSTED_LINUX = (("wtmp", _witness_wtmp), ("journal", _witness_journal), ("utmp", _witness_utmp))
+_TRUSTED_MAC = (("utmpx", _witness_mac_utmpx), ("kern.boottime[UNVERIFIED]", _witness_mac_sysctl))
+
+BOOT_AGREEMENT_TOLERANCE = 120.0
+
+# ⚠️ A PLATFORM PROPERTY, NOT A PREFERENCE -- DO NOT TIGHTEN BELOW THIS.
+# Darwin's `last reboot` truncates to the MINUTE while `kern.boottime` carries
+# seconds, so two perfectly correct witnesses disagree by up to 59 s FROM
+# FORMATTING ALONE (measured: 26.0 s on the Mac, entirely the :26 seconds
+# field). Any Darwin tolerance under 60 s refuses on every healthy Mac,
+# forever. The 120 s default already clears it -- but it cleared it by LUCK
+# until this floor existed, and "tighten it to 30 s for precision" is the
+# obvious next edit. Enforced in code rather than left to review.
+_DARWIN_TOLERANCE_FLOOR_S = 60.0
+
+
+def boot_wall_instant(tolerance=BOOT_AGREEMENT_TOLERANCE):
+    """The wall instant this host booted, from >=2 AGREEING on-disk witnesses.
+
+    Returns (epoch_seconds, info) where info carries every witness read, the
+    derived btime probe, and whether a clock step was detected.
+
+    Requires at least TWO trusted witnesses agreeing within `tolerance`.
+    One witness alone is not accepted: a single record cannot reveal that it
+    is wrong, and this module exists because a single confident source was.
+
+    Raises ClockError rather than returning a best guess. It never falls back
+    to `time.time() - boottime` NOR to any restatement of it (/proc/stat
+    btime, uptime -s): that expression is the quantity the freeze arithmetic
+    checks, so returning it would make the check pass unconditionally.
+    """
+    if _IS_MAC and tolerance < _DARWIN_TOLERANCE_FLOOR_S:
+        tolerance = _DARWIN_TOLERANCE_FLOOR_S
+    witnesses = _TRUSTED_MAC if _IS_MAC else _TRUSTED_LINUX
+    readings = {}
+    for name, fn in witnesses:
+        try:
+            v = fn()
+        except Exception:
+            v = None
+        if v:
+            readings[name] = v
+
+    # NOTE THE TRI-STATE. `discontinuity_detected` starts as None meaning
+    # UNMEASURED, not False. On Darwin there is no /proc/stat, so the probe
+    # never runs -- and a hard False there would be false-BECAUSE-NOT-MEASURED
+    # wearing the clothes of false-BECAUSE-NOTHING-HAPPENED. A consumer must
+    # be forced to handle the third state rather than reading absence as
+    # safety. (ladybug, review of this module, 2026-08-05.)
+    info = {"witnesses": dict(readings), "derived_btime": None,
+            "discontinuity_detected": None, "derived_witness_delta_s": None}
+
+    if not _IS_MAC:
+        bt = _derived_btime()
+        info["derived_btime"] = bt
+
+    if len(readings) < 2:
+        raise ClockError(
+            "need >=2 agreeing on-disk boot witnesses, got %d (%s). Refusing to "
+            "fall back to /proc/stat btime or uptime -s: both are the current "
+            "wall clock minus uptime under another name, which makes the freeze "
+            "arithmetic self-confirming."
+            % (len(readings), ", ".join(sorted(readings)) or "none")
+        )
+
+    values = sorted(readings.values())
+    spread = values[-1] - values[0]
+    if spread > tolerance:
+        raise ClockError(
+            "trusted boot witnesses DISAGREE by %.1f s (> %.1f s tolerance): %s. "
+            "Refusing to pick one -- disagreement among boot records is itself "
+            "a clock event and must be attributed before any freeze arithmetic "
+            "is trusted." % (spread, tolerance, readings)
+        )
+
+    # Median-ish: the middle reading, which for 2 witnesses is the earlier.
+    value = values[len(values) // 2] if len(values) % 2 else values[0]
+
+    if info["derived_btime"]:
+        # ⚠️ WHAT THIS QUANTITY IS, AND WHAT IT IS NOT.
+        #
+        # btime == wall_now - boottime, so |btime - boot_wall| is IDENTICALLY
+        # freeze_cumulative. It is ONE quantity, not two: measured on this
+        # seat, delta 262053.0 s vs freeze 262053.6 s, and the 0.647 s is
+        # btime's 1-second resolution across two reads -- agreement to the
+        # instrument's floor is IDENTITY, not corroboration.
+        #
+        # This field was previously called `clock_step_detected`, which
+        # asserted a discrimination the number cannot make. It reports
+        # accumulated FREEZE; it would read the same on a host that had only
+        # ever been paused and never stepped. Worse, freeze_cumulative never
+        # decreases, so the flag could never return False for the rest of the
+        # boot epoch -- a LATCH, not a detector. It happened to be correct
+        # here, which is the dangerous case.
+        #
+        # And pause-vs-step may not be separable from in-guest clocks at all:
+        # all 26/26 freeze-interval ends on this seat coincide within 2 s with
+        # a kernel CLOCK_WAS_SET, i.e. every pause here is also a step
+        # (ladybug). So the honest move is to name what is measured -- a
+        # DISCONTINUITY between the derived and witnessed boot instants --
+        # rather than to claim a classification. `suspend_kind()` is the
+        # function that classifies, and it does so from different inputs.
+        delta = abs(info["derived_btime"] - value)
+        info["derived_witness_delta_s"] = delta
+        info["discontinuity_detected"] = bool(delta > tolerance)
+
+    return value, info
+
+
+# --------------------------------------------------------------------------
+# Derived quantities
+# --------------------------------------------------------------------------
+
+def freeze_cumulative(stamps, boot_wall):
+    """Total wall time this host has not been executing, since boot.
+
+    (wall - boot_wall) is elapsed wall since boot; `boot` is elapsed EXECUTING
+    time since boot including guest sleep. The difference is time the host was
+    frozen out from under itself -- i.e. hypervisor pauses.
+
+    Difference this across two rows to attribute freeze to the interval BETWEEN
+    them. The absolute value is not meaningful on its own: it accumulates every
+    pause since boot and includes any clock-step error.
+    """
+    return (stamps.wall - boot_wall) - stamps.boot
+
+
+def boot_wall_resolution_s():
+    """The resolution of `boot_wall_instant()`'s answer on this platform.
+
+    Derived quantities may not claim precision the boot instant does not have.
+    On Darwin the coarsest trusted witness (`last reboot`) truncates to the
+    MINUTE, so the boot instant is only good to ~60 s; on Linux wtmp and the
+    journal both carry seconds.
+
+    THIS IS NOT PEDANTRY -- it was a live false positive. Measured on the Mac:
+    `freeze_cumulative` read 26.5 s using the utmpx witness and 0.5 s using
+    kern.boottime, and the 26 s is ENTIRELY the truncated seconds field. That
+    phantom freeze flipped `suspend_kind` from GUEST_SUSPEND to BOTH -- i.e.
+    the module reported a hypervisor pause on a laptop that had merely slept.
+    """
+    return _DARWIN_TOLERANCE_FLOOR_S if _IS_MAC else 2.0
+
+
+def suspend_kind(stamps, boot_wall, freeze_tolerance=None):
+    """Classify what has happened to this host's time, from one row's stamps.
+
+    Returns one of:
+      "RUNNING"          nothing detected beyond sampling noise
+      "GUEST_SUSPEND"    the guest slept and knows it (boot - mono grew)
+      "HYPERVISOR_PAUSE" the guest was frozen and cannot see it
+      "BOTH"             both signatures present
+
+    `freeze_tolerance` is in seconds and exists because the three clocks are
+    sampled microseconds apart and the boot record has 1-second granularity.
+    It is a NOISE floor, not a policy threshold -- do not widen it to silence a
+    real signal; a widened bound is how D5(ii)'s ceiling came to sit above the
+    pathology it existed to catch.
+    """
+    if freeze_tolerance is None:
+        freeze_tolerance = boot_wall_resolution_s()
+    slept = stamps.boot - stamps.mono
+    frozen = freeze_cumulative(stamps, boot_wall)
+    has_sleep = slept > freeze_tolerance
+    has_freeze = frozen > freeze_tolerance
+    if has_sleep and has_freeze:
+        return "BOTH"
+    if has_sleep:
+        return "GUEST_SUSPEND"
+    if has_freeze:
+        return "HYPERVISOR_PAUSE"
+    return "RUNNING"
+
+
+def freeze_intervals_from_journal(min_paired_entries=100, threshold_s=60.0):
+    """Recover PER-INTERVAL host freeze from the systemd journal, historically.
+
+    Every journal entry carries BOTH `__REALTIME_TIMESTAMP` and
+    `__MONOTONIC_TIMESTAMP`. For consecutive entries, `dt_real - dt_mono` is
+    the time the host did not execute between them. So the freeze ledger was
+    already on disk and needed no new instrumentation (argus, 2026-08-05).
+
+    Returns a list of (start_epoch, end_epoch, seconds), each >= threshold_s.
+
+    WHY PER-INTERVAL AND NOT A SINCE-BOOT TOTAL -- this replaces the
+    aggregate that produced two separate defects:
+      * A row that POSTDATES the freeze inherited the whole since-boot
+        penalty, so its host-hours were understated without bound and it
+        could never age out. (Safe direction, but detection never fires.)
+      * A row PREDATING the current boot had prior boots' freezes uncounted,
+        so the "lower bound" overstated and could declare a loss EARLY --
+        the unsafe direction, on exactly the old-dormant-file class the
+        threshold exists to protect (assay, L2-F1).
+    Both dissolve once freeze is attributed to the row's OWN window.
+
+    LIMITS, inherited from the method: the journal bounds a freeze between
+    ADJACENT entries, so each interval is an upper bound on the start and a
+    lower bound on the end -- it localises, it does not timestamp to the
+    second, and on an idle box adjacent entries can be minutes apart. Covers
+    the CURRENT BOOT ONLY; there is no monotonic continuity across a reboot.
+
+    FAILS CLOSED: raises rather than returning [] when too few entries were
+    read. An empty list is indistinguishable from "no freezes" and this
+    module's whole history is confident zeroes -- three of them in one day,
+    from three different mechanisms.
+    """
+    if _IS_MAC:
+        raise ClockError(
+            "no systemd journal on macOS; per-interval freeze recovery needs a "
+            "Mac-specific witness that has not been established yet"
+        )
+    text = _run(["journalctl", "-b", "-o", "export", "--no-pager"])
+    if text is None:
+        raise ClockError("journalctl unreadable")
+
+    pairs = []
+    real = mono = None
+    for line in text.splitlines():
+        if line.startswith("__REALTIME_TIMESTAMP="):
+            try:
+                real = int(line.split("=", 1)[1])
+            except ValueError:
+                real = None
+        elif line.startswith("__MONOTONIC_TIMESTAMP="):
+            try:
+                mono = int(line.split("=", 1)[1])
+            except ValueError:
+                mono = None
+            if real is not None and mono is not None:
+                pairs.append((real, mono))
+                real = mono = None
+
+    if len(pairs) < min_paired_entries:
+        raise ClockError(
+            "only %d paired journal entries (< %d): refusing to report freeze "
+            "intervals. An empty result here is indistinguishable from 'no "
+            "freezes', which is the exact false absence this guard exists for."
+            % (len(pairs), min_paired_entries)
+        )
+
+    pairs.sort()
+    intervals = []
+    for (r0, m0), (r1, m1) in zip(pairs, pairs[1:]):
+        gap = ((r1 - r0) - (m1 - m0)) / 1e6
+        if gap >= threshold_s:
+            intervals.append((r0 / 1e6, r1 / 1e6, gap))
+    return intervals
+
+
+def freeze_in_window(intervals, t0, t1):
+    """Seconds of host freeze overlapping [t0, t1], from per-interval data.
+
+    Overlap is apportioned by the fraction of each interval's WALL span that
+    falls inside the window. Because the journal localises rather than
+    timestamps a freeze, an interval straddling a window edge is approximate;
+    that approximation is bounded by the interval's own wall span, which is
+    reported by the caller when it matters.
+    """
+    total = 0.0
+    for start, end, seconds in intervals:
+        lo, hi = max(start, t0), min(end, t1)
+        if hi <= lo:
+            continue
+        span = end - start
+        total += seconds if span <= 0 else seconds * ((hi - lo) / span)
+    return total
+
+
+def journal_coverage():
+    """(oldest, newest) epoch seconds the journal can actually speak to.
+
+    A freeze provider must be able to say what is ANSWERABLE before it is
+    asked for an answer, because the alternative is answering anyway.
+    """
+    text = _run(["journalctl", "-b", "-o", "export", "--no-pager"])
+    if text is None:
+        raise ClockError("journalctl unreadable")
+    stamps = []
+    for line in text.splitlines():
+        if line.startswith("__REALTIME_TIMESTAMP="):
+            try:
+                stamps.append(int(line.split("=", 1)[1]) / 1e6)
+            except ValueError:
+                pass
+    if len(stamps) < 2:
+        raise ClockError("journal has %d timestamps: cannot state coverage" % len(stamps))
+    return min(stamps), max(stamps)
+
+
+def freeze_window_provider(intervals=None, coverage=None):
+    """Return a per-host `freeze_lookup(t0, t1) -> seconds` callable.
+
+    🔴 IT REFUSES RATHER THAN ANSWERING OUTSIDE ITS COVERAGE, and that is the
+    load-bearing part, not a nicety (ladybug's rule, adopted from their Darwin
+    provider and applied here to the Linux one, which had the same hole).
+
+    `freeze_in_window` sums overlapping intervals, so a window reaching BEFORE
+    the data's start returns 0 -- a confident, plausible, specific zero from an
+    instrument that cannot see that span. ⇒ **A provider that silently reports
+    "no freeze" for a window it cannot observe reports a QUIET MACHINE when the
+    truth is a BLIND INSTRUMENT, and nothing downstream can distinguish them.**
+    Same shape as `clock_step_detected` reading False on Darwin because the
+    probe never ran: absence read as safety.
+
+    Linux coverage is the CURRENT BOOT (journalctl -b). Darwin's provider is
+    bounded differently and more tightly -- `pmset -g log` retains only ~7 days
+    (measured 167.98 h against a boot ~408 h earlier) -- so on that host most
+    historical windows are genuinely unanswerable and must say so.
+    """
+    if intervals is None:
+        intervals = freeze_intervals_from_journal()
+    if coverage is None:
+        try:
+            coverage = journal_coverage()
+        except ClockError:
+            coverage = None
+
+    def lookup(t0, t1):
+        if coverage is not None and t0 < coverage[0] - 1.0:
+            raise ClockError(
+                "window starts %.1f h before this provider's coverage begins "
+                "(%.1f h of history available). Refusing to return 0: a zero "
+                "here is indistinguishable from 'no freeze occurred', and the "
+                "caller cannot tell a quiet machine from a blind instrument."
+                % ((coverage[0] - t0) / 3600.0, (coverage[1] - coverage[0]) / 3600.0)
+            )
+        return freeze_in_window(intervals, t0, t1)
+
+    lookup.coverage = coverage
+    return lookup
+
+
+def _freeze_window_provider_legacy(intervals=None):
+    """Return a per-host `freeze_lookup(t0, t1) -> seconds` callable.
+
+    THE INTERFACE IS THE POINT, NOT THE JOURNAL. Consumers take a lookup
+    callable and must not assume how it was derived -- the derivation is
+    per-host and the shapes genuinely differ:
+
+      Linux : the guest CANNOT FEEL a hypervisor pause, so freeze must be
+              INFERRED by differencing realtime against monotonic across
+              adjacent journal entries.
+      macOS : sleep is guest-VISIBLE, so the OS records its own sleep
+              intervals directly (`pmset -g log`). That provider is expected
+              to be STRONGER than this one -- observed rather than inferred,
+              with real interval boundaries instead of adjacent-entry
+              localisation. It is ladybug's Darwin lane; this module must not
+              pre-empt its shape.
+
+    So: no caller of this may reach for `freeze_intervals_from_journal`
+    directly. Pass `intervals` to inject any provider's output, including in
+    tests.
+    """
+    if intervals is None:
+        intervals = freeze_intervals_from_journal()
+    return lambda t0, t1: freeze_in_window(intervals, t0, t1)
+
+
+def segment_voided(open_stamps, now_stamps):
+    """Does a monotonic RESET void the in-flight window/soak segment?
+
+    True iff the sleep-excluding clock went BACKWARDS, which on a live host can
+    only mean the host rebooted under the segment. A freeze does not void a
+    segment; only a reset does.
+
+    Returns (voided: bool, reason: str).
+    """
+    if now_stamps.mono < open_stamps.mono:
+        return True, (
+            "monotonic reset: %.3f -> %.3f (host rebooted under the segment)"
+            % (open_stamps.mono, now_stamps.mono)
+        )
+    return False, ""
