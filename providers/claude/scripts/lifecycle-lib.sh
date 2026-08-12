@@ -23,7 +23,30 @@ lc_stopped() { [ -f "$KIJITO_LC_STOP" ]; }              # M1 — kill switch: `t
 # see self-clear.sh "C2". Do not cite it as protection.)
 lc_is_child() { [ -n "${CLAUDE_AGENT_TYPE:-}" ] || [ -n "${CLAUDE_CODE_AGENT:-}" ]; }
 
-lc_pane_alive() { command -v tmux >/dev/null 2>&1 && tmux display-message -p -t "$1" '#{session_name}' >/dev/null 2>&1; }
+# ⛔ THIS GATE RETURNED TRUE FOR EVERY INPUT, INCLUDING GARBAGE — IT HAD NEVER ONCE REFUSED.
+# Found by argus 2026-08-01, measured on Linux tmux 3.4 AND macOS tmux 3.6a. The old body asked
+# `tmux display-message -p -t "$1" '#{session_name}'` and read its EXIT CODE — but display-message
+# EXITS 0 FOR A NONEXISTENT PANE, it simply prints empty fields:
+#     $ tmux display-message -p -t %999 'sess=#{session_name}'   ->  "sess="   rc=0
+# so `lc_pane_alive %999`, and even `lc_pane_alive nonsense`, were both TRUE.
+#
+# ★ WHY IT SURVIVED SO LONG: it was only ever exercised against a LIVE pane — the one input
+# incapable of exposing it. A control verified solely in the direction it was designed to move is
+# not verified at all. (Reproduced before fixing: %999 and "nonsense" TRUE on the old body, both
+# FALSE on this one, real pane still TRUE.)
+#
+# ⚠️ BOUNDED HONESTLY, per argus: `send-keys` itself refuses on a dead pane, and enumerating every
+# pane on the host confirmed a dead-pane /clear lands in NO pane — so this could not misfire into a
+# sibling's session on a shared seat. The gate was decorative, not dangerous.
+#
+# ENUMERATE, DON'T ASK. `list-panes -a` is the authoritative set; `grep -Fqx` matches a whole line
+# literally, so `%1` cannot match `%11` and a metacharacter in the argument cannot act as a pattern.
+# Portable across BSD and GNU userland.
+lc_pane_alive() {
+  command -v tmux >/dev/null 2>&1 || return 1
+  [ -n "${1:-}" ] || return 1
+  tmux list-panes -a -F '#{pane_id}' 2>/dev/null | grep -Fqx -- "$1"
+}
 
 # M4 (FIXED) — a running claude pane reports pane_current_command as its VERSION (e.g. "2.1.190"),
 # NOT "claude"/"node" (verified 2026-06-24). So check "not a bare shell" instead of whitelisting claude.
@@ -33,9 +56,74 @@ lc_pane_usable() {
   case "$c" in ""|zsh|bash|sh|-zsh|-bash|-sh|fish|tcsh|dash) return 1 ;; *) return 0 ;; esac
 }
 
-# Per-spawn arming (ROBUST — no env-propagation dependency): claude-armed.sh drops a marker keyed to
-# the pane; the hook (which reliably has TMUX_PANE) reads it. Also honors KIJITO_AUTOCATCHUP=1.
-lc_is_armed() { [ -f "$KIJITO_LC_DIR/arm.${1:-${TMUX_PANE:-x}}" ] || [ "${KIJITO_AUTOCATCHUP:-0}" = "1" ]; }
+# Arming has TWO INDEPENDENT INPUTS, and they are ORed. Keep them as separate named predicates:
+# anything that REPORTS on arming, or claims to change it, must be able to say WHICH one is in force.
+#   (1) per-pane marker — claude-armed.sh / arm-session.sh drop a file keyed to the pane; the hook
+#       (which reliably has TMUX_PANE) reads it. Session-scoped, removable by the agent.
+#   (2) KIJITO_AUTOCATCHUP=1 — a SEAT-WIDE env var, typically set in ~/.claude/settings.json, which
+#       reaches every session on the host. A running process CANNOT unset it for itself, so it is not
+#       revocable from inside a session at all.
+# ⛔ WHY THE SPLIT EXISTS: while (2) is in force, deleting the marker changes NOTHING. `arm-session.sh
+# off` did exactly that and printed "AUTONOMY OFF" — a control that reported success without acting,
+# which is worse than one that errors (measured by ladybug on the Ubuntu VM 2026-08-01: with
+# KIJITO_AUTOCATCHUP=1 live, `lc_is_armed %99999` — a pane that does not exist — returns ARMED).
+# The only brake that works against (2) is the kill switch: touch "$KIJITO_LC_DIR/STOP".
+# ⛔ A ZERO-BYTE MARKER FILE IS NOT EVIDENCE THAT *YOU* ARMED *THIS* SESSION — AND tmux PANE IDS
+# RESTART AT %0 WHEN THE SERVER RESTARTS, AND RECYCLE. ladybug found 13 stale `arm.*` markers on the
+# Mac (2026-08-01) with `arm.%2` matching a LIVE, UNRELATED pane. Markers are never garbage-collected
+# and carry no provenance, so a fresh session landing on a low-numbered pane silently INHERITS an
+# arming performed weeks ago by a different agent — and arming gates an IRREVERSIBLE `/clear`.
+# ★ THE FIX IS NOT A BETTER KEY, IT IS EVIDENCE IN THE CONTENT. Any key recycles eventually (pane
+# ids recycle; session NAMES recycle too — kill and recreate reuses the name). So the marker records
+# the SESSION FINGERPRINT it was written against, and `lc_marker_armed` re-derives that fingerprint
+# from the live tmux server on EVERY read. `#{session_created}` is immutable per session INSTANCE, so
+# a server restart or a recreated session yields a different value and the stale marker stops
+# validating — no GC required, and the check cannot be fooled by a coincidence of names.
+# ⛔ FAIL CLOSED, DELIBERATELY: no file, an EMPTY (legacy, pre-provenance) file, an unreadable
+# fingerprint, a dead pane, or any mismatch ⇒ NOT ARMED. Not-armed is the safe state — an agent that
+# wants autonomy re-arms in one second, whereas a falsely-inherited arming gates a one-way wipe.
+# ⚠️ UPGRADE NOTE: legacy zero-byte markers therefore stop counting. That is intended, it is the safe
+# direction, and `arm-session.sh status` says so explicitly rather than reporting a bare "not armed".
+# ⚠️ NOT part of the fingerprint: $CLAUDE_CODE_SESSION_ID. It ROTATES on every /clear, so validating
+# against it would disarm the pane at exactly the moment the self-clear loop needs it. It is recorded
+# for the audit trail only.
+_lc_sess_fp() {                                          # "<session_name> <session_created>"
+  command -v tmux >/dev/null 2>&1 || return 1
+  tmux display-message -p -t "$1" '#{session_name} #{session_created}' 2>/dev/null
+}
+
+lc_marker_write() {                                      # $1 = pane id (default $TMUX_PANE)
+  local pane="${1:-${TMUX_PANE:-}}" fp
+  [ -n "$pane" ] || return 1
+  lc_pane_alive "$pane" || return 1                      # enumerates; display-message alone exits 0 on a dead pane
+  fp=$(_lc_sess_fp "$pane") || return 1
+  case "$fp" in ''|' ') return 1 ;; esac
+  { echo "v=1"; echo "pane=$pane"
+    echo "session=${fp% *}"; echo "session_created=${fp##* }"
+    echo "claude_session=${CLAUDE_CODE_SESSION_ID:-}"; echo "armed_at=$(lc_now)"
+  } > "$KIJITO_LC_DIR/arm.$pane" 2>/dev/null
+}
+
+lc_marker_armed() {
+  local pane="${1:-${TMUX_PANE:-x}}" f fp want_s want_c
+  f="$KIJITO_LC_DIR/arm.$pane"
+  [ -s "$f" ] || return 1                                # missing OR legacy zero-byte → fail closed
+  want_s=$(awk -F= '$1=="session"{sub(/^[^=]*=/,"");print}' "$f" 2>/dev/null)
+  want_c=$(awk -F= '$1=="session_created"{print $2}' "$f" 2>/dev/null)
+  [ -n "$want_c" ] || return 1
+  lc_pane_alive "$pane" || return 1
+  fp=$(_lc_sess_fp "$pane") || return 1
+  [ -n "$fp" ] || return 1
+  [ "$want_c" = "${fp##* }" ] && [ "$want_s" = "${fp% *}" ]
+}
+
+lc_marker_legacy() {                                     # exists but carries no provenance
+  local f="$KIJITO_LC_DIR/arm.${1:-${TMUX_PANE:-x}}"
+  [ -f "$f" ] && [ ! -s "$f" ]
+}
+
+lc_env_armed()    { [ "${KIJITO_AUTOCATCHUP:-0}" = "1" ]; }
+lc_is_armed()     { lc_marker_armed "${1:-}" || lc_env_armed; }
 
 # qa-token is SESSION-keyed (correct: each post-/clear session must earn its OWN fresh QA pass).
 lc_qa_token()   { echo "$KIJITO_LC_DIR/qa-pass.${CLAUDE_CODE_SESSION_ID:-nosession}"; }

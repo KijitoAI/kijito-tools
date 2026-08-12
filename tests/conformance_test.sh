@@ -45,6 +45,7 @@ kijito-start|running-is-not-armed|RUNNING IS NOT ARMED|running process alone is 
 kijito-start|arm-at-most-one-consumer|at most one|never start a second consumer|do not start another|duplicate consumers
 kijito-start|fail-closed-on-ambiguous-pointer|fail closed|one unambiguous top
 kijito-start|retired-predecessor-is-not-an-instruction|version_history|version_of
+kijito-start|consume-handled-not-seen|consume what you handled|never .consume what you saw
 kijito-qa-memory|remediate-by-class-not-instance|by CLASS|CLASS of gap|sweep every sibling
 kijito-qa-memory|severity-gate|severity gate
 kijito-qa-memory|hard-round-cap|hard cap|three rounds|3 rounds

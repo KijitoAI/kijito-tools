@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  M223 — LaunchAgent TEMPLATE for the pane-wake liveness DETECTOR.
+
+  ⛔ READ THIS BEFORE INSTALLING IT, BECAUSE IT SITS BESIDE A RATIFIED PROHIBITION.
+  release-manifest.json lists "LaunchAgent" and "KeepAlive" under forbiddenMechanisms, and the
+  parity plan says the release "contains no KeepAlive LaunchAgent". That prohibition is about the
+  WAKE PATH: nothing may start, resume, or type into a Codex session at login or on its own
+  initiative — the hook incident is why. THIS agent supervises a process that cannot do any of
+  those things. The watchdog reads one file and sends one message; it has no tmux, no pane, no
+  keystrokes, no restart. Its KeepAlive resurrects the DETECTOR, never the driver.
+
+  That distinction is a narrowing of a ratified boundary, so it is written down in the parity plan
+  amendment rather than assumed, and this file ships as a TEMPLATE:
+    * nothing installs it, nothing loads it, and `doctor` still asserts launchAgentInstalled: false
+      for the product's own agent;
+    * the operator substitutes the placeholders and loads it deliberately, or does not.
+  If that narrowing is not wanted, delete this file: the watchdog runs perfectly well under any
+  other supervisor, or in a tmux pane, and nothing else in the release depends on it.
+
+  Substitute, then `launchctl bootstrap gui/$(id -u) <path>`:
+    @NODE_BIN@       absolute path to node          (e.g. /opt/homebrew/bin/node)
+    @WATCHDOG@       .../codex-kijito-hive/codex/pane-wake-watchdog.mjs
+    @HEARTBEAT@      .../codex-kijito-hive/runtime-pane/heartbeat.json
+    @TOKEN_FILE@     absolute path to the private Kijito token file (mode 0600, owner-only)
+    @LOG@            .../codex-kijito-hive/runtime-pane/watchdog.ndjson
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.kijito.pane-wake-watchdog</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>@NODE_BIN@</string>
+    <string>@WATCHDOG@</string>
+    <string>--heartbeat</string>
+    <string>@HEARTBEAT@</string>
+    <string>--token-file</string>
+    <string>@TOKEN_FILE@</string>
+  </array>
+
+  <!-- The detector should come back if it dies; that is the whole point of watching. It cannot
+       restart the wake driver, so this KeepAlive resurrects an observer and nothing else. -->
+  <key>KeepAlive</key>
+  <true/>
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- The check interval is the watchdog's own default (15s); it does not need a throttle beyond
+       launchd's minimum, and a crash loop is visible in the log below rather than silent. -->
+  <key>ThrottleInterval</key>
+  <integer>15</integer>
+
+  <key>StandardOutPath</key>
+  <string>@LOG@</string>
+  <key>StandardErrorPath</key>
+  <string>@LOG@</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>
