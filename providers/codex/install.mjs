@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash, randomBytes } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -16,11 +17,25 @@ function sha256(file) {
   return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 }
 
+function verifiedModuleDataUrl(file, expectedSha256) {
+  if (!Number.isInteger(fs.constants.O_NOFOLLOW)) throw new Error("O_NOFOLLOW is required for executable module verification");
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.nlink !== 1) throw new Error("verified module must be one regular file");
+    const bytes = fs.readFileSync(fd);
+    const actual = createHash("sha256").update(bytes).digest("hex");
+    if (actual !== expectedSha256) throw new Error("verified module hash mismatch");
+    return `data:text/javascript;base64,${bytes.toString("base64")}`;
+  } finally { fs.closeSync(fd); }
+}
+
 function parseArgs(argv) {
   const values = {};
+  const legacyRoots = [];
   // Boolean flags first: the loop below consumes strict `--key value` pairs and would reject a bare
   // flag as an invalid argument.
-  const flags = new Set(["skills-only"]);
+  const flags = new Set(["skills-only", "acknowledge-legacy-notifier"]);
   const bare = new Set();
   argv = argv.filter((token) => {
     const isFlag = token.startsWith("--") && flags.has(token.slice(2));
@@ -30,7 +45,8 @@ function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 2) {
     const key = argv[index];
     if (!key?.startsWith("--") || argv[index + 1] === undefined) throw new Error(`invalid argument ${key ?? ""}`);
-    values[key.slice(2)] = argv[index + 1];
+    if (key === "--legacy-root") legacyRoots.push(argv[index + 1]);
+    else values[key.slice(2)] = argv[index + 1];
   }
   const home = os.homedir();
   const expand = (value) => path.resolve(value.replace(/^~(?=\/|$)/, home));
@@ -45,7 +61,10 @@ function parseArgs(argv) {
     codexBin: expand(values["codex-bin"] ?? path.join(home, ".local", "bin", "codex")),
     nodeBin: expand(values["node-bin"] ?? process.execPath),
     skillsRoot: expand(values["skills-root"] ?? path.join(home, ".codex", "skills")),
+    originGitSha: values["origin-git-sha"] ?? process.env.KIJITO_BUILD_GIT_SHA ?? "",
+    legacyInstallRoots: legacyRoots.map(expand),
     skillsOnly: bare.has("skills-only"),
+    acknowledgeLegacyNotifier: bare.has("acknowledge-legacy-notifier"),
   };
 }
 
@@ -87,12 +106,101 @@ function installSkills({ sourceRoot, skillsRoot }) {
 
 function requireAbsoluteDistinct(options) {
   for (const [key, value] of Object.entries(options)) {
-    if (typeof value === "string" && !path.isAbsolute(value)) throw new Error(`${key} must be absolute`);
+    if (key !== "originGitSha" && typeof value === "string" && !path.isAbsolute(value)) {
+      throw new Error(`${key} must be absolute`);
+    }
   }
   if (options.installRoot === path.parse(options.installRoot).root) throw new Error("install root cannot be a filesystem root");
+  if (!Array.isArray(options.legacyInstallRoots) || options.legacyInstallRoots.length === 0) {
+    throw new Error("at least one explicit --legacy-root is required for the recovery census");
+  }
   if (options.launcher === options.installRoot || options.launcher.startsWith(`${options.installRoot}${path.sep}`)) {
     throw new Error("launcher must be outside the install root");
   }
+  for (const [label, value] of [
+    ["install root", options.installRoot],
+    ["events file", options.eventsFile],
+    ["token file", options.tokenFile],
+    ["Codex binary", options.codexBin],
+    ["Node binary", options.nodeBin],
+    ...options.legacyInstallRoots.map((value) => ["legacy install root", value]),
+  ]) {
+    if (/[\s'"\\]/.test(value)) {
+      throw new Error(`${label} contains whitespace, quote, or backslash and cannot be represented safely in the macOS process census`);
+    }
+  }
+}
+
+function requireLegacyControllerScopes(roots) {
+  for (const root of roots) {
+    const candidates = [path.join(root, "controller.mjs"), path.join(root, "codex", "controller.mjs")];
+    const present = candidates.some((file) => {
+      try {
+        const stat = fs.lstatSync(file);
+        return stat.isFile() && !stat.isSymbolicLink();
+      } catch (error) { if (error.code === "ENOENT") return false; throw error; }
+    });
+    if (!present) throw new Error(`legacy census scope contains no controller: ${root}`);
+  }
+}
+
+function canonicalPath(value) {
+  try { return fs.realpathSync(value); }
+  catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    const missing = [];
+    let cursor = value;
+    while (true) {
+      try { return path.join(fs.realpathSync(cursor), ...missing.reverse()); }
+      catch (inner) {
+        if (inner.code !== "ENOENT") throw inner;
+        const parent = path.dirname(cursor);
+        if (parent === cursor) throw inner;
+        missing.push(path.basename(cursor));
+        cursor = parent;
+      }
+    }
+  }
+}
+
+function canonicalizeOptions(options) {
+  options.sourceRoot = fs.realpathSync(options.sourceRoot);
+  options.installRoot = canonicalPath(options.installRoot);
+  options.launcher = canonicalPath(options.launcher);
+  options.authSource = fs.realpathSync(options.authSource);
+  options.ordinaryConfig = canonicalPath(options.ordinaryConfig);
+  options.tokenFile = fs.realpathSync(options.tokenFile);
+  options.eventsFile = fs.realpathSync(options.eventsFile);
+  options.codexBin = fs.realpathSync(options.codexBin);
+  options.nodeBin = fs.realpathSync(options.nodeBin);
+  options.skillsRoot = canonicalPath(options.skillsRoot);
+  options.legacyInstallRoots = options.legacyInstallRoots.map((root) => fs.realpathSync(root));
+  return options;
+}
+
+function git(args, { encoding = "utf8" } = {}) {
+  const result = spawnSync("/usr/bin/git", args, { encoding, maxBuffer: 16 * 1024 * 1024 });
+  if (result.status !== 0 || result.error) {
+    throw new Error(`source commit verification failed: ${result.error?.message ?? String(result.stderr).trim()}`);
+  }
+  return result.stdout;
+}
+
+function verifySourceCommit(sourceRoot, expectedSha, files) {
+  const repositoryRoot = String(git(["-C", sourceRoot, "rev-parse", "--show-toplevel"])).trim();
+  const head = String(git(["-C", repositoryRoot, "rev-parse", "HEAD"])).trim();
+  if (head !== expectedSha) throw new Error("--origin-git-sha does not equal the source tree HEAD");
+  for (const file of files) {
+    const relative = path.relative(repositoryRoot, file);
+    if (!relative || path.isAbsolute(relative) || relative === ".." || relative.startsWith(`..${path.sep}`)) {
+      throw new Error(`source artifact escapes the verified repository: ${file}`);
+    }
+    const committed = git(["-C", repositoryRoot, "show", `${expectedSha}:${relative.split(path.sep).join("/")}`],
+      { encoding: null });
+    const disk = fs.readFileSync(file);
+    if (!disk.equals(committed)) throw new Error(`source artifact differs from reviewed commit: ${relative}`);
+  }
+  return { repositoryRoot, gitSha: head };
 }
 
 function requirePrivateRegular(file, label) {
@@ -183,12 +291,18 @@ function copyPrivate(source, target, mode = 0o600) {
   fs.chmodSync(target, mode);
 }
 
-function install(options) {
+async function install(options) {
+  canonicalizeOptions(options);
   requireAbsoluteDistinct(options);
+  requireLegacyControllerScopes(options.legacyInstallRoots);
   const sourceManifestFile = path.join(options.sourceRoot, "release-manifest.json");
   const controllerSource = path.join(options.sourceRoot, "controller.mjs");
   const cliSource = path.join(options.sourceRoot, "cli.mjs");
+  const authBindingSource = path.join(options.sourceRoot, "auth-binding.mjs");
   const controllerTests = path.join(options.sourceRoot, "test", "codex-hive-watch.test.mjs");
+  const wakeRecoveryTests = path.join(options.sourceRoot, "test", "wake-recovery-v2.test.mjs");
+  const releasePackagingTests = path.join(options.sourceRoot, "test", "release-packaging.test.mjs");
+  const recoveryRunbook = path.join(options.sourceRoot, "WAKE-RECOVERY-RUNBOOK.md");
   const wakeCoreSource = path.join(options.sourceRoot, "..", "_shared", "wake-core.mjs");
   // The same-session pane wake driver. It is INSTALLED and hash-gated exactly like the controller,
   // for the same reason the wake core is: it is executable code inside a gated install, and it is
@@ -204,13 +318,35 @@ function install(options) {
   const postSubmitCapturePlain = path.join(options.sourceRoot, "test", "fixtures", "post-submit-capture-plain.txt");
   const release = JSON.parse(fs.readFileSync(sourceManifestFile, "utf8"));
   if (release.schema !== 1 || release.product !== "codex-kijito-hive") throw new Error("invalid source release manifest");
+  if (release.origin?.package !== "kijito-claude"
+    || release.origin?.packageVersion !== "0.1.4"
+    || release.origin?.repository !== "https://github.com/KijitoAI/kijito-claude") {
+    throw new Error("invalid canonical package designation");
+  }
+  if (!/^[0-9a-f]{40}$/.test(options.originGitSha)) {
+    throw new Error("--origin-git-sha (or KIJITO_BUILD_GIT_SHA) must be the exact 40-hex source commit");
+  }
+  verifySourceCommit(options.sourceRoot, options.originGitSha, [
+    sourceManifestFile, controllerSource, cliSource, authBindingSource, controllerTests,
+    wakeRecoveryTests, releasePackagingTests, recoveryRunbook, wakeCoreSource,
+  ]);
   if (sha256(controllerSource) !== release.artifacts.controllerSha256) throw new Error("controller differs from gated hash");
+  if (sha256(cliSource) !== release.artifacts.cliSha256) throw new Error("cli differs from gated hash");
   if (sha256(controllerTests) !== release.artifacts.controllerTestsSha256) throw new Error("controller tests differ from gated hash");
+  if (sha256(wakeRecoveryTests) !== release.artifacts.wakeRecoveryTestsSha256) throw new Error("wake recovery tests differ from gated hash");
+  if (sha256(releasePackagingTests) !== release.artifacts.releasePackagingTestsSha256) throw new Error("release packaging tests differ from gated hash");
+  if (sha256(recoveryRunbook) !== release.artifacts.recoveryRunbookSha256) throw new Error("wake recovery runbook differs from gated hash");
+  if (sha256(authBindingSource) !== release.artifacts.authBindingSha256) throw new Error("auth binding differs from gated hash");
   // The wake core is executable code inside a hash-gated install, so it is gated exactly like the
   // controller it was extracted from. Splitting a gated file into gated + ungated halves would have
   // left parseEventLine and fixedWakeText -- the event validator and the injection fence -- editable
   // with `doctor` still reporting GREEN.
   if (sha256(wakeCoreSource) !== release.artifacts.wakeCoreSha256) throw new Error("wake core differs from gated hash");
+  // Load the exact parser whose bytes just passed the release gate. A static import from \`here\`
+  // would execute before this check and could differ from an overridden --source-root, producing
+  // an install whose baseline and shipped parser disagree.
+  const { requireAuthBinding } = await import(
+    verifiedModuleDataUrl(authBindingSource, release.artifacts.authBindingSha256));
   if (sha256(paneWakeSource) !== release.artifacts.paneWakeSha256) throw new Error("pane wake driver differs from gated hash");
   // The pane-wake fixtures pin a third-party TUI contract — they ARE the safety argument for the
   // idle/busy classifier — so they are gated like the controller tests rather than left editable.
@@ -237,13 +373,12 @@ function install(options) {
   // still carried forward into the installed manifest below for provenance.
   requirePrivateRegular(options.authSource, "auth source");
   requirePrivateRegular(options.tokenFile, "token file");
-  options.codexBin = fs.realpathSync(options.codexBin);
-  options.nodeBin = fs.realpathSync(options.nodeBin);
   requireExecutable(options.codexBin, "Codex binary");
   requireExecutable(options.nodeBin, "Node binary");
+  const ordinaryAuthBytesBefore = fs.readFileSync(options.authSource);
   const ordinaryBefore = {
     configSha256: optionalHash(options.ordinaryConfig),
-    authSha256: sha256(options.authSource),
+    authBinding: requireAuthBinding(options.authSource),
   };
   for (const target of [options.installRoot, options.launcher]) {
     try { fs.lstatSync(target); throw new Error(`refusing to overwrite existing target: ${target}`); }
@@ -251,8 +386,6 @@ function install(options) {
   }
   fs.mkdirSync(path.dirname(options.installRoot), { recursive: true });
   fs.mkdirSync(path.dirname(options.launcher), { recursive: true });
-  options.installRoot = path.join(fs.realpathSync(path.dirname(options.installRoot)), path.basename(options.installRoot));
-  options.launcher = path.join(fs.realpathSync(path.dirname(options.launcher)), path.basename(options.launcher));
   const tempRoot = fs.mkdtempSync(path.join(path.dirname(options.installRoot), `.codex-kijito-hive.install.${randomBytes(4).toString("hex")}.`));
   fs.chmodSync(tempRoot, 0o700);
   let committed = false;
@@ -264,6 +397,7 @@ function install(options) {
     copyPrivate(options.authSource, path.join(tempRoot, "codex-home", "auth.json"));
     writePrivate(path.join(tempRoot, "codex-home", "config.toml"), configText());
     copyPrivate(controllerSource, path.join(tempRoot, "codex", "controller.mjs"));
+    copyPrivate(authBindingSource, path.join(tempRoot, "codex", "auth-binding.mjs"));
     copyPrivate(paneWakeSource, path.join(tempRoot, "codex", "pane-wake.mjs"));
     // Installed beside the driver so its `import "./pane-wake.mjs"` resolves in the install exactly
     // as it does in the repo — one module, one copy of readLiveness/HIVE_SEND_URL/hiveNoteBody.
@@ -278,6 +412,12 @@ function install(options) {
       version: release.version,
       installId: randomBytes(16).toString("hex"),
       installedAt: new Date().toISOString(),
+      origin: {
+        package: release.origin.package,
+        packageVersion: release.origin.packageVersion,
+        repository: release.origin.repository,
+        gitSha: options.originGitSha,
+      },
       paths: {
         installRoot: options.installRoot,
         launcher: options.launcher,
@@ -291,11 +431,13 @@ function install(options) {
         eventsFile: options.eventsFile,
         codexBin: options.codexBin,
         nodeBin: options.nodeBin,
+        legacyInstallRoots: options.legacyInstallRoots,
         ordinaryConfig: options.ordinaryConfig,
         ordinaryAuth: options.authSource
       },
       hashes: {
         controllerSha256: sha256(path.join(tempRoot, "codex", "controller.mjs")),
+        authBindingModuleSha256: sha256(path.join(tempRoot, "codex", "auth-binding.mjs")),
         paneWakeSha256: sha256(path.join(tempRoot, "codex", "pane-wake.mjs")),
         watchdogSha256: sha256(path.join(tempRoot, "codex", "pane-wake-watchdog.mjs")),
         watchdogPlistSha256: sha256(path.join(tempRoot, "codex", "com.kijito.pane-wake-watchdog.plist")),
@@ -303,12 +445,15 @@ function install(options) {
         wakeCoreSha256: sha256(path.join(tempRoot, "_shared", "wake-core.mjs")),
         cliSha256: sha256(path.join(tempRoot, "cli.mjs")),
         configSha256: sha256(path.join(tempRoot, "codex-home", "config.toml")),
-        authSha256: sha256(path.join(tempRoot, "codex-home", "auth.json")),
         planSha256: release.artifacts.planSha256,
         controllerTestsSha256: release.artifacts.controllerTestsSha256,
+        wakeRecoveryTestsSha256: release.artifacts.wakeRecoveryTestsSha256,
+        releasePackagingTestsSha256: release.artifacts.releasePackagingTestsSha256,
+        recoveryRunbookSha256: release.artifacts.recoveryRunbookSha256,
         ordinaryConfigBeforeSha256: ordinaryBefore.configSha256,
-        ordinaryAuthBeforeSha256: ordinaryBefore.authSha256
+        ordinaryAuthBindingAtInstall: ordinaryBefore.authBinding
       },
+      authBinding: requireAuthBinding(path.join(tempRoot, "codex-home", "auth.json")),
       invariants: {
         hooks: false,
         launchAgent: false,
@@ -326,9 +471,10 @@ function install(options) {
     committed = true;
     const ordinaryAfter = {
       configSha256: optionalHash(options.ordinaryConfig),
-      authSha256: sha256(options.authSource),
+      authBinding: requireAuthBinding(options.authSource),
     };
     if (JSON.stringify(ordinaryAfter) !== JSON.stringify(ordinaryBefore)) throw new Error("ordinary Codex state changed during installation");
+    if (!fs.readFileSync(options.authSource).equals(ordinaryAuthBytesBefore)) throw new Error("ordinary Codex auth bytes changed during installation");
     const skills = installSkills(options);
     return { status: "INSTALLED", installRoot: options.installRoot, launcher: options.launcher, ordinaryStateUnchanged: true, hashes: installed.hashes, skills };
   } finally {
@@ -340,11 +486,14 @@ function install(options) {
 
 try {
   const options = parseArgs(process.argv.slice(2));
+  if (!options.skillsOnly && !options.acknowledgeLegacyNotifier) {
+    throw new Error("WITHDRAWN: dedicated-thread notifier is not same-running-session wake; full install requires explicit --acknowledge-legacy-notifier");
+  }
   // --skills-only updates the skills on a machine whose install root already exists, which a full
   // install deliberately refuses to touch.
   const result = options.skillsOnly
     ? { status: "SKILLS_INSTALLED", skillsRoot: options.skillsRoot, skills: installSkills(options) }
-    : install(options);
+    : (process.stderr.write("WITHDRAWN: dedicated-thread notifier is not same-running-session wake; explicit legacy acknowledgement accepted. See same-chat-continuation-plan.md.\n"), await install(options));
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 } catch (error) {
   process.stderr.write(`${error.stack ?? error.message}\n`);
