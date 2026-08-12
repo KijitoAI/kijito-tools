@@ -59,10 +59,19 @@ duplicate `PostCompact` without the ticket is also a no-op.
    `/Users/jason/.local/bin/codex-kijito-hive`:
    - Run `status` and `doctor`. Re-run these read-only checks outside the
      restricted sandbox when `EPERM` could make a live owned process look stale.
-   - If it is stopped and the user's standing consent for hive supervision is
-     still current, run `start` once. Never start a second consumer beside a
-     live or uncertain one.
-   - Require `running`, doctor `wake.status` exactly `ARMED`, top-level doctor
+   - Do NOT run `start` by default. The isolated-thread controller is a
+     DEPRECATED wake path (wake-transport ruling, 2026-08-12): its turns land in
+     a dedicated thread no human watches, and an auto-start here is exactly how
+     it kept resurrecting after every reboot. If `status` shows it stopped, that
+     is the EXPECTED state — report it stopped and move on.
+   - Run `start` ONLY when the seat's current-state pointer explicitly declares
+     `delivery mode: app-server-seat` (a human-ratified decision recorded there
+     by the kijito-tools packaging work — never inferred at boot, never assumed
+     from standing consent). Never start a second consumer beside a live or
+     uncertain one. If a controller is RUNNING while the declared mode is
+     anything else, report it as an undeclared consumer — do not adopt it.
+   - When (and only when) the declared mode is app-server-seat, require
+     `running`, doctor `wake.status` exactly `ARMED`, top-level doctor
      `GREEN`, `hooksDisabled=true`, `launchAgentInstalled=false`,
      `eventStreamReady=true`, and `workspaceEmpty=true`. Top-level doctor
      `GREEN` means no known integrity/runtime fault; it does **not** by itself
