@@ -30,6 +30,35 @@ const GATED = {
   controllerSha256: path.join(providerRoot, "controller.mjs"),
   wakeCoreSha256: path.join(providerRoot, "..", "_shared", "wake-core.mjs"),
   controllerTestsSha256: path.join(providerRoot, "test", "codex-hive-watch.test.mjs"),
+  // The same-session pane wake adapter. It was the LIVE delivery path while the manifest pinned
+  // only the controller — i.e. the file that talks to the operator's real session was the one file
+  // no integrity gate covered.
+  paneWakeSha256: path.join(providerRoot, "pane-wake.mjs"),
+  // The pane-wake fixtures ARE the safety argument for the idle/busy classifier — they pin a
+  // third-party TUI contract nobody else records. An ungated fixture file is an editable safety
+  // argument, so it is gated exactly like the controller tests beside it.
+  paneWakeTestsSha256: path.join(providerRoot, "test", "pane-wake.test.mjs"),
+  // The health-reporting surface. Gating everything it reports on while leaving it ungated made the
+  // integrity story self-referential.
+  cliSha256: path.join(providerRoot, "cli.mjs"),
+  // A REAL captured post-submit frame, taken the way the driver itself captures (`capture-pane -e`,
+  // escapes intact). It is the fixture the sole read-state-advancing gate is validated against, so
+  // it is evidence, not scenery: ungated, a future edit could quietly make the gate pass against a
+  // frame the TUI never produces.
+  postSubmitCaptureSha256: path.join(providerRoot, "test", "fixtures", "post-submit-capture-e.txt"),
+  // The same flow captured WITHOUT -e. Retained because the difference between the two is itself a
+  // property: with no intensity attribute the gate must fail CLOSED rather than confirm.
+  postSubmitCapturePlainSha256: path.join(providerRoot, "test", "fixtures", "post-submit-capture-plain.txt"),
+  // M223: the liveness DETECTOR, its fixtures and its launchd template. The watchdog is the only
+  // thing that will notice the wake driver dying, so an ungated watchdog is an unguarded guard —
+  // and the plist is gated too, because a supervisor definition is executable intent.
+  watchdogSha256: path.join(providerRoot, "pane-wake-watchdog.mjs"),
+  watchdogTestsSha256: path.join(providerRoot, "test", "pane-wake-watchdog.test.mjs"),
+  watchdogPlistSha256: path.join(providerRoot, "com.kijito.pane-wake-watchdog.plist"),
+  // The CI workflow is the thing that RUNS all of the above. It was a modified companion of every
+  // recent round and declared nowhere, so a change to what CI executes left no trace in the
+  // manifest that records what the release is.
+  workflowSha256: path.join(providerRoot, "..", "..", ".github", "workflows", "test.yml"),
 };
 
 const sha256 = (file) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
