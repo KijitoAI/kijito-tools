@@ -167,6 +167,19 @@ const submitAgeBudgetMs = (pollMs) => CONFIRM_CAP * (Math.max(CONFIRM_POLL_MS, p
 // worst measured offset was 6. See readChrome for why both this bound AND the rule are needed.
 const CHROME_ABOVE_PROMPT_LINES = 8;
 
+// How far ABOVE the fixed window readChrome may search upward for a chrome-boundary rule. The
+// widening exists so a real boundary/dialog frame beyond the fixed 8-line window still lands in the
+// band ("look at more, never less"); UNBOUNDED, it reaches into the transcript and mis-anchors on a
+// full-width rule the CLI draws inside its OWN output, dragging framed tool-output lines (└, │) into
+// the band and pinning an idle pane BUSY forever (the wake livelock, M227). K must sit in a MEASURED
+// GAP: above the max offset of any REAL boundary rule (measured 15 across the dialog/boundary
+// fixtures) and below the min offset of a TRANSCRIPT rule (measured 34 on the livelock frame
+// 58df1a8f). 24 is the gap midpoint — margin 9 below the real-boundary ceiling, 10 above the
+// transcript floor. If a future capture puts a transcript rule inside the real-boundary distance the
+// gap closes and distance alone can no longer discriminate — that is a content-based-discriminator
+// redesign, not a bigger K.
+const CHROME_RULE_LOOKUP_LINES = 24;
+
 // Liveness. The consumer stamps a heartbeat so that a driver which is NOT RUNNING becomes visible:
 // the bounded-silence alarm counts deferrals, and a dead consumer produces none — fail-closed and
 // silent, which is the one combination this project keeps paying for.
@@ -427,10 +440,13 @@ function readChrome(captured) {
   let promptStart = promptIdx;
   while (promptStart > 0 && vis[promptStart - 1].trimStart().startsWith(CARET)) promptStart -= 1;
 
-  // 3. fixed floor first; the rule may only widen it
+  // 3. fixed floor first; the rule may only widen it — but the upward search is BOUNDED
+  // (CHROME_RULE_LOOKUP_LINES) so it stops before reaching transcript. An UNBOUNDED scan anchored on
+  // a rule the CLI draws inside its own output and pulled that transcript into the band (M227).
   const fixedTop = Math.max(0, promptStart - CHROME_ABOVE_PROMPT_LINES);
+  const scanFloor = Math.max(0, fixedTop - CHROME_RULE_LOOKUP_LINES);
   let ruleIdx = -1;
-  for (let i = fixedTop - 1; i >= 0; i -= 1) {
+  for (let i = fixedTop - 1; i >= scanFloor; i -= 1) {
     if (RULE_RE.test(vis[i].trim())) { ruleIdx = i; break; }
   }
   const chromeStart = ruleIdx >= 0 ? Math.min(fixedTop, ruleIdx + 1) : fixedTop;
