@@ -304,6 +304,18 @@ async function install(options) {
   const releasePackagingTests = path.join(options.sourceRoot, "test", "release-packaging.test.mjs");
   const recoveryRunbook = path.join(options.sourceRoot, "WAKE-RECOVERY-RUNBOOK.md");
   const wakeCoreSource = path.join(options.sourceRoot, "..", "_shared", "wake-core.mjs");
+  // The same-session pane wake driver. It is INSTALLED and hash-gated exactly like the controller,
+  // for the same reason the wake core is: it is executable code inside a gated install, and it is
+  // the file that types into the operator's live Codex session. The manifest declared it in
+  // `installedLayout` before the installer produced it, which is worse than not claiming it — the
+  // repo gate said "covered" while the bytes on the machine had no integrity check at all.
+  const paneWakeSource = path.join(options.sourceRoot, "pane-wake.mjs");
+  const paneWakeTests = path.join(options.sourceRoot, "test", "pane-wake.test.mjs");
+  const watchdogSource = path.join(options.sourceRoot, "pane-wake-watchdog.mjs");
+  const watchdogTests = path.join(options.sourceRoot, "test", "pane-wake-watchdog.test.mjs");
+  const watchdogPlist = path.join(options.sourceRoot, "com.kijito.pane-wake-watchdog.plist");
+  const postSubmitCapture = path.join(options.sourceRoot, "test", "fixtures", "post-submit-capture-e.txt");
+  const postSubmitCapturePlain = path.join(options.sourceRoot, "test", "fixtures", "post-submit-capture-plain.txt");
   const release = JSON.parse(fs.readFileSync(sourceManifestFile, "utf8"));
   if (release.schema !== 1 || release.product !== "codex-kijito-hive") throw new Error("invalid source release manifest");
   if (release.origin?.package !== "kijito-claude"
@@ -335,6 +347,26 @@ async function install(options) {
   // an install whose baseline and shipped parser disagree.
   const { requireAuthBinding } = await import(
     verifiedModuleDataUrl(authBindingSource, release.artifacts.authBindingSha256));
+  if (sha256(paneWakeSource) !== release.artifacts.paneWakeSha256) throw new Error("pane wake driver differs from gated hash");
+  // The pane-wake fixtures pin a third-party TUI contract — they ARE the safety argument for the
+  // idle/busy classifier — so they are gated like the controller tests rather than left editable.
+  if (sha256(paneWakeTests) !== release.artifacts.paneWakeTestsSha256) throw new Error("pane wake tests differ from gated hash");
+  // The captured frame the advance gate is validated against travels with those fixtures and is
+  // gated with them: a real capture that can be edited is a safety argument that can be edited.
+  if (sha256(postSubmitCapture) !== release.artifacts.postSubmitCaptureSha256) throw new Error("post-submit capture differs from gated hash");
+  if (sha256(postSubmitCapturePlain) !== release.artifacts.postSubmitCapturePlainSha256) throw new Error("plain post-submit capture differs from gated hash");
+  // ⛔ AND THE CLI, WHICH IS THE FILE THAT TELLS YOU EVERYTHING ELSE IS FINE. It was copied
+  // unverified and its installed hash was then computed FROM THE COPY, so `doctor` was checking the
+  // installed bytes against a hash derived from whatever bytes the installer was handed: a modified
+  // source installed cleanly and reported GREEN for ever. It is `doctor`, `status`, `lockStatus`
+  // and the pane-driver liveness surface — the only external observer of the whole system.
+  if (sha256(cliSource) !== release.artifacts.cliSha256) throw new Error("cli differs from gated hash");
+  // M223: the detector is executable code inside a gated install, and the only external observer of
+  // the driver's liveness — it is gated exactly like the driver it watches. The plist is gated as
+  // written intent even though nothing installs or loads it.
+  if (sha256(watchdogSource) !== release.artifacts.watchdogSha256) throw new Error("watchdog differs from gated hash");
+  if (sha256(watchdogTests) !== release.artifacts.watchdogTestsSha256) throw new Error("watchdog tests differ from gated hash");
+  if (sha256(watchdogPlist) !== release.artifacts.watchdogPlistSha256) throw new Error("watchdog launchd template differs from gated hash");
   // The parity plan is RECORDED, not gated. It used to be hash-gated here, from a path OUTSIDE the
   // installable directory (`<sourceRoot>/../codex-kijito-parity-plan.md`), which meant every install
   // threw the moment the source root moved -- and gated an install on a prose document. The hash is
@@ -366,6 +398,12 @@ async function install(options) {
     writePrivate(path.join(tempRoot, "codex-home", "config.toml"), configText());
     copyPrivate(controllerSource, path.join(tempRoot, "codex", "controller.mjs"));
     copyPrivate(authBindingSource, path.join(tempRoot, "codex", "auth-binding.mjs"));
+    copyPrivate(paneWakeSource, path.join(tempRoot, "codex", "pane-wake.mjs"));
+    // Installed beside the driver so its `import "./pane-wake.mjs"` resolves in the install exactly
+    // as it does in the repo — one module, one copy of readLiveness/HIVE_SEND_URL/hiveNoteBody.
+    copyPrivate(watchdogSource, path.join(tempRoot, "codex", "pane-wake-watchdog.mjs"));
+    // The launchd template travels with it as a template: readable, never loaded by the installer.
+    copyPrivate(watchdogPlist, path.join(tempRoot, "codex", "com.kijito.pane-wake-watchdog.plist"));
     copyPrivate(wakeCoreSource, path.join(tempRoot, "_shared", "wake-core.mjs"));
     copyPrivate(cliSource, path.join(tempRoot, "cli.mjs"));
     const installed = {
@@ -386,6 +424,9 @@ async function install(options) {
         codexHome: path.join(options.installRoot, "codex-home"),
         workspace: path.join(options.installRoot, "workspace"),
         runtime: path.join(options.installRoot, "runtime"),
+        paneRuntime: path.join(options.installRoot, "runtime-pane"),
+        paneHeartbeat: path.join(options.installRoot, "runtime-pane", "heartbeat.json"),
+        watchdog: path.join(options.installRoot, "codex", "pane-wake-watchdog.mjs"),
         tokenFile: options.tokenFile,
         eventsFile: options.eventsFile,
         codexBin: options.codexBin,
@@ -397,6 +438,10 @@ async function install(options) {
       hashes: {
         controllerSha256: sha256(path.join(tempRoot, "codex", "controller.mjs")),
         authBindingModuleSha256: sha256(path.join(tempRoot, "codex", "auth-binding.mjs")),
+        paneWakeSha256: sha256(path.join(tempRoot, "codex", "pane-wake.mjs")),
+        watchdogSha256: sha256(path.join(tempRoot, "codex", "pane-wake-watchdog.mjs")),
+        watchdogPlistSha256: sha256(path.join(tempRoot, "codex", "com.kijito.pane-wake-watchdog.plist")),
+        paneWakeTestsSha256: release.artifacts.paneWakeTestsSha256,
         wakeCoreSha256: sha256(path.join(tempRoot, "_shared", "wake-core.mjs")),
         cliSha256: sha256(path.join(tempRoot, "cli.mjs")),
         configSha256: sha256(path.join(tempRoot, "codex-home", "config.toml")),
