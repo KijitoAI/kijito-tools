@@ -258,6 +258,41 @@ test("M227: an idle pane whose transcript contains full-width rules classifies I
   assert.equal(d.classifyPane(frame, 0), "idle");
 });
 
+test("v0.147: an idle pane whose composer separator sits INSIDE the fixed window classifies IDLE", () => {
+  // A REAL captured frame (tmux capture-pane -e -p) from the 2026-08-13 livelock: Codex v0.147.0
+  // idle at an empty composer, last message block containing └ tool-output tree connectors and
+  // full-width message-separator rules. v0.147 draws the transcript/composer separator INSIDE the
+  // fixed CHROME_ABOVE_PROMPT_LINES window, so the pre-fix rule search — which began ABOVE that
+  // window — skipped the true separator, anchored on the PREVIOUS message's rule, widened the band
+  // over the transcript, and FRAME_RE matched └ → permanent BUSY (failStreak 30+, all wakes held,
+  // pane provably idle). The nearest-rule-above-the-caret anchor keeps the band below the true
+  // separator. Hash-gated like the M227 fixture so it cannot be edited into agreement.
+  const frameFile = fileURLToPath(new URL("./fixtures/idle-v0147-tool-tree.txt", import.meta.url));
+  const frame = fs.readFileSync(frameFile, "utf8");
+  assert.equal(createHash("sha256").update(frame).digest("hex"),
+    "00717237dc0d8c4ab556e4e893a181ecf2bd84771a83a5eb42b6e4ac1122f77d",
+    "the v0.147 fixture must be the exact captured frame, not an edited copy");
+  const release = JSON.parse(fs.readFileSync(path.join(providerRoot, "release-manifest.json"), "utf8"));
+  assert.equal(release.artifacts.idleV0147ToolTreeCaptureSha256,
+    "00717237dc0d8c4ab556e4e893a181ecf2bd84771a83a5eb42b6e4ac1122f77d",
+    "the v0.147 fixture must be gated in the release manifest");
+  const d = new PaneDelivery({ tmux: "tmux", paneSession: "Codex-Real", expectThread: THREAD });
+  assert.equal(d.classifyPane(frame, 0), "idle");
+});
+
+test("v0.147: the same frame with a live working indicator above the composer is still BUSY", () => {
+  // Adversarial twin of the fixture above: the nearest-rule anchor must NOT excuse a live turn.
+  // A working indicator renders BELOW the transcript/composer separator, inside the band the new
+  // anchor keeps — so injecting one into the idle frame must flip the verdict to busy.
+  const frameFile = fileURLToPath(new URL("./fixtures/idle-v0147-tool-tree.txt", import.meta.url));
+  const lines = fs.readFileSync(frameFile, "utf8").split("\n");
+  const caretIdx = lines.map((l) => l.replace(/\[[0-9;:]*m/g, "")).findLastIndex((l) => l.trimStart().startsWith("›"));
+  assert.ok(caretIdx > 0, "fixture must contain the composer caret");
+  lines.splice(caretIdx, 0, "• Working (3s • esc to interrupt)");
+  const d = new PaneDelivery({ tmux: "tmux", paneSession: "Codex-Real", expectThread: THREAD });
+  assert.equal(d.classifyPane(lines.join("\n"), 0), "busy");
+});
+
 test("classifyPane is three-valued and every measured running-turn rendering is BUSY", () => {
   const d = delivery();
   // Rows 1-2 were already caught by the original 4-line window; rows 3-6 were the measured misses,
@@ -353,9 +388,14 @@ test("the busy predicate reads a FIXED-GEOMETRY band that content can widen but 
     ].join("\n");
     assert.equal(d.classifyPane(attack, 0), "busy", `forged rule with gap ${gap}`);
   }
-  // A REAL boundary beyond the fixed window still widens the region — the direction that keeps an
-  // indicator drawn above a tall composer inside the scan.
-  const widened = [
+  // v0.147 revision: content moves the band in NEITHER direction — widening is gone. The old
+  // assertion here relied on a rule above the window pulling a distant indicator into the band;
+  // v0.147 renders separator-shaped rules between transcript messages every few lines, so that
+  // reach anchored on message separators and livelocked wake delivery (fixture
+  // idle-v0147-tool-tree.txt). An indicator beyond the fixed window is now out of geometry —
+  // accepted residual, tracked by the version-pin fail-loud follow-up; v0.147 draws the live
+  // indicator composer-adjacent, well inside the window.
+  const beyondWindow = [
     "  transcript",
     RULE,
     "• Working (12s • esc to interrupt)",
@@ -364,7 +404,8 @@ test("the busy predicate reads a FIXED-GEOMETRY band that content can widen but 
     "",
     STATUS,
   ].join("\n");
-  assert.equal(d.classifyPane(widened, 0), "busy", "a rule above the fixed floor widens the band");
+  assert.equal(d.classifyPane(beyondWindow, 0), "idle",
+    "no rule of any shape may move the band — geometry is fixed in BOTH directions");
   // Two glyphs are deliberately NOT spinners even inside the band: the status-bar separator and the
   // blank braille cell used as a spacer.
   assert.equal(d.classifyPane(["  transcript", "· Generating a report", "", "› ", "", STATUS].join("\n"), 0), "idle");
@@ -1943,8 +1984,10 @@ test("the rule may only widen: at or immediately above the floor it changes noth
   assert.equal(d.classifyPane(frameWith(null), 0), "idle", "no rule: the indicator is out of band");
   assert.equal(d.classifyPane(frameWith(4), 0), "idle", "a rule AT the floor cannot move the floor");
   assert.equal(d.classifyPane(frameWith(3), 0), "idle", "nor can one immediately above it");
-  assert.equal(d.classifyPane(frameWith(1), 0), "busy", "a rule further up widens, and the indicator is caught");
-  assert.equal(d.classifyPane(frameWith(0), 0), "busy");
+  // v0.147 revision: rules further up no longer widen either — the band is fixed geometry in both
+  // directions (see the beyondWindow assertion in the band test for the doctrine and the residual).
+  assert.equal(d.classifyPane(frameWith(1), 0), "idle", "a rule further up moves nothing");
+  assert.equal(d.classifyPane(frameWith(0), 0), "idle", "content cannot move geometry at all");
   // The direction that must never work: a rule BELOW the floor, i.e. inside the window, must not
   // shrink the band away from an indicator that is inside it.
   const inWindow = ["  transcript", "  filler", indicator, RULE, "", "› ", "", STATUS].join("\n");
