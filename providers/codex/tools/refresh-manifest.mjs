@@ -59,6 +59,10 @@ const GATED = {
   // livelocks wake delivery; ungated, a future edit could make the classifier "pass" against a frame
   // the TUI never produces.
   idleTranscriptRulesCaptureSha256: path.join(providerRoot, "test", "fixtures", "idle-with-transcript-rules-M227.txt"),
+  // v0.147 regression twin of the M227 fixture: idle pane whose LAST message block (tool-output
+  // tree with └ connectors + message-separator rules) sits directly above a composer whose true
+  // separator is INSIDE the fixed window — the frame that livelocked wake delivery on 2026-08-13.
+  idleV0147ToolTreeCaptureSha256: path.join(providerRoot, "test", "fixtures", "idle-v0147-tool-tree.txt"),
   // M223: the liveness DETECTOR, its fixtures and its launchd template. The watchdog is the only
   // thing that will notice the wake driver dying, so an ungated watchdog is an unguarded guard —
   // and the plist is gated too, because a supervisor definition is executable intent.

@@ -29,17 +29,18 @@
     "wakeRecoveryTestsSha256": "e302b3f8e2dc9503838caa4ee0ea263d3b013c865d4f89ea1e63921c87c30e6f",
     "recoveryRunbookSha256": "d6f378f3cf60c7e038578993473a4b6624280b3050c06abe3d50a361d10ad3e6",
     "releasePackagingTestsSha256": "d7478d0a004dad017bf471884e20bf5bbf7cf69a1da64cd293e5d2ce87d436f6",
-    "paneWakeSha256": "aa31caf3d73bbe097b3cbfbf006c9eebd05816869b8e985f5f78e0d6fee26b46",
-    "paneWakeTestsSha256": "46095289a04ccd1643748a8b994e2ac78403a2c6aa276c5300c9c115f31c446f",
+    "paneWakeSha256": "a467a5ef9437e8bdec932c01379c88b3eec71659e9a3dea29a237c1e45a53d80",
+    "paneWakeTestsSha256": "56c2d973cb5ce520397780f4e97aefa4eee8d1acd9181d8f7eb77e95d42ea97d",
     "cliSha256": "c2f4395f08ed719f5fb03edbd3245cd8555cf231e75d87329a665da292e4ea0c",
     "watchdogSha256": "e04e705dab2045def7a929e2a4bcfa11226a0762d4cd957dfd76f3a7865a3b45",
     "watchdogTestsSha256": "8572a61ff277571e567bcf0ea8f7905f5eaea3c4c22695aff163c1c4cbc692f8",
     "watchdogPlistSha256": "77dc2556f5d268601659dd4973288c909618f5bc47a4e49f1cd686f671143fac",
     "postSubmitCaptureSha256": "1614bdee8e0291d72354ad5afe9dc15174c43b951da27aa47221eecf51229a13",
     "postSubmitCapturePlainSha256": "95fc45b28a24e1ca0823e66b9852925aaff8e965a196c43b6ac1f8cba218a90d",
-    "workflowSha256": "bf50f781060cd40643edba0d235bfbb93c4466efc245904a87da628a483caa82",
+    "workflowSha256": "8d7b8e1047f652418936468790ddb91d823ce38f3bece0600281ff755194fb7b",
     "planSha256": "a8c676e719ddd6b2da19b35404b8aa768564891bb584b23634caf583db97da04",
-    "idleTranscriptRulesCaptureSha256": "58df1a8ffc92c2263b83f724564ae9a5fafaa3f056b553f4bdffd6c569c7327e"
+    "idleTranscriptRulesCaptureSha256": "58df1a8ffc92c2263b83f724564ae9a5fafaa3f056b553f4bdffd6c569c7327e",
+    "idleV0147ToolTreeCaptureSha256": "00717237dc0d8c4ab556e4e893a181ecf2bd84771a83a5eb42b6e4ac1122f77d"
   },
   "ownedPaths": [
     "~/.local/share/codex-kijito-hive",
