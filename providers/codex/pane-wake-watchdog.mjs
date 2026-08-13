@@ -36,6 +36,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { readLiveness, hiveNoteBody, HIVE_SEND_URL } from "./pane-wake.mjs";
+import { readModeLiveness } from "./mode-liveness.mjs";
 
 const PERSONA = "codex";
 const CHECK_INTERVAL_MS = 15_000;
@@ -51,7 +52,7 @@ const MAX_PAGE_ATTEMPTS = 5;
 //   absent     no heartbeat at all
 //   dead       the recorded pid is gone
 //   unreadable we cannot verify liveness — a detector that cannot detect must say so, not stay quiet
-const PAGE_STATES = new Set(["stale", "absent", "dead", "unreadable"]);
+const PAGE_STATES = new Set(["stale", "absent", "dead", "unreadable", "unexpected-consumer"]);
 // `degraded` is deliberately NOT a page state: it means the driver is beating but its INPUT path is
 // broken, which the driver alarms about itself through bounded silence. Paging on it would double
 // every such alarm and teach the reader to skim them. It does count as "the process is alive", so
@@ -99,7 +100,17 @@ class PaneWakeWatchdog {
   async check(now = Date.now()) {
     let liveness;
     try {
-      liveness = readLiveness(this.options.heartbeatFile, now);
+      // MODE-AWARE PATH (opt-in): with a --mode-register, liveness means "does reality match the
+      // DECLARED delivery mode" — the register is read fresh every check, and the per-mode readers
+      // live in mode-liveness.mjs so this file keeps no hands and no mode logic. Without the flag,
+      // the original pane-heartbeat path below runs byte-identically.
+      liveness = this.options.modeRegisterFile
+        ? readModeLiveness(this.options.modeRegisterFile, {
+            heartbeatFile: this.options.heartbeatFile,
+            controllerStateFile: this.options.controllerStateFile,
+            consumerLockFile: this.options.consumerLockFile,
+          }, now)
+        : readLiveness(this.options.heartbeatFile, now);
     } catch (error) {
       liveness = { status: "unreadable", reason: "read-threw", message: error.message };
     }
@@ -133,8 +144,14 @@ class PaneWakeWatchdog {
   // The message names the condition AND the remedy, because a page that only says "something is
   // wrong" costs the reader the same investigation every time.
   pageContent(liveness) {
-    const where = this.options.heartbeatFile;
+    const where = liveness.stateFile ?? liveness.lockFile ?? liveness.registerFile ?? this.options.heartbeatFile;
     const window = "beat 5s / stale 30s / check 15s";
+    // Mode-aware pages open by naming the DECLARATION reality diverged from, because "which mode
+    // was this seat supposed to be in" is the first question every one of these pages raises.
+    const modePrefix = liveness.mode ? `[declared mode ${liveness.mode}] ` : (this.options.modeRegisterFile ? "[declared mode UNKNOWN] " : "");
+    if (liveness.status === "unexpected-consumer") {
+      return `${modePrefix}codex delivery-mode VIOLATION: attended-notify declares NO consumer, but consumer.lock at ${where} is HELD${liveness.pid ? ` by pid ${liveness.pid} (${liveness.holderAlive ? "alive" : "dead — stale lock"})` : ""}. Either stop the consumer or re-declare the mode; nothing is auto-stopped by design.`;
+    }
     if (liveness.status === "absent" && !this.everSeenBeat) {
       // ⛔ THIS WORDING IS LOAD-BEARING. A heartbeat that has never appeared since the watcher
       // started is at least as likely to be a MISCONFIGURATION as a death — a driver armed without
@@ -142,13 +159,17 @@ class PaneWakeWatchdog {
       // is how an alarm channel earns a reputation for crying wolf.
       return `codex pane-wake heartbeat ABSENT at ${where} since this watchdog started — either the wake driver is not armed, or it is armed WITHOUT --heartbeat ${where}. Wakes are NOT being delivered. Check the launch argv and the pid, then re-arm. (${window})`;
     }
+    const signal = liveness.mode === "codex.app-server-seat" ? "controller clientStatus" : "heartbeat";
     const detail = {
-      stale: `heartbeat STALE (last beat ${Math.round((liveness.ageMs ?? 0) / 1000)}s ago, bound ${Math.round((liveness.staleAfterMs ?? 30_000) / 1000)}s)`,
-      absent: "heartbeat ABSENT (the file is gone)",
-      dead: `heartbeat pid ${liveness.pid} is NOT RUNNING`,
-      unreadable: `heartbeat UNREADABLE (${liveness.reason ?? "unknown"}) — liveness cannot be verified`,
+      stale: liveness.reason === "clock-skew-future-timestamp"
+        ? `${signal} timestamp is FROM THE FUTURE (skew ${Math.round((liveness.ageMs ?? 0) / 1000)}s) — an observable that moved for the wrong reason is not health`
+        : `${signal} STALE (last beat ${Math.round((liveness.ageMs ?? 0) / 1000)}s ago, bound ${Math.round((liveness.staleAfterMs ?? 30_000) / 1000)}s)`,
+      absent: `${signal} ABSENT (the file is gone)`,
+      dead: `${signal} pid ${liveness.pid} is NOT RUNNING`,
+      unreadable: `${signal} UNREADABLE (${liveness.reason ?? "unknown"}) — liveness cannot be verified`,
     }[liveness.status];
-    return `codex pane-wake ${detail} at ${where} — wakes have stopped. Check the pid and re-arm the driver; nothing is auto-restarted by design. (${window})`;
+    const subject = liveness.mode === "codex.app-server-seat" ? "app-server seat" : "pane-wake";
+    return `${modePrefix}codex ${subject} ${detail} at ${where} — wakes have stopped. Check the pid and re-arm; nothing is auto-restarted by design. (${window})`;
   }
 
   async page(liveness) {
@@ -202,6 +223,7 @@ class PaneWakeWatchdog {
     this.logQuiet({
       event: "armed",
       heartbeatFile: this.options.heartbeatFile,
+      modeRegisterFile: this.options.modeRegisterFile ?? null,
       checkMs: this.options.checkMs,
       pageChannel: this.token ? "hive" : "log-only",
       detectionOnly: true,
@@ -223,7 +245,7 @@ class PaneWakeWatchdog {
 // Argument parsing with the driver's F10 discipline: an allowlist, no silent typos, no duplicates,
 // integers validated by shape and range. A watchdog whose `--heartbeat` typo left it watching a
 // default path would be a detector that detects nothing while reporting itself armed.
-const ALLOWED_OPTIONS = new Set(["heartbeat", "token-file", "check-ms"]);
+const ALLOWED_OPTIONS = new Set(["heartbeat", "token-file", "check-ms", "mode-register", "controller-state", "consumer-lock"]);
 const FLAGS = new Set(["--once"]);
 
 function integerOption(values, key, fallback, min, max) {
@@ -253,11 +275,31 @@ function parseArgs(argv) {
   if (typeof heartbeat !== "string" || heartbeat.length === 0) {
     throw new Error("--heartbeat is required and must be the driver's heartbeat file");
   }
+  // MODE-AWARE OPT-IN: --mode-register makes liveness mean "reality matches the declared mode",
+  // and then the OTHER two modes' observables must be named EXPLICITLY — the same no-silent-default
+  // discipline as --heartbeat, because a watchdog watching a defaulted wrong path is a detector
+  // that detects nothing while reporting itself armed.
+  const modeRegister = values["mode-register"];
+  if (modeRegister !== undefined && (typeof modeRegister !== "string" || modeRegister.length === 0)) {
+    throw new Error("--mode-register must be the declared-mode.json path");
+  }
+  if (modeRegister !== undefined) {
+    for (const required of ["controller-state", "consumer-lock"]) {
+      if (typeof values[required] !== "string" || values[required].length === 0) {
+        throw new Error(`--${required} is required whenever --mode-register is given (no silent defaults for load-bearing paths)`);
+      }
+    }
+  } else if (values["controller-state"] !== undefined || values["consumer-lock"] !== undefined) {
+    throw new Error("--controller-state/--consumer-lock only apply with --mode-register");
+  }
   return {
     heartbeatFile: path.resolve(heartbeat),
     tokenFile: path.resolve(values["token-file"] ?? path.join(os.homedir(), ".claude", ".kijito_api_token")),
     checkMs: integerOption(values, "check-ms", CHECK_INTERVAL_MS, 1000, 600_000),
     once: flags.has("--once"),
+    modeRegisterFile: modeRegister === undefined ? null : path.resolve(modeRegister),
+    controllerStateFile: modeRegister === undefined ? null : path.resolve(values["controller-state"]),
+    consumerLockFile: modeRegister === undefined ? null : path.resolve(values["consumer-lock"]),
   };
 }
 
