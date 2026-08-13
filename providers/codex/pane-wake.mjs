@@ -167,18 +167,11 @@ const submitAgeBudgetMs = (pollMs) => CONFIRM_CAP * (Math.max(CONFIRM_POLL_MS, p
 // worst measured offset was 6. See readChrome for why both this bound AND the rule are needed.
 const CHROME_ABOVE_PROMPT_LINES = 8;
 
-// How far ABOVE the fixed window readChrome may search upward for a chrome-boundary rule. The
-// widening exists so a real boundary/dialog frame beyond the fixed 8-line window still lands in the
-// band ("look at more, never less"); UNBOUNDED, it reaches into the transcript and mis-anchors on a
-// full-width rule the CLI draws inside its OWN output, dragging framed tool-output lines (└, │) into
-// the band and pinning an idle pane BUSY forever (the wake livelock, M227). K must sit in a MEASURED
-// GAP: above the max offset of any REAL boundary rule (measured 15 across the dialog/boundary
-// fixtures) and below the min offset of a TRANSCRIPT rule (measured 34 on the livelock frame
-// 58df1a8f). 24 is the gap midpoint — margin 9 below the real-boundary ceiling, 10 above the
-// transcript floor. If a future capture puts a transcript rule inside the real-boundary distance the
-// gap closes and distance alone can no longer discriminate — that is a content-based-discriminator
-// redesign, not a bigger K.
-const CHROME_RULE_LOOKUP_LINES = 24;
+// (CHROME_RULE_LOOKUP_LINES is gone. Its own comment said it: when a transcript rule lands inside
+// the real-boundary distance, "distance alone can no longer discriminate — that is a
+// content-based-discriminator redesign, not a bigger K". Codex v0.147 draws message separators a
+// few lines apart, the gap closed, and the redesign is PURE FIXED GEOMETRY in readChrome: no
+// content of any shape moves the band in either direction.)
 
 // Liveness. The consumer stamps a heartbeat so that a driver which is NOT RUNNING becomes visible:
 // the bounded-silence alarm counts deferrals, and a dead consumer produces none — fail-closed and
@@ -440,16 +433,24 @@ function readChrome(captured) {
   let promptStart = promptIdx;
   while (promptStart > 0 && vis[promptStart - 1].trimStart().startsWith(CARET)) promptStart -= 1;
 
-  // 3. fixed floor first; the rule may only widen it — but the upward search is BOUNDED
-  // (CHROME_RULE_LOOKUP_LINES) so it stops before reaching transcript. An UNBOUNDED scan anchored on
-  // a rule the CLI draws inside its own output and pulled that transcript into the band (M227).
+  // 3. PURE FIXED GEOMETRY — content moves the band in NEITHER direction.
+  // ⛔ v0.147 LIVELOCK FIX, and the completion of both M227 and round-3 HIGH-1. The band top used
+  // to be rule-anchored: a bounded search above the fixed window could WIDEN the band down to the
+  // "composer separator". Codex v0.147 draws separator-shaped rules between transcript MESSAGES
+  // every few lines, so the search reliably anchored on a MESSAGE separator and widened the band
+  // over transcript — where a `└` tool-output tree connector matches FRAME_RE and pins an idle
+  // pane BUSY forever (measured 2026-08-13: caret 53, fixedTop 45, band widened to 31 by the rule
+  // at 30; failStreak 30+, every wake held while the pane sat provably idle). The dual hazard is
+  // the forged anchor (round-3 HIGH-1): any rule-shaped line is ordinary rendered output, so an
+  // anchor that content can move is an anchor an attacker chooses. Both hazards share one root —
+  // content reaching the geometry — so the fix removes the reach entirely: the band is exactly the
+  // fixed window above the composer plus the composer block itself. v0.147 renders the working
+  // indicator composer-adjacent (1-2 lines up), well inside the window. If a future TUI moves the
+  // indicator above the window, the failure is the version-pin fail-loud gap tracked for the
+  // packaging round — not a reason to let content move geometry again.
   const fixedTop = Math.max(0, promptStart - CHROME_ABOVE_PROMPT_LINES);
-  const scanFloor = Math.max(0, fixedTop - CHROME_RULE_LOOKUP_LINES);
-  let ruleIdx = -1;
-  for (let i = fixedTop - 1; i >= scanFloor; i -= 1) {
-    if (RULE_RE.test(vis[i].trim())) { ruleIdx = i; break; }
-  }
-  const chromeStart = ruleIdx >= 0 ? Math.min(fixedTop, ruleIdx + 1) : fixedTop;
+  const ruleIdx = -1;   // retained in the chrome shape for callers; content anchors nothing now
+  const chromeStart = fixedTop;
 
   // 4. ambiguity ⇒ unreadable.
   // The floor anchor already makes the STATUS BAR unique by construction — there is exactly one
