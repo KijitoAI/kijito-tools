@@ -32,7 +32,7 @@ function fixture() {
   };
 }
 
-function controllerState(f, { agoMs = 0, alive = true, pollMs = 500, clientStatus = "idle" } = {}) {
+function controllerState(f, { agoMs = 0, alive = true, pollMs = 500, clientStatus = "idle", inFlightAgoMs = null } = {}) {
   fs.writeFileSync(f.stateFile, `${JSON.stringify({
     schema: 2,
     persona: "codex",
@@ -42,6 +42,12 @@ function controllerState(f, { agoMs = 0, alive = true, pollMs = 500, clientStatu
       childPid: process.pid,
       checkedAt: new Date(Date.now() - agoMs).toISOString(),
       pollMs,
+    },
+    inFlight: inFlightAgoMs === null ? null : {
+      turnId: "test-turn",
+      digest: "0".repeat(64),
+      acceptedAt: new Date(Date.now() - inFlightAgoMs).toISOString(),
+      batch: [],
     },
   })}\n`, { mode: 0o600 });
 }
@@ -165,15 +171,44 @@ test("a fresh idle controller is alive; a beating non-idle one is degraded, neve
   } finally { cleanup(f); }
 });
 
-test("staleness bound is the controller's own contract: max(5s, pollMs*4)", () => {
+test("a mid-turn beat stall is not an outage: monitoring bound is max(30s, pollMs*6), not the readiness gate's 5s", () => {
   const f = fixture();
   try {
+    // The 2026-08-14 false-page storm, as a regression: 5-13s stalls during real turns paged
+    // "wakes have stopped" while wakes were completing. Under monitoring semantics they are alive.
     controllerState(f, { agoMs: 6_000, pollMs: 500 });
+    assert.equal(readControllerLiveness(f.stateFile).status, "alive", "6s stall (page 7243's shape)");
+    controllerState(f, { agoMs: 13_000, pollMs: 500 });
+    assert.equal(readControllerLiveness(f.stateFile).status, "alive", "13s stall (page 7279's shape)");
+    // Past the monitoring bound with no turn in flight: a real stall, and it pages.
+    controllerState(f, { agoMs: 31_000, pollMs: 500 });
     const stale = readControllerLiveness(f.stateFile);
     assert.equal(stale.status, "stale");
     assert.equal(stale.staleAfterMs, CLIENT_FRESHNESS_FLOOR_MS);
-    controllerState(f, { agoMs: 6_000, pollMs: 2_000 });
-    assert.equal(readControllerLiveness(f.stateFile).status, "alive", "8s bound at pollMs=2000");
+    // Exercise the pollMs*6 arm where it DOMINATES the 30s floor (argus review note: with
+    // pollMs=500 everywhere, a *6→*4 mutation would survive). pollMs=10s ⇒ bound 60s.
+    controllerState(f, { agoMs: 50_000, pollMs: 10_000 });
+    assert.equal(readControllerLiveness(f.stateFile).status, "alive", "50s stall under a 60s bound");
+    controllerState(f, { agoMs: 61_000, pollMs: 10_000 });
+    assert.equal(readControllerLiveness(f.stateFile).status, "stale", "61s stall past the 60s bound");
+  } finally { cleanup(f); }
+});
+
+test("a stalled beat during a FRESH in-flight turn is busy (degraded), not an outage; the suppression is bounded", () => {
+  const f = fixture();
+  try {
+    // 46s was the largest legitimate turn observed (the 70-item backlog drain). A beat stalled
+    // past the bound while that turn is in flight must read busy, never "wakes have stopped".
+    controllerState(f, { agoMs: 46_000, pollMs: 500, inFlightAgoMs: 46_000 });
+    const busy = readControllerLiveness(f.stateFile);
+    assert.equal(busy.status, "degraded");
+    assert.equal(busy.reason, "client-busy-turn-inflight");
+    // A wedged turn does not hide behind the suppression: grace exhausted ⇒ stale ⇒ pages.
+    controllerState(f, { agoMs: 46_000, pollMs: 500, inFlightAgoMs: 16 * 60_000 });
+    assert.equal(readControllerLiveness(f.stateFile).status, "stale", "grace exhausted");
+    // An acceptedAt from the future is out of character and never suppresses.
+    controllerState(f, { agoMs: 46_000, pollMs: 500, inFlightAgoMs: -60_000 });
+    assert.equal(readControllerLiveness(f.stateFile).status, "stale", "future acceptedAt");
   } finally { cleanup(f); }
 });
 
