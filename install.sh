@@ -5,10 +5,12 @@
 # PROVIDER under providers/, owns its own installer, and installs to its own location:
 #
 #   claude  (default)  providers/claude/install.sh    → ~/.claude          — bash scripts + skills
-#   codex              providers/codex/install.mjs    → WITHDRAWN notifier; skills-only remains safe
+#   codex              providers/codex/install.mjs    → release verify (default) / --skills-only
+#                      (controller-era full install retired at gate 6, 2026-08-15;
+#                       see legacy/codex-controller-era-2026-08/)
 #
 #   ./install.sh                      # claude, unchanged from before the providers/ split
-#   ./install.sh --provider codex     # WITHDRAWN; use only with --skills-only
+#   ./install.sh --provider codex     # verify the codex release gate; add --skills-only to deploy
 #   ./install.sh --list-providers
 #   ./install.sh --from-main          # install the stable main bytes (branch-state-immune)
 #   ./install.sh --allow-branch       # deliberately install THIS branch's bytes (off-main opt-in)
