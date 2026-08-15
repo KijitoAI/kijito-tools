@@ -3,7 +3,8 @@
 // refuses (returns null) rather than rendering differently.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { renderTemplate } from "./kijito-notify-count.mjs";
+import { renderTemplate, unreadCount } from "./kijito-notify-count.mjs";
+import { createServer } from "node:http";
 
 const SHAPE = /^Kijito: [a-z0-9][a-z0-9-]{0,31} — \d+ unread$/u;
 
@@ -35,6 +36,36 @@ test("out-of-character personas refuse — nothing but the anchor charset enters
 test("out-of-character counts refuse", () => {
   for (const c of [-1, 1.5, NaN, Infinity, "3", null, undefined, 2 ** 53]) {
     assert.equal(renderTemplate("codex", c), null, String(c));
+  }
+});
+
+test("malformed /api/notify/pending body takes the loud fail path, never silent zero", async () => {
+  // Contract drift (200 with an unexpected shape) must THROW to the stderr
+  // fail path — a silent count-0 would suppress notifications forever.
+  // Row-absent-means-zero stays separately true and is pinned here too.
+  const bodies = [
+    { body: { wrong: [] }, rejects: true },   // result key absent
+    { body: { result: "x" }, rejects: true }, // result not an array
+    { body: [], rejects: true },              // top-level not an object envelope
+    { body: { result: [] }, rejects: false }, // valid: no rows -> measured 0
+  ];
+  for (const { body, rejects } of bodies) {
+    const srv = createServer((_req, res) => {
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify(body));
+    });
+    await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+    const api = `http://127.0.0.1:${srv.address().port}`;
+    try {
+      if (rejects) {
+        await assert.rejects(unreadCount(api, "t", "codex"),
+          /unexpected \/api\/notify\/pending shape/, JSON.stringify(body));
+      } else {
+        assert.equal(await unreadCount(api, "t", "codex"), 0, "row-absent means zero");
+      }
+    } finally {
+      srv.close();
+    }
   }
 });
 

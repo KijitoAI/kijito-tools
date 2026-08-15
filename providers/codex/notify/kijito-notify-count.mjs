@@ -40,7 +40,7 @@ function parseArgs(argv) {
   return opts;
 }
 
-async function unreadCount(api, token, persona) {
+export async function unreadCount(api, token, persona) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
   try {
@@ -50,7 +50,10 @@ async function unreadCount(api, token, persona) {
     });
     if (!res.ok) throw new Error(`http ${res.status}`);
     const body = await res.json();
-    const rows = Array.isArray(body?.result) ? body.result : [];
+    // Row-absent means zero (measured fact, below) — but a missing/unexpected
+    // `result` key is contract drift and must fail LOUD, never read as count 0.
+    if (!Array.isArray(body?.result)) throw new Error("unexpected /api/notify/pending shape");
+    const rows = body.result;
     const row = rows.find((r) => r?.persona === persona);
     // The endpoint lists only personas with pending unread (measured live
     // 2026-08-14: zero-unread personas are simply absent) — no row means 0.
