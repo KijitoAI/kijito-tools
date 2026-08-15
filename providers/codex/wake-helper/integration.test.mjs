@@ -260,3 +260,26 @@ test("F2: line torn across the 256KB read cap delivers exactly once", async () =
   child.kill("SIGKILL");
   await daemon.close();
 });
+
+test("gate-7: a diagnostic-kind event delivers an alert-shaped wake end-to-end", async () => {
+  const env = mkEnv("diag");
+  const daemon = new MockDaemon(env.sock);
+  await daemon.listen();
+  const child = startHelper(env);
+  assert.ok(await waitFor(() => child.stdoutText.includes('"event":"armed"')), `no armed: ${child.stderrText}`);
+  // Shape measured on a live producer 2026-08-15 (g7 fixtures): diagnostic kinds carry ts, no id.
+  fs.appendFileSync(env.events, JSON.stringify({
+    source: "kijito-inbox", persona: "codex", event: "baseline_skipped",
+    ts: "2026-08-15T08:04:46.059708+00:00", wake_class: "diagnostic",
+  }) + "\n");
+  assert.ok(await waitFor(() => daemon.turnStarts().length === 1), "diagnostic wake not delivered");
+  const text = daemon.turnStarts()[0].params.input[0].text;
+  assert.ok(text.startsWith(WAKE_PREFIX));
+  assert.match(text, /Events: baseline_skipped/);
+  assert.match(text, /Diagnostics: baseline_skipped:2026-08-15T08:04:46\.059708\+00:00/);
+  assert.match(text, /Message IDs: none/);
+  // the helper's own log carries the lifecycle batch key — the successor instrument's grammar
+  assert.ok(await waitFor(() => child.stdoutText.includes('"batch":["baseline_skipped:2026-08-15T08:04:46.059708+00:00"]')), "batch key absent from helper log");
+  child.kill("SIGKILL");
+  await daemon.close();
+});

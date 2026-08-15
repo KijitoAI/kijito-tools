@@ -18,8 +18,12 @@ Date: 2026-07-28 (amended 2026-08-11; status corrected 2026-08-12)
 >   M224 → pin → PR #6.
 > - **Still open from this plan:** the M223 kill-driver-and-observe-a-page operational
 >   acceptance (to run during the packaged re-arm), and C2/C4 as re-cut under PR #6's scope.
-> - `release-manifest.json`'s `planSha256` records the PRIOR revision of this file by design
->   (provenance, not a gate — do not re-stamp it for this prose edit).
+> - `release-manifest.json`'s `planSha256` is RECORDED PROVENANCE, not an install gate: the
+>   installer never verifies it, but the conformance suite DOES require it to match this file —
+>   so every deliberate edit to this document re-stamps `planSha256` in the same commit (a
+>   deliberate, reviewed act; refresh-manifest.mjs intentionally refuses to do it for you).
+>   (This bullet previously claimed the hash "records the PRIOR revision" — stale since the
+>   m224 re-stamp brought it back in sync; assay gate-7 note, fixed 2026-08-15.)
 > - Under Jason's 2026-08-12 kijito-tools directive [[27367]], this provider tree becomes an
 >   installable peer provider; packaging work supersedes any remaining seat-local steps here.
 
