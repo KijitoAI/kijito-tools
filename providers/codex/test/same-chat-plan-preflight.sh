@@ -102,13 +102,16 @@ for finding in N-1 N-2 N-3; do
 done
 must_contain "$gate" "| N4-1 " "ROUND5_N4-1_TRACED"
 
-must_contain "$readme" "Do not install, upgrade, migrate" "WITHDRAWN_README_FENCE_PRESENT"
+# Gate-6 (2026-08-15): the withdrawn dedicated-thread notifier's install path was retired
+# outright with the controller era. The fences these three rows pin are now the RETIREMENT
+# declarations — same intent (nobody reinstalls or re-describes the notifier), stronger state.
+must_contain "$readme" "the controller era is over" "RETIRED_README_FENCE_PRESENT"
 must_contain "$repo_readme" 'Codex dedicated-thread provider withdrawn' \
   "WITHDRAWN_ROOT_README_FENCE_PRESENT"
-must_contain "$installer" "WITHDRAWN: dedicated-thread notifier is not same-running-session wake" \
-  "WITHDRAWN_INSTALLER_FENCE_PRESENT"
-must_contain "$dispatcher" "WITHDRAWN notifier; skills-only remains safe" \
-  "WITHDRAWN_DISPATCHER_FENCE_PRESENT"
+must_contain "$installer" "controller-era full install was retired at gate 6" \
+  "RETIRED_INSTALLER_FENCE_PRESENT"
+must_contain "$dispatcher" "controller-era full install retired at gate 6" \
+  "RETIRED_DISPATCHER_FENCE_PRESENT"
 must_contain "$parity_plan" "this historical plan does not authorize installation" \
   "WITHDRAWN_PARITY_PLAN_FENCE_PRESENT"
 must_contain "$plan" "PR #5 is closed as withdrawn" "WITHDRAWN_PR_DISPOSITION_PRESENT"

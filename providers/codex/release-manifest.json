@@ -8,49 +8,41 @@
     "packageVersion": "0.1.4",
     "repository": "https://github.com/KijitoAI/kijito-claude"
   },
-  "production": {
-    "installRoot": "~/.local/share/codex-kijito-hive",
-    "launcher": "~/.local/bin/codex-kijito-hive",
-    "installedLayout": {
-      "controller": "codex/controller.mjs",
-      "authBinding": "codex/auth-binding.mjs",
-      "wakeCore": "_shared/wake-core.mjs",
-      "cli": "cli.mjs",
-      "paneWake": "codex/pane-wake.mjs",
-      "watchdog": "codex/pane-wake-watchdog.mjs",
-      "watchdogPlistTemplate": "codex/com.kijito.pane-wake-watchdog.plist"
-    }
+  "live": {
+    "surface": "skills (deployed to ~/.codex/skills via install.mjs --skills-only) + native session wake helper (run from the checkout by kijito-start's arm step; never installed)",
+    "verify": "node providers/codex/install.mjs   (default action; also runs before any skills deploy)"
   },
   "artifacts": {
-    "authBindingSha256": "d61cb2184a1bf2741cde6ff9049450f37bdc2635bd80934ee87a9c97ade25e1a",
-    "controllerSha256": "8e07cb2912c4bcbd6fb0fa3aa97a9a9d8ae1124361eb1ab45ad968da251cdb7f",
     "wakeCoreSha256": "4a7e3a4582688a50bcd44549b9c888f745f7761136cbff04c29618c6ec0bf4cc",
-    "controllerTestsSha256": "c9c667937d16dce54e5d38a87151f8461c52414f9cdfa065d691c8468ad8991f",
-    "wakeRecoveryTestsSha256": "8aa376a379e182d25582e39dbdbb958d3f448badfff9e844767fe3f64fdda6bf",
-    "recoveryRunbookSha256": "d6f378f3cf60c7e038578993473a4b6624280b3050c06abe3d50a361d10ad3e6",
-    "releasePackagingTestsSha256": "d7478d0a004dad017bf471884e20bf5bbf7cf69a1da64cd293e5d2ce87d436f6",
-    "paneWakeSha256": "a467a5ef9437e8bdec932c01379c88b3eec71659e9a3dea29a237c1e45a53d80",
-    "paneWakeTestsSha256": "56c2d973cb5ce520397780f4e97aefa4eee8d1acd9181d8f7eb77e95d42ea97d",
-    "cliSha256": "c2f4395f08ed719f5fb03edbd3245cd8555cf231e75d87329a665da292e4ea0c",
-    "watchdogSha256": "e890dad2b7bf1b777fff48db76abf2532cb8779849bb16f2cde00bebc40c52de",
-    "watchdogTestsSha256": "8572a61ff277571e567bcf0ea8f7905f5eaea3c4c22695aff163c1c4cbc692f8",
-    "watchdogPlistSha256": "77dc2556f5d268601659dd4973288c909618f5bc47a4e49f1cd686f671143fac",
-    "postSubmitCaptureSha256": "1614bdee8e0291d72354ad5afe9dc15174c43b951da27aa47221eecf51229a13",
-    "postSubmitCapturePlainSha256": "95fc45b28a24e1ca0823e66b9852925aaff8e965a196c43b6ac1f8cba218a90d",
-    "workflowSha256": "8d7b8e1047f652418936468790ddb91d823ce38f3bece0600281ff755194fb7b",
+    "workflowSha256": "491aa702fe1b6a85d90e32036dc1138f3b6d78da5f32356a057c8e342335610a",
     "planSha256": "a8c676e719ddd6b2da19b35404b8aa768564891bb584b23634caf583db97da04",
-    "idleTranscriptRulesCaptureSha256": "58df1a8ffc92c2263b83f724564ae9a5fafaa3f056b553f4bdffd6c569c7327e",
-    "idleV0147ToolTreeCaptureSha256": "00717237dc0d8c4ab556e4e893a181ecf2bd84771a83a5eb42b6e4ac1122f77d",
     "wakeHelperSha256": "be356a72e242beb7ff18613a3845a6a2f17069b46a08f0fce51dfaf07366b596",
     "wsUdsSha256": "4da13eef89b572fb735e756cb06846a021919dec7f91c6d07989377944cc776c",
     "wakeHelperTestsSha256": "875c0fc1ce5d68fbfc905df3f6157c3d1ec274d189ec09d926fa1d216872ae5c",
     "wakeHelperIntegrationTestsSha256": "2f5a598429eb232b94b8931a920ebb871739cb3e620ef57f6ac1401f82075a3e",
     "wakeHelperMockDaemonSha256": "3406bcd46d913071c0ee293e30f46b42ad5cf8c5c77f70c4000d9bb37854dd0c"
   },
-  "ownedPaths": [
-    "~/.local/share/codex-kijito-hive",
-    "~/.local/bin/codex-kijito-hive"
-  ],
+  "legacyArtifacts": {
+    "retired": "gate 6 of the hive-user-first plan (§7 teardown protocol), 2026-08-15; machinery teardown evidence at the operator seat's ~/.local/share/codex-kijito-hive/legacy/gate6-20260815T0643Z/ (rulings 7767/7768/7771/7783); files archived under legacy/codex-controller-era-2026-08/ except the recovery runbook, whose removal is the gate-6 marker (bytes in git history at dcce0bd)",
+    "artifacts": {
+      "authBindingSha256": "d61cb2184a1bf2741cde6ff9049450f37bdc2635bd80934ee87a9c97ade25e1a",
+      "controllerSha256": "8e07cb2912c4bcbd6fb0fa3aa97a9a9d8ae1124361eb1ab45ad968da251cdb7f",
+      "controllerTestsSha256": "c9c667937d16dce54e5d38a87151f8461c52414f9cdfa065d691c8468ad8991f",
+      "wakeRecoveryTestsSha256": "8aa376a379e182d25582e39dbdbb958d3f448badfff9e844767fe3f64fdda6bf",
+      "recoveryRunbookSha256": "d6f378f3cf60c7e038578993473a4b6624280b3050c06abe3d50a361d10ad3e6",
+      "releasePackagingTestsSha256": "d7478d0a004dad017bf471884e20bf5bbf7cf69a1da64cd293e5d2ce87d436f6",
+      "paneWakeSha256": "a467a5ef9437e8bdec932c01379c88b3eec71659e9a3dea29a237c1e45a53d80",
+      "paneWakeTestsSha256": "56c2d973cb5ce520397780f4e97aefa4eee8d1acd9181d8f7eb77e95d42ea97d",
+      "cliSha256": "c2f4395f08ed719f5fb03edbd3245cd8555cf231e75d87329a665da292e4ea0c",
+      "watchdogSha256": "e890dad2b7bf1b777fff48db76abf2532cb8779849bb16f2cde00bebc40c52de",
+      "watchdogTestsSha256": "8572a61ff277571e567bcf0ea8f7905f5eaea3c4c22695aff163c1c4cbc692f8",
+      "watchdogPlistSha256": "77dc2556f5d268601659dd4973288c909618f5bc47a4e49f1cd686f671143fac",
+      "postSubmitCaptureSha256": "1614bdee8e0291d72354ad5afe9dc15174c43b951da27aa47221eecf51229a13",
+      "postSubmitCapturePlainSha256": "95fc45b28a24e1ca0823e66b9852925aaff8e965a196c43b6ac1f8cba218a90d",
+      "idleTranscriptRulesCaptureSha256": "58df1a8ffc92c2263b83f724564ae9a5fafaa3f056b553f4bdffd6c569c7327e",
+      "idleV0147ToolTreeCaptureSha256": "00717237dc0d8c4ab556e4e893a181ecf2bd84771a83a5eb42b6e4ac1122f77d"
+    }
+  },
   "forbiddenMechanisms": [
     "lifecycle hooks",
     "LaunchAgent",

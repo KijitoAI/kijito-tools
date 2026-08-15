@@ -117,8 +117,10 @@ if not armed-live), verified operational facts, and whether work resumed.
 
 ## Legacy note (fleet-operator seats only)
 
-Seats whose current-state pointer explicitly declares
-`delivery mode: app-server-seat` are running the retirement-bound headless
-controller stack: for those, follow `providers/codex/WAKE-RECOVERY-RUNBOOK.md`
-instead of the arming section above. That path is being torn down under the
-plan's §7 protocol and is never the default for a user session.
+The headless controller stack (`delivery mode: app-server-seat`) was RETIRED at
+gate 6 of the plan's §7 teardown protocol on 2026-08-15: machinery down and
+archived, mode register retired, recovery runbook removed (that removal is the
+gate-6 marker; the code is archived under `legacy/codex-controller-era-2026-08/`).
+No seat runs it. A pointer that still declares `app-server-seat` is stale —
+treat it as retired history, follow the arming section above, and correct the
+pointer.
