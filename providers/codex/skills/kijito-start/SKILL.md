@@ -65,11 +65,22 @@ session please") works with no flags and outranks this default.
    | **catch-up-only** | helper absent, daemon absent, or any precondition failed | plainly: what is missing, and that mail waits for your next prompt |
    | **isolated** | the user asked not to arm | acknowledge and skip arming |
 
-   - If the kijito-tools native wake helper is installed (it ships with the
-     option-A live-wake feature; absent = not yet installed on this machine),
-     arm it IDEMPOTENTLY per its own check-then-arm contract: it refuses to
-     double-arm, refuses loudly on another session's live arm, and reaps stale
-     state itself. Run `/kijito-start` twice and the second arm must report
+   - If the kijito-tools native wake helper is installed (it ships in
+     `providers/codex/wake-helper/kijito-wake-helper.mjs` — gate-4
+     battery-certified 2/2 on the measured WS-over-UDS daemon transport),
+     arm it IDEMPOTENTLY per its own check-then-arm contract:
+     `kijito-wake-helper arm --persona <P> --thread-id <this session's thread>
+     --events <events file> --producer-cmd "<inbox-monitor cmd>"` (plus
+     `--codex-home/--sock/--runtime` as installed). It refuses to double-arm
+     (`already-armed`, exit 0), refuses loudly on another session's live arm,
+     and reaps stale state itself; `status` reports dead-helper as
+     `alive:false` (exit 1). THE PROPERTY, not the list: **any nonzero exit
+     means NOT ARMED**, with the reason on stderr and in the helper log —
+     the enumeration (3 daemon-unavailable · 4 producer-stream faults ·
+     5 thread-gone · 6 arm-refused-other-thread · 7 arm-unverified) is
+     illustrative, never exhaustive authority. Every failure path is a LOUD
+     exit with an in-session gasp wherever a gasp is physically possible. Run
+     `/kijito-start` twice and the second arm must report
      already-armed — never a second helper: never start a second consumer on the same stream.
    - The arm runs ONE producer child owned by this session (the gate-3 measured
      default: zero install steps, ~3s to armed): the helper spawns the inbox

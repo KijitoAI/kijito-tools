@@ -316,6 +316,15 @@ async function install(options) {
   const watchdogPlist = path.join(options.sourceRoot, "com.kijito.pane-wake-watchdog.plist");
   const postSubmitCapture = path.join(options.sourceRoot, "test", "fixtures", "post-submit-capture-e.txt");
   const postSubmitCapturePlain = path.join(options.sourceRoot, "test", "fixtures", "post-submit-capture-plain.txt");
+  // Gate-5 native live wake: kijito-start's arm step causes a user session to run the helper, so
+  // the helper and its runtime import are gated (argus's PR#19 ruling — every executable artifact
+  // a skill/install path causes a user session to run belongs in the manifest); its tests + mock
+  // join per the gated-tests precedent. status-probe/TRANSPORT-NOTES stay ungated (instrument+doc).
+  const wakeHelperSource = path.join(options.sourceRoot, "wake-helper", "kijito-wake-helper.mjs");
+  const wsUdsSource = path.join(options.sourceRoot, "wake-helper", "ws-uds.mjs");
+  const wakeHelperTests = path.join(options.sourceRoot, "wake-helper", "kijito-wake-helper.test.mjs");
+  const wakeHelperIntegrationTests = path.join(options.sourceRoot, "wake-helper", "integration.test.mjs");
+  const wakeHelperMockDaemon = path.join(options.sourceRoot, "wake-helper", "mock-daemon.mjs");
   const release = JSON.parse(fs.readFileSync(sourceManifestFile, "utf8"));
   if (release.schema !== 1 || release.product !== "codex-kijito-hive") throw new Error("invalid source release manifest");
   if (release.origin?.package !== "kijito-claude"
@@ -329,7 +338,13 @@ async function install(options) {
   verifySourceCommit(options.sourceRoot, options.originGitSha, [
     sourceManifestFile, controllerSource, cliSource, authBindingSource, controllerTests,
     wakeRecoveryTests, releasePackagingTests, recoveryRunbook, wakeCoreSource,
+    wakeHelperSource, wsUdsSource, wakeHelperTests, wakeHelperIntegrationTests, wakeHelperMockDaemon,
   ]);
+  if (sha256(wakeHelperSource) !== release.artifacts.wakeHelperSha256) throw new Error("wake helper differs from gated hash");
+  if (sha256(wsUdsSource) !== release.artifacts.wsUdsSha256) throw new Error("ws-uds transport differs from gated hash");
+  if (sha256(wakeHelperTests) !== release.artifacts.wakeHelperTestsSha256) throw new Error("wake helper tests differ from gated hash");
+  if (sha256(wakeHelperIntegrationTests) !== release.artifacts.wakeHelperIntegrationTestsSha256) throw new Error("wake helper integration tests differ from gated hash");
+  if (sha256(wakeHelperMockDaemon) !== release.artifacts.wakeHelperMockDaemonSha256) throw new Error("wake helper mock daemon differs from gated hash");
   if (sha256(controllerSource) !== release.artifacts.controllerSha256) throw new Error("controller differs from gated hash");
   if (sha256(cliSource) !== release.artifacts.cliSha256) throw new Error("cli differs from gated hash");
   if (sha256(controllerTests) !== release.artifacts.controllerTestsSha256) throw new Error("controller tests differ from gated hash");
