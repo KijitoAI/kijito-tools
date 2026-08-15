@@ -155,6 +155,50 @@ test("matching completion without an idle notification permits the next wake", a
   } finally { cleanup(f); }
 });
 
+test("a persisted accepted-unresolved latch recovers ONLY on same-thread idle proof, audited, without stamping lastMailId", async () => {
+  const f = fixture();
+  const logs = [];
+  try {
+    const wedged = initialState("codex");
+    wedged.threadId = "wedged-thread";
+    wedged.lastMailId = 7496;
+    wedged.pending = [{ kind: "new", id: 7519, key: "new:7519", trigger: "mail" }];
+    wedged.inFlight = {
+      turnId: "orphan-turn",
+      digest: "0".repeat(64),
+      acceptedAt: "2026-08-14T23:58:38.910Z",
+      batch: [{ kind: "alert", id: null, key: "alert:x", trigger: "lifecycle" }],
+      unresolvedAt: "2026-08-15T00:09:10.031Z",
+      reason: "wake turn did not complete",
+    };
+    saveState(f.stateFile, wedged);
+    const controller = new HiveWakeController({ ...f, output: (line) => logs.push(JSON.parse(line)) });
+
+    // Evidence missing (different thread): the latch HOLDS, loudly.
+    controller.client = { status: "idle", threadId: "other-thread" };
+    assert.equal(controller.recoverUnresolvedInFlight({ resumedExistingThread: false }), false);
+    assert.ok(controller.state.inFlight, "latch must hold without the evidence basis");
+    assert.ok(logs.some((l) => l.event === "unresolved-inflight-held"));
+
+    // Evidence present (same thread resumed, proven idle): recover, audit, keep pending intact.
+    controller.client = { status: "idle", threadId: "wedged-thread" };
+    assert.equal(controller.recoverUnresolvedInFlight({ resumedExistingThread: true }), true);
+    assert.equal(controller.state.inFlight, null);
+    const audit = controller.state.recoveredAmbiguities.at(-1);
+    assert.equal(audit.turnId, "orphan-turn");
+    assert.equal(audit.reason, "wake turn did not complete");
+    assert.match(audit.disposition, /same thread resumed and proven idle/);
+    assert.equal(controller.state.lastMailId, 7496, "delivery never proven - lastMailId must not move");
+    assert.deepEqual(controller.pending.map((item) => item.key), ["new:7519"], "backlog stays queued for flush");
+    assert.ok(logs.some((l) => l.event === "unresolved-inflight-recovered"));
+
+    // Reload: the recovery is durable and flush is no longer refused by the latch.
+    const reloaded = new HiveWakeController({ ...f, output: () => {} });
+    assert.equal(reloaded.state.inFlight, null);
+    assert.equal(reloaded.state.recoveredAmbiguities.at(-1).turnId, "orphan-turn");
+  } finally { cleanup(f); }
+});
+
 test("agent output and possible mail summaries never enter controller state or logs", async () => {
   const f = fixture();
   const logs = [];

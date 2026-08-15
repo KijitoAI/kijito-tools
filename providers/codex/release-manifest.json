@@ -23,10 +23,10 @@
   },
   "artifacts": {
     "authBindingSha256": "d61cb2184a1bf2741cde6ff9049450f37bdc2635bd80934ee87a9c97ade25e1a",
-    "controllerSha256": "14a0f3bb1f9fffe21078d82e601dd44e802110968ebbf5e7a59849974d20b335",
+    "controllerSha256": "8e07cb2912c4bcbd6fb0fa3aa97a9a9d8ae1124361eb1ab45ad968da251cdb7f",
     "wakeCoreSha256": "4a7e3a4582688a50bcd44549b9c888f745f7761136cbff04c29618c6ec0bf4cc",
     "controllerTestsSha256": "c9c667937d16dce54e5d38a87151f8461c52414f9cdfa065d691c8468ad8991f",
-    "wakeRecoveryTestsSha256": "e302b3f8e2dc9503838caa4ee0ea263d3b013c865d4f89ea1e63921c87c30e6f",
+    "wakeRecoveryTestsSha256": "8aa376a379e182d25582e39dbdbb958d3f448badfff9e844767fe3f64fdda6bf",
     "recoveryRunbookSha256": "d6f378f3cf60c7e038578993473a4b6624280b3050c06abe3d50a361d10ad3e6",
     "releasePackagingTestsSha256": "d7478d0a004dad017bf471884e20bf5bbf7cf69a1da64cd293e5d2ce87d436f6",
     "paneWakeSha256": "a467a5ef9437e8bdec932c01379c88b3eec71659e9a3dea29a237c1e45a53d80",
