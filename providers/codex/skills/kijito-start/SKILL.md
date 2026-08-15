@@ -70,7 +70,7 @@ session please") works with no flags and outranks this default.
      arm it IDEMPOTENTLY per its own check-then-arm contract: it refuses to
      double-arm, refuses loudly on another session's live arm, and reaps stale
      state itself. Run `/kijito-start` twice and the second arm must report
-     already-armed — never a second helper.
+     already-armed — never a second helper: never start a second consumer on the same stream.
    - The arm runs ONE producer child owned by this session (the gate-3 measured
      default: zero install steps, ~3s to armed): the helper spawns the inbox
      monitor session-scoped and holds its pid, so if the producer ever dies the
@@ -84,7 +84,7 @@ session please") works with no flags and outranks this default.
      floor is honest catch-up, not an improvised wake path.
    - A dead helper must never look armed: if you cannot positively verify the
      arm (the helper's own verification, not process existence), report
-     catch-up-only with what failed.
+     catch-up-only with what failed — a running process alone is not an armed inbox.
 
 7. If mail is expected but absent, check the producer (the supervised
    Kijito-monitor install) before concluding "no mail" — an absent or silent
