@@ -37,6 +37,14 @@ const CLIENT_FRESHNESS_FLOOR_MS = 30_000;
 // above.
 const TURN_INFLIGHT_GRACE_MS = 15 * 60_000;
 
+// A persisted accepted-unresolved latch means flush() is refusing and the seat delivers NOTHING,
+// however fresh the beats — the wedge the beat bound structurally cannot see (measured
+// 2026-08-15: an outage-orphaned wake turn latched delivery shut for 100+ minutes while every
+// liveness surface stayed green). unresolvedAt is stamped only after the controller itself gave
+// up on the turn, so a short grace covers the boot-recovery race; beyond it, page. A
+// future-dated stamp pages immediately — out-of-character observables never read as health.
+const DELIVERY_LATCH_GRACE_MS = 10 * 60_000;
+
 function readPrivateJson(file) {
   let stat;
   try {
@@ -88,6 +96,18 @@ function readControllerLiveness(stateFile, now = Date.now()) {
     }
     return { status: "stale", ...base };
   }
+  // Delivery-layer check (independent of beat freshness): an unresolved latch is a wedge.
+  const latch = state.inFlight;
+  const unresolvedRaw = latch && typeof latch === "object" && !Array.isArray(latch)
+    ? latch.unresolvedAt : undefined;
+  if (typeof unresolvedRaw === "string") {
+    const unresolvedAt = Date.parse(unresolvedRaw);
+    const latchAgeMs = now - unresolvedAt;
+    if (!Number.isFinite(unresolvedAt) || latchAgeMs < 0 || latchAgeMs > DELIVERY_LATCH_GRACE_MS) {
+      return { status: "stale", reason: "delivery-latched-unresolved", latchAgeMs, ...base };
+    }
+    return { status: "degraded", reason: "delivery-latch-pending-recovery", latchAgeMs, ...base };
+  }
   // Beating but the supervised child is not idle-healthy: degraded, exactly like a beating pane
   // driver with a broken input path. The controller alarms about its own child through its log;
   // paging here would double it.
@@ -132,4 +152,4 @@ function readModeLiveness(registerFile, options, now = Date.now()) {
   return { mode: declared.mode, ...readAttendedLiveness(options.consumerLockFile) };
 }
 
-export { readModeLiveness, readControllerLiveness, readAttendedLiveness, CLIENT_FRESHNESS_FLOOR_MS, TURN_INFLIGHT_GRACE_MS };
+export { readModeLiveness, readControllerLiveness, readAttendedLiveness, CLIENT_FRESHNESS_FLOOR_MS, TURN_INFLIGHT_GRACE_MS, DELIVERY_LATCH_GRACE_MS };

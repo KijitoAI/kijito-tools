@@ -32,7 +32,7 @@ function fixture() {
   };
 }
 
-function controllerState(f, { agoMs = 0, alive = true, pollMs = 500, clientStatus = "idle", inFlightAgoMs = null } = {}) {
+function controllerState(f, { agoMs = 0, alive = true, pollMs = 500, clientStatus = "idle", inFlightAgoMs = null, unresolvedAgoMs = null } = {}) {
   fs.writeFileSync(f.stateFile, `${JSON.stringify({
     schema: 2,
     persona: "codex",
@@ -43,11 +43,15 @@ function controllerState(f, { agoMs = 0, alive = true, pollMs = 500, clientStatu
       checkedAt: new Date(Date.now() - agoMs).toISOString(),
       pollMs,
     },
-    inFlight: inFlightAgoMs === null ? null : {
+    inFlight: inFlightAgoMs === null && unresolvedAgoMs === null ? null : {
       turnId: "test-turn",
       digest: "0".repeat(64),
-      acceptedAt: new Date(Date.now() - inFlightAgoMs).toISOString(),
+      acceptedAt: new Date(Date.now() - (inFlightAgoMs ?? unresolvedAgoMs)).toISOString(),
       batch: [],
+      ...(unresolvedAgoMs === null ? {} : {
+        unresolvedAt: new Date(Date.now() - unresolvedAgoMs).toISOString(),
+        reason: "wake turn did not complete",
+      }),
     },
   })}\n`, { mode: 0o600 });
 }
@@ -209,6 +213,29 @@ test("a stalled beat during a FRESH in-flight turn is busy (degraded), not an ou
     // An acceptedAt from the future is out of character and never suppresses.
     controllerState(f, { agoMs: 46_000, pollMs: 500, inFlightAgoMs: -60_000 });
     assert.equal(readControllerLiveness(f.stateFile).status, "stale", "future acceptedAt");
+  } finally { cleanup(f); }
+});
+
+test("an unresolved delivery latch is a wedge, however fresh the beats — pages past grace, degraded within it", () => {
+  const f = fixture();
+  try {
+    // The 2026-08-15 shape: beats fresh, client idle, latch unresolved for 100+ minutes.
+    // Old code read this ALIVE while the seat delivered nothing.
+    controllerState(f, { agoMs: 1_000, unresolvedAgoMs: 100 * 60_000 });
+    const wedged = readControllerLiveness(f.stateFile);
+    assert.equal(wedged.status, "stale");
+    assert.equal(wedged.reason, "delivery-latched-unresolved");
+    // Within the grace (boot-recovery race window): visible but non-paging.
+    controllerState(f, { agoMs: 1_000, unresolvedAgoMs: 60_000 });
+    const pendingRecovery = readControllerLiveness(f.stateFile);
+    assert.equal(pendingRecovery.status, "degraded");
+    assert.equal(pendingRecovery.reason, "delivery-latch-pending-recovery");
+    // Future-dated unresolvedAt is out of character and pages immediately.
+    controllerState(f, { agoMs: 1_000, unresolvedAgoMs: -60_000 });
+    assert.equal(readControllerLiveness(f.stateFile).status, "stale", "future unresolvedAt");
+    // A fresh in-flight turn WITHOUT an unresolved stamp stays exactly as before (no regression).
+    controllerState(f, { agoMs: 1_000, inFlightAgoMs: 5_000 });
+    assert.equal(readControllerLiveness(f.stateFile).status, "alive");
   } finally { cleanup(f); }
 });
 

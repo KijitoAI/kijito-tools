@@ -638,6 +638,35 @@ export class HiveWakeController {
     return true;
   }
 
+  // BOUNDED RECOVERY for a persisted accepted-unresolved inFlight latch (2026-08-15 incident:
+  // an outage-orphaned wake turn latched delivery shut, and NO code path could clear it — a
+  // restart-proof wedge while every liveness surface stayed green). The latch exists so a
+  // possibly-delivered turn is never double-delivered; the evidence that resolves it is the
+  // same evidence the legacy latch uses: THIS controller resumed the SAME thread and proved it
+  // idle — an idle thread cannot carry a live turn, so the orphaned turn is definitively
+  // terminal. Recovery moves the latch verbatim to recoveredAmbiguities (audit, kept forever)
+  // and lets flush proceed; batch items still in pending redeliver under the existing
+  // at-least-once semantics. lastMailId is deliberately NOT stamped — delivery was never
+  // proven. Anything short of the full evidence basis HOLDS the latch and says so.
+  recoverUnresolvedInFlight({ resumedExistingThread }) {
+    const latch = this.state.inFlight;
+    if (!latch || typeof latch.unresolvedAt !== "string") return false;
+    if (!resumedExistingThread || this.client.threadId !== this.state.threadId
+      || this.client.status !== "idle") {
+      this.log({ event: "unresolved-inflight-held", reason: "same-thread-idle-proof-missing", turnId: latch.turnId ?? null });
+      return false;
+    }
+    this.state.recoveredAmbiguities.push({
+      ...latch,
+      recoveredAt: new Date().toISOString(),
+      disposition: "boot-recovery: same thread resumed and proven idle; orphaned wake turn is terminal",
+    });
+    this.state.inFlight = null;
+    this.persist();
+    this.log({ event: "unresolved-inflight-recovered", turnId: latch.turnId ?? null, threadId: this.state.threadId });
+    return true;
+  }
+
   async flush() {
     if (this.busy || this.stopping || this.pending.length === 0 || this.state.ambiguous || this.state.inFlight) return;
     if (this.client.status !== "idle") return;
@@ -759,6 +788,9 @@ export class HiveWakeController {
       this.recordClientStatus({ persist: false });
       this.recoverExactLegacyLatch({
         priorThreadId,
+        resumedExistingThread: this.client.resumedExistingThread,
+      });
+      this.recoverUnresolvedInFlight({
         resumedExistingThread: this.client.resumedExistingThread,
       });
       this.initializeEventCursor();
