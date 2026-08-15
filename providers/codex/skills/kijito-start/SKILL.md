@@ -102,6 +102,27 @@ session please") works with no flags and outranks this default.
    producer is indistinguishable from an empty mailbox to any consumer. Report
    producer trouble loudly; do not arm anything on top of a dead producer.
 
+### Upgrade path — after the kijito-tools checkout advances (main moved)
+
+The helper runs FROM THE CHECKOUT, so a main advance creates: RUNNING helper =
+old bytes, DISK = new gated bytes, pidfile live. `arm` on that state correctly
+reports `already-armed` and NEVER silently kills or swaps the live helper — an
+old helper keeps running until you retire it explicitly. The explicit path:
+
+1. `kijito-wake-helper stop` (graceful; logs `helper-exit`),
+2. `node providers/codex/install.mjs` — the release gate must PASS on the new
+   bytes before anything runs them,
+3. re-`arm` per step 6,
+4. `node providers/codex/install.mjs --skills-only` then the drift check —
+   deployed skills go stale on every main advance that edits them, and nothing
+   else re-deploys them (the standing trigger for the class assay caught at
+   gate-7 certification).
+
+Verify the swap BY EFFECT, not by intention: the new `armed` record stamps
+`helperSha256` + `wakeCoreSha256` — one log-line read proves WHICH bytes are
+armed (they must equal the new checkout's gated hashes in
+`release-manifest.json`).
+
 ## Resume
 
 8. If the pointer says `RESUME NOW`, continue the exact next step toward its

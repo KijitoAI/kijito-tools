@@ -57,6 +57,11 @@ After editing any gated file (`wake-helper/*.mjs`, `../_shared/wake-core.mjs`, t
 run `node tools/refresh-manifest.mjs` — otherwise verify fails with a hash mismatch that reads
 like corruption rather than a stale manifest.
 
+VERIFIED lists 6 of the manifest's 8 hashes by design: `workflowSha256` is a repo-side gate
+(built payloads never ship `.github/`, so refresh-manifest `--check` owns it via the
+conformance suite) and `planSha256` is recorded provenance (never a gate; re-stamped only as
+a deliberate act when the parity plan itself is edited).
+
 ## Skills deploy
 
 ```sh

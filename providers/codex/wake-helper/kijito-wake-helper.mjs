@@ -20,12 +20,25 @@
 // the thread id. stale -> reap+arm; live+same-thread -> "already-armed" (exit 0, idempotent —
 // the DOUBLE-ARM battery probe); live+other-thread -> loud refuse, never kill the other helper.
 
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
 import { parseEventLine, fixedWakeText } from "../../_shared/wake-core.mjs";
 import { connectWsUds } from "./ws-uds.mjs";
+
+// Gate-7 R2 (argus 7809): the armed record stamps the sha256 of the helper's OWN bytes and of
+// its runtime import, so "which bytes are running" is derivable from the log after a main
+// advance — the by-effect proof for the upgrade path (stop → verify → arm) is one log-line
+// read, and the successor liveness instrument gets version attribution for free. Computed once
+// at module load from the files actually loaded; a failure here is a real integrity problem
+// and should be loud, not defaulted.
+const HELPER_FILE = fileURLToPath(import.meta.url);
+const WAKE_CORE_FILE = path.join(path.dirname(HELPER_FILE), "..", "..", "_shared", "wake-core.mjs");
+const sha256File = (file) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+export const HELPER_SHA256 = sha256File(HELPER_FILE);
+export const WAKE_CORE_SHA256 = sha256File(WAKE_CORE_FILE);
 
 const POLL_MS = 500;              // events file poll (tail-by-offset; inode-change aware)
 const IDLE_RECHECK_MS = 1_000;    // defer-until-idle recheck cadence (belt for missed notify)
@@ -214,7 +227,8 @@ export class WakeHelper {
     this.offset = st.size; // arm from NOW; catch-up owns the past (plan §2a)
     // pid is stamped so the arm wrapper can bind this record to ITS child — an armed line
     // from a previous run (same thread, persistent log) must never verify a new arm (F1).
-    this.log({ event: "armed", pid: process.pid, threadId: this.threadId, eventsFile: this.eventsFile, offset: this.offset });
+    // helperSha256/wakeCoreSha256 are stamped so the record also says WHICH bytes armed (R2).
+    this.log({ event: "armed", pid: process.pid, threadId: this.threadId, eventsFile: this.eventsFile, offset: this.offset, helperSha256: HELPER_SHA256, wakeCoreSha256: WAKE_CORE_SHA256 });
     this.pollTimer = setInterval(() => this.pollEvents().catch((e) => this.log({ event: "poll-error", error: e.message })), POLL_MS);
     this.idleTimer = setInterval(() => this.deliverIfReady().catch(() => {}), IDLE_RECHECK_MS);
   }
