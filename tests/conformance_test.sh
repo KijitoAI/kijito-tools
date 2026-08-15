@@ -144,7 +144,14 @@ fi
 echo
 echo "== codex release manifest hashes are current =="
 if [ -f "$REPO/providers/codex/tools/refresh-manifest.mjs" ]; then
-  if node "$REPO/providers/codex/tools/refresh-manifest.mjs" --check >/dev/null 2>&1; then
+  # "Could not measure" and "check failed" are different answers and must never collapse:
+  # under a minimal PATH (launchd/systemd contexts) a missing `node` exits 127, and the old
+  # one-liner read that as STALE — a confident verdict from an unmeasurable state (third
+  # minimal-PATH specimen of this class, 2026-08-15). Resolve the tool first; its absence is
+  # its own loud failure, never a staleness claim.
+  if ! NODE_BIN=$(command -v node); then
+    red "cannot verify release-manifest hashes — no 'node' on PATH (NOT a staleness verdict; fix the PATH or install node)"
+  elif "$NODE_BIN" "$REPO/providers/codex/tools/refresh-manifest.mjs" --check >/dev/null 2>&1; then
     grn "release-manifest.json gated hashes match the files on disk"
   else
     red "release-manifest.json is STALE — run: node providers/codex/tools/refresh-manifest.mjs"
