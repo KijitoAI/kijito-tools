@@ -15,6 +15,14 @@ This provider consumes the shipped Kijito monitor's per-persona event stream and
 Codex app-server thread. It does not install hooks, plugins, LaunchAgents, model catalogs, or changes
 to the ordinary Codex home.
 
+## User setup (memory, skills, hive mail)
+
+End-user setup — the one-block Kijito config for Codex, the skills install, the session-owned
+hive-mail producer (the measured default: zero install steps, loud death, mail waits when no
+session runs), and the optional count-only notify shim — lives in
+[`docs-codex-setup.md`](docs-codex-setup.md). The always-on supervised producer install stays
+documented in the monitor README as the optional path.
+
 The remaining sections describe the withdrawn research artifact for provenance and review only.
 Production previously used an explicit, isolated install: one private root and one launcher. Nothing
 starts at login, and the installer refuses to overwrite an existing target.
