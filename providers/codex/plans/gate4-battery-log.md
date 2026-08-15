@@ -146,3 +146,39 @@ follows per protocol (gate-5 ship only after assay's 2/2 read).
 helper's argv self-matches both the producer pattern and `app-server` patterns, so counts
 used binary-anchored patterns / `ps -o comm`; and a SIGTERM'd producer drains its long-poll
 (≤ ~35s) before exiting, so post-stop censuses waited out the drain window.)
+
+## Addendum — post-certification steward findings and conditional cert carry (2026-08-15 06:1x-06:2xZ)
+
+Argus's steward review of the gate-5 PR (#19, review msg 7748) found two code defects in the
+helper the battery had certified, plus a doc gap; the joint argus+assay ruling (7751/7750):
+**certification CARRIES CONDITIONALLY** — no full battery reset — on four conditions, all met:
+
+1. **Mutation-proven regression tests.** F1 (a stale "armed" line from a previous run in the
+   persistent ndjson false-verifies a new arm whose child is slow to fail — the arm wrapper
+   matched threadId only, and a SIGKILL'd helper leaves no exit line) and F2 (a line torn
+   across the 256KB read cap is silently dropped — offset advanced past the torn head).
+   Both structurally forced by new tests and run BOTH WAYS: pre-fix bytes FAIL exactly as
+   diagnosed (F1 false-arms off the stale record; F2 never delivers), fixed bytes pass.
+   Fix commit 64192dc: pid-stamped armed records + post-spawn-bytes-only scanning bound to
+   child.pid (two independent guards); consumption stops at the last complete line with a
+   torn-line diagnostic.
+2. **Full helper suite both platforms:** 19/19 macOS, 19/19 Linux, on the fixed bytes.
+3. **Targeted real-daemon re-run on fixed bytes** (rows 1, 5a, 6b; fresh thread 01a00411,
+   standard census brackets, teardown 0/0/0): row 1 GREEN (doorbell→submit 6ms, exact-row
+   render); row 5a GREEN (`already-armed`, census 1 — F1's surface, now pid-bound); row 6b
+   GREEN with the F1 fix demonstrated live: SIGKILL residue (stale pidfile + stale armed
+   line in the log + status `alive:false`), and the subsequent re-arm did NOT false-arm —
+   it failed LOUD on the orphan's held state-lock (exit 7), exactly the loud-by-design
+   contract the pre-fix bytes violated in the diagnosed window. Evidence:
+   `evidence/conditional-rerun-helper.ndjson`.
+4. **Row-4/7 carry rationale (assay's cert-delta ruling):** the F1/F2 fixes touch the arm
+   wrapper's verification scan and pollEvents' consumption boundary; neither changes the
+   filter contract (row 4: `parseEventLine` untouched), the defer machinery, nor the
+   delivery path (rows 7a/7b: `deliverIfReady` untouched) — the certified behaviors of the
+   unchanged code paths carry, and the changed paths are re-proven by conditions 1-3.
+
+Also per the review: F3 (SKILL.md exit-code enumeration completed and restated as the
+property — any nonzero exit means NOT armed); gating ruling implemented (helper, ws-uds,
+both test files, and the mock daemon added to `release-manifest.json` via the refresh map +
+install.mjs source-commit list and hash checks, deliberate re-stamp in the same commit;
+status-probe and TRANSPORT-NOTES deliberately ungated: instrument + doc, off the user path).
