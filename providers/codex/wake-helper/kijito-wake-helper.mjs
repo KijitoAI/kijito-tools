@@ -212,7 +212,9 @@ export class WakeHelper {
     const st = fs.statSync(this.eventsFile);
     this.eventIno = st.ino;
     this.offset = st.size; // arm from NOW; catch-up owns the past (plan §2a)
-    this.log({ event: "armed", threadId: this.threadId, eventsFile: this.eventsFile, offset: this.offset });
+    // pid is stamped so the arm wrapper can bind this record to ITS child — an armed line
+    // from a previous run (same thread, persistent log) must never verify a new arm (F1).
+    this.log({ event: "armed", pid: process.pid, threadId: this.threadId, eventsFile: this.eventsFile, offset: this.offset });
     this.pollTimer = setInterval(() => this.pollEvents().catch((e) => this.log({ event: "poll-error", error: e.message })), POLL_MS);
     this.idleTimer = setInterval(() => this.deliverIfReady().catch(() => {}), IDLE_RECHECK_MS);
   }
@@ -243,9 +245,21 @@ export class WakeHelper {
     try {
       const len = Math.min(st.size - this.offset, 256 * 1024);
       const buf = Buffer.alloc(len);
-      fs.readSync(fd, buf, 0, len, this.offset);
-      this.offset += len;
-      text = buf.toString("utf8");
+      const got = fs.readSync(fd, buf, 0, len, this.offset);
+      text = buf.subarray(0, got).toString("utf8");
+      // F2: consume only through the last complete line. A line torn across the read cap
+      // (deterministic whenever a poll sees >256KB) or a mid-write read would otherwise be
+      // parsed as a fragment and SILENTLY dropped — a missed wake, the exact class this tool
+      // exists to make loud. The unconsumed tail is re-read next poll; if a fragment sits
+      // unfinished longer than one poll we say so rather than stay quiet.
+      const lastNl = text.lastIndexOf("\n");
+      if (lastNl === -1) {
+        // No complete line in this chunk: consume nothing; diagnose oversized/torn fragments.
+        if (got >= len && len === 256 * 1024) this.log({ event: "torn-line", note: "fragment exceeds read cap; waiting for newline", offset: this.offset });
+        return;
+      }
+      this.offset += Buffer.byteLength(text.slice(0, lastNl + 1), "utf8");
+      text = text.slice(0, lastNl + 1);
     } finally {
       fs.closeSync(fd);
     }
@@ -382,6 +396,11 @@ async function main() {
     }
     fs.mkdirSync(runtimeDir, { recursive: true, mode: 0o700 });
     const logFile = path.join(runtimeDir, `helper-${persona}.ndjson`);
+    // F1: the log persists across runs ("a" mode), and a SIGKILL'd helper leaves no
+    // helper-exit line — so a stale "armed" record from a PREVIOUS run must never verify
+    // THIS arm. Two independent guards: scan only bytes appended after our spawn, and bind
+    // the armed record to our child by the pid the run process stamps into it.
+    const preSpawnSize = fs.existsSync(logFile) ? fs.statSync(logFile).size : 0;
     const out = fs.openSync(logFile, "a");
     const child = spawn(process.execPath, [new URL(import.meta.url).pathname, "run",
       "--persona", persona, "--thread-id", threadId, "--events", opts.events,
@@ -390,18 +409,25 @@ async function main() {
       ...(opts["producer-cmd"] ? ["--producer-cmd", opts["producer-cmd"]] : [])],
     { detached: true, stdio: ["ignore", out, out] });
     child.unref();
-    // Verify the arm by its OWN evidence (running-is-not-armed): wait for the armed line or a
-    // loud exit, then say which.
+    // Verify the arm by its OWN evidence (running-is-not-armed): wait for OUR child's armed
+    // line or a loud exit, then say which.
     const deadline = Date.now() + 10_000;
     let verdict = null;
     while (Date.now() < deadline && verdict === null) {
       await new Promise((r) => setTimeout(r, 300));
-      const tailText = fs.readFileSync(logFile, "utf8");
-      const lines = tailText.trim().split("\n").slice(-10);
-      for (const line of lines.reverse()) {
+      const size = fs.statSync(logFile).size;
+      if (size <= preSpawnSize) continue;
+      const fd = fs.openSync(logFile, "r");
+      let appended;
+      try {
+        const buf = Buffer.alloc(size - preSpawnSize);
+        fs.readSync(fd, buf, 0, buf.length, preSpawnSize);
+        appended = buf.toString("utf8");
+      } finally { fs.closeSync(fd); }
+      for (const line of appended.trim().split("\n").reverse()) {
         try {
           const rec = JSON.parse(line);
-          if (rec.event === "armed" && rec.threadId === threadId) { verdict = `armed pid=${child.pid}`; break; }
+          if (rec.event === "armed" && rec.threadId === threadId && rec.pid === child.pid) { verdict = `armed pid=${child.pid}`; break; }
           if (rec.event === "helper-exit") { verdict = `failed: ${rec.reason}`; break; }
         } catch { /* partial line */ }
       }

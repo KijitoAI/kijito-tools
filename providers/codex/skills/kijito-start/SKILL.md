@@ -74,9 +74,12 @@ session please") works with no flags and outranks this default.
      `--codex-home/--sock/--runtime` as installed). It refuses to double-arm
      (`already-armed`, exit 0), refuses loudly on another session's live arm,
      and reaps stale state itself; `status` reports dead-helper as
-     `alive:false` (exit 1), and every failure path is a LOUD exit
-     (3 daemon-unavailable · 4 producer-stream faults · 5 thread-gone) with an
-     in-session gasp wherever a gasp is physically possible. Run
+     `alive:false` (exit 1). THE PROPERTY, not the list: **any nonzero exit
+     means NOT ARMED**, with the reason on stderr and in the helper log —
+     the enumeration (3 daemon-unavailable · 4 producer-stream faults ·
+     5 thread-gone · 6 arm-refused-other-thread · 7 arm-unverified) is
+     illustrative, never exhaustive authority. Every failure path is a LOUD
+     exit with an in-session gasp wherever a gasp is physically possible. Run
      `/kijito-start` twice and the second arm must report
      already-armed — never a second helper: never start a second consumer on the same stream.
    - The arm runs ONE producer child owned by this session (the gate-3 measured

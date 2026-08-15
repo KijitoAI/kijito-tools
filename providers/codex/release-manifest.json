@@ -40,7 +40,12 @@
     "workflowSha256": "8d7b8e1047f652418936468790ddb91d823ce38f3bece0600281ff755194fb7b",
     "planSha256": "a8c676e719ddd6b2da19b35404b8aa768564891bb584b23634caf583db97da04",
     "idleTranscriptRulesCaptureSha256": "58df1a8ffc92c2263b83f724564ae9a5fafaa3f056b553f4bdffd6c569c7327e",
-    "idleV0147ToolTreeCaptureSha256": "00717237dc0d8c4ab556e4e893a181ecf2bd84771a83a5eb42b6e4ac1122f77d"
+    "idleV0147ToolTreeCaptureSha256": "00717237dc0d8c4ab556e4e893a181ecf2bd84771a83a5eb42b6e4ac1122f77d",
+    "wakeHelperSha256": "be356a72e242beb7ff18613a3845a6a2f17069b46a08f0fce51dfaf07366b596",
+    "wsUdsSha256": "4da13eef89b572fb735e756cb06846a021919dec7f91c6d07989377944cc776c",
+    "wakeHelperTestsSha256": "875c0fc1ce5d68fbfc905df3f6157c3d1ec274d189ec09d926fa1d216872ae5c",
+    "wakeHelperIntegrationTestsSha256": "2f5a598429eb232b94b8931a920ebb871739cb3e620ef57f6ac1401f82075a3e",
+    "wakeHelperMockDaemonSha256": "3406bcd46d913071c0ee293e30f46b42ad5cf8c5c77f70c4000d9bb37854dd0c"
   },
   "ownedPaths": [
     "~/.local/share/codex-kijito-hive",

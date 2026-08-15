@@ -195,3 +195,68 @@ test("SIGTERM -> gasp + pidfile cleanup (graceful path of §6 row 5)", async () 
   assert.equal(fs.existsSync(path.join(env.runtime, "helper-codex.pid")), false, "pidfile must be reaped");
   await daemon.close();
 });
+
+// ── F1 regression (argus PR#19 review): a stale "armed" line from a PREVIOUS run in the
+// persistent ndjson must never verify a NEW arm whose child is still attaching (or failing
+// slowly). Pre-fix bytes report "armed pid=<new>" off the old record at the first 300ms
+// tick; fixed bytes scan only post-spawn appended bytes AND bind on the child's own pid.
+test("F1: stale armed line from a previous run never verifies a new arm", async () => {
+  const { createServer } = await import("node:net");
+  const env = mkEnv("f1stale");
+  fs.mkdirSync(env.runtime, { recursive: true });
+  // A previous run's armed record: same thread, dead pid, no helper-exit after it (the
+  // SIGKILL residue shape the battery documented).
+  fs.writeFileSync(path.join(env.runtime, "helper-codex.ndjson"),
+    JSON.stringify({ ts: "2026-08-15T00:00:00.000Z", event: "armed", pid: 424242, threadId: "T1", eventsFile: env.events, offset: 0 }) + "\n");
+  // A socket that ACCEPTS but never completes the WS handshake: the new child hangs in
+  // connect — the exact "still attaching" window the false-arm needs.
+  const hang = createServer(() => { /* accept, say nothing */ });
+  await new Promise((r) => hang.listen(env.sock, r));
+  const wrapper = spawn(process.execPath, [HELPER, "arm",
+    "--persona", "codex", "--thread-id", "T1", "--events", env.events,
+    "--sock", env.sock, "--runtime", env.runtime], { stdio: ["ignore", "pipe", "pipe"] });
+  wrapper.stdoutText = ""; wrapper.stderrText = "";
+  wrapper.stdout.on("data", (d) => { wrapper.stdoutText += d; });
+  wrapper.stderr.on("data", (d) => { wrapper.stderrText += d; });
+  const [code] = await once(wrapper, "exit");
+  assert.notEqual(code, 0, `wrapper must not verify: stdout=${wrapper.stdoutText}`);
+  assert.ok(!wrapper.stdoutText.includes("armed pid="), `false-arm off stale record: ${wrapper.stdoutText}`);
+  hang.close();
+  // Reap the hung run child so no orphan outlives the test.
+  try {
+    const kids = (await import("node:child_process")).execSync(`pgrep -P ${wrapper.pid} 2>/dev/null || true`).toString().trim();
+    for (const k of kids.split("\n").map(Number).filter(Boolean)) process.kill(k, "SIGKILL");
+  } catch { /* already gone */ }
+  try { (await import("node:child_process")).execSync(`pkill -f "run --persona codex --thread-id T1 --events ${env.events}" 2>/dev/null || true`); } catch { /* gone */ }
+});
+
+// ── F2 regression (argus PR#19 review): a mail line torn EXACTLY across the 256KB read cap
+// must still deliver, exactly once. Pre-fix bytes advance offset past the torn head and the
+// event silently vanishes; fixed bytes consume only through the last complete line.
+test("F2: line torn across the 256KB read cap delivers exactly once", async () => {
+  const CAP = 256 * 1024;
+  const env = mkEnv("f2torn");
+  const daemon = new MockDaemon(env.sock);
+  await daemon.listen();
+  const child = startHelper(env);
+  assert.ok(await waitFor(() => child.stdoutText.includes('"event":"armed"')), `no armed: ${child.stderrText}`);
+  const mail = mailLine(505);
+  // Filler of IGNORABLE (wrong-persona) lines sized so the mail line straddles byte CAP:
+  // total filler length L with L < CAP < L + mail.length (cut lands 10 bytes into the mail).
+  const L = CAP - 10;
+  const unit = JSON.stringify({ source: "kijito-inbox", persona: "other", event: "new", id: 1 }) + "\n";
+  let filler = unit.repeat(Math.floor((L - 200) / unit.length));
+  const padLen = L - filler.length;
+  const padObj = `{"source":"kijito-inbox","persona":"other","event":"new","id":1,"pad":"${"x".repeat(Math.max(0, padLen - 72))}"}\n`;
+  filler += padObj + " ".repeat(L - filler.length - padObj.length >= 0 ? 0 : 0);
+  // Exactness of L matters only to within the mail line's length; assert the straddle holds.
+  assert.ok(filler.length < CAP && filler.length + mail.length > CAP,
+    `straddle broken: filler=${filler.length} mail=${mail.length} cap=${CAP}`);
+  fs.appendFileSync(env.events, filler + mail);
+  assert.ok(await waitFor(() => daemon.turnStarts().length >= 1, 8_000), "torn-line event never delivered");
+  await new Promise((r) => setTimeout(r, 1_200));
+  assert.equal(daemon.turnStarts().length, 1, "must deliver exactly once");
+  assert.match(daemon.turnStarts()[0].params.input[0].text, /Message IDs: 505/);
+  child.kill("SIGKILL");
+  await daemon.close();
+});
