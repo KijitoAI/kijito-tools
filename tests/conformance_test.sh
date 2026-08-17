@@ -80,10 +80,22 @@ EOF
 fi
 
 # ── discover providers ──
+# Not every directory under providers/ is a persona provider. Two are shared FOUNDATIONS that ship
+# no persona harness integration, so the persona-provider contract below (an installer + the
+# kijito-start / kijito-qa-memory skills stating the shared doctrine) does not apply to them:
+#   _shared  — the provider-neutral shared code (wake-core.mjs et al.).
+#   monitor  — the Kijito Inbox Monitor foundation, imported verbatim under P0-F29/A29. It is the
+#              inbox-monitor package (a producer + its tests and service templates), NOT a persona
+#              provider; by design it ships no install.sh/install.mjs and no persona skills.
+# This is an EXPLICIT allowlist, named on purpose — NOT a generic "skip any dir without an installer".
+# A real persona provider that forgot its installer or skills must still FAIL here, so we name the
+# two known foundations rather than exempt installer-less dirs wholesale.
+# What this stops checking: the installer and shared-doctrine-skill invariants are not enforced
+# against `monitor` (correct — monitor has neither and, being a foundation, should have neither).
 PROVIDERS=""
 for d in "$REPO"/providers/*/; do
   n="$(basename "$d")"
-  [ "$n" = "_shared" ] && continue
+  case "$n" in _shared|monitor) continue ;; esac
   PROVIDERS="$PROVIDERS $n"
 done
 echo "== providers discovered:$PROVIDERS =="
