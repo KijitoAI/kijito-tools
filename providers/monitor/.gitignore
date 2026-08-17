@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Node (npm signpost shim)
+node_modules/
+*.tgz
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# local
+*.log
+.env
+
+# throwaway verification harness (not part of the deliverable)
+_verify.py
+_verify_result.txt
+
+# runtime state / lock files
+*.json.lock
+*.lock
