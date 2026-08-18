@@ -1,6 +1,6 @@
 {
   "name": "kijito-claude",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Installer for the kijito-claude toolkit: copies the context-tracking, session catch-up, and self-clear scripts plus the Kijito skills into ~/.claude.",
   "license": "Apache-2.0",
   "type": "commonjs",
@@ -18,12 +18,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/KijitoAI/kijito-claude.git"
+    "url": "git+https://github.com/KijitoAI/kijito-tools.git"
   },
   "bugs": {
-    "url": "https://github.com/KijitoAI/kijito-claude/issues"
+    "url": "https://github.com/KijitoAI/kijito-tools/issues"
   },
-  "homepage": "https://github.com/KijitoAI/kijito-claude#readme",
+  "homepage": "https://github.com/KijitoAI/kijito-tools#readme",
   "keywords": [
     "claude",
     "claude-code",

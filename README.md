@@ -38,7 +38,7 @@ default; a notes file works in standalone mode.
 From source:
 
 ```bash
-git clone https://github.com/KijitoAI/kijito-claude
+git clone https://github.com/KijitoAI/kijito-tools
 cd kijito-claude && ./install.sh
 ```
 

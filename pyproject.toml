@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kijito-claude"
-version = "0.1.5"
+version = "0.1.6"
 description = "Installer for the kijito-claude toolkit: context tracking, session catch-up, and self-clear scripts plus the Kijito skills, deployed into ~/.claude."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -25,9 +25,9 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/KijitoAI/kijito-claude"
-Repository = "https://github.com/KijitoAI/kijito-claude"
-"Bug Tracker" = "https://github.com/KijitoAI/kijito-claude/issues"
+Homepage = "https://github.com/KijitoAI/kijito-tools"
+Repository = "https://github.com/KijitoAI/kijito-tools"
+"Bug Tracker" = "https://github.com/KijitoAI/kijito-tools/issues"
 
 [project.scripts]
 kijito-claude = "kijito_claude.cli:main"
