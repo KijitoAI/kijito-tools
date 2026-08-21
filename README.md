@@ -1,4 +1,4 @@
-# kijito-claude
+# kijito-tools
 
 > **Codex dedicated-thread provider withdrawn:** do not install with `--provider codex`. Live message
 > 2630 proved it does not wake the user's already-running session. Its replacement remains plan-only
@@ -39,7 +39,7 @@ From source:
 
 ```bash
 git clone https://github.com/KijitoAI/kijito-tools
-cd kijito-claude && ./install.sh
+cd kijito-tools && ./install.sh
 ```
 
 `./install.sh` installs the **Claude** provider, which is the default and what every earlier version
