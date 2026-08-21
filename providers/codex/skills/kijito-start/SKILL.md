@@ -90,9 +90,35 @@ session please") works with no flags and outranks this default.
      producer; the helper arms on the supervised stream the same way.
    - If it is not installed, or `codex` was launched with a config override
      that prevents daemon attachment, or the producer's events stream is absent:
-     you are in **catch-up-only**. State that plainly in one line. Do NOT
-     substitute ad-hoc watchers, background tails, or lifecycle hooks — the
-     floor is honest catch-up, not an improvised wake path.
+     check whether this session has the `Monitor` tool (Claude Code client).
+     - **If Monitor IS available** (codex persona running in a Claude Code
+       session): fall back to the Claude Code arm path — the same proven
+       `tail -F` + `grep` Monitor pattern every Claude Code persona uses
+       (certified in the claude provider's kijito-start skill). Resolve the
+       stream file path for YOUR persona:
+       ```bash
+       # Whichever of these exists is your stream:
+       ls ~/.kijito-monitor/codex.jsonl                        # systemd (Linux)
+       ls ~/.cache/kijito-inbox-monitor/events.codex.ndjson    # launchd (macOS)
+       ```
+       If NEITHER exists, the producer is not running — see "Producer down"
+       in the claude provider's kijito-start skill (enable with
+       `systemctl --user enable --now kijito-inbox-monitor@codex` on systemd
+       or `launchctl kickstart -k gui/$(id -u)/com.kijito.inbox-monitor` on
+       launchd). Check idempotently — one line per live monitor:
+       ```bash
+       pgrep -f "^tail -n 0 -F .*codex\.(jsonl|ndjson)"
+       ```
+       If nothing prints, arm exactly ONE persistent Monitor:
+       ```
+       Monitor(command="tail -n 0 -F $STREAM | grep --line-buffered -E '\"event\": ?\"(new|alert|recovered|state_corrupt|baseline_skipped|seed_ahead|replay_capped|persona_added)\"'", persistent=true)
+       ```
+       Report **armed-live (Claude Code fallback)**. This is not an ad-hoc
+       watcher — it is the standard, battle-tested Claude Code wake path.
+     - **If Monitor is NOT available** (Codex CLI without daemon): you are in
+       **catch-up-only**. State that plainly in one line. Do NOT substitute
+       ad-hoc watchers or lifecycle hooks — the floor is honest catch-up, not
+       an improvised wake path.
    - A dead helper must never look armed: if you cannot positively verify the
      arm (the helper's own verification, not process existence), report
      catch-up-only with what failed — a running process alone is not an armed inbox.
