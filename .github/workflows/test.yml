@@ -106,7 +106,7 @@ jobs:
         run: |
           set -euo pipefail
           npm pack --silent >/dev/null
-          TGZ=$(ls kijito-claude-*.tgz)
+          TGZ=$(ls kijito-tools-*.tgz)
           # ⛔ MATERIALIZE THE LISTING ONCE; DO NOT PIPE `tar` INTO `grep -q`.
           # `grep -q` exits at its first match, `tar` then dies writing the remainder (EPIPE), and
           # under `set -o pipefail` the pipeline reports TAR's failure -- so a file that IS present
@@ -144,17 +144,17 @@ jobs:
           whl = glob.glob("dist/*.whl")[0]
           names = set(zipfile.ZipFile(whl).namelist())
           need = [
-              "kijito_claude/_assets/install.sh",
-              "kijito_claude/_assets/providers/claude/install.sh",
-              "kijito_claude/_assets/providers/claude/skills/kijito-qa-memory/SKILL.md",
-              "kijito_claude/_assets/providers/codex/install.mjs",
-              "kijito_claude/_assets/providers/codex/release-manifest.json",
-              "kijito_claude/_assets/providers/codex/wake-helper/kijito-wake-helper.mjs",
-              "kijito_claude/_assets/providers/codex/wake-helper/ws-uds.mjs",
-              "kijito_claude/_assets/providers/codex/skills/kijito-start/SKILL.md",
-              "kijito_claude/_assets/providers/codex/n0-harness/evidence-manifest.mjs",
-              "kijito_claude/_assets/providers/codex/test/n0-harness.test.mjs",
-              "kijito_claude/_assets/providers/_shared/wake-core.mjs",
+              "kijito_tools/_assets/install.sh",
+              "kijito_tools/_assets/providers/claude/install.sh",
+              "kijito_tools/_assets/providers/claude/skills/kijito-qa-memory/SKILL.md",
+              "kijito_tools/_assets/providers/codex/install.mjs",
+              "kijito_tools/_assets/providers/codex/release-manifest.json",
+              "kijito_tools/_assets/providers/codex/wake-helper/kijito-wake-helper.mjs",
+              "kijito_tools/_assets/providers/codex/wake-helper/ws-uds.mjs",
+              "kijito_tools/_assets/providers/codex/skills/kijito-start/SKILL.md",
+              "kijito_tools/_assets/providers/codex/n0-harness/evidence-manifest.mjs",
+              "kijito_tools/_assets/providers/codex/test/n0-harness.test.mjs",
+              "kijito_tools/_assets/providers/_shared/wake-core.mjs",
           ]
           missing = [n for n in need if n not in names]
           if missing:
@@ -167,7 +167,7 @@ jobs:
       - name: smoke-install the built npm payload into a throwaway HOME
         run: |
           set -euo pipefail
-          TGZ=$(ls kijito-claude-*.tgz)
+          TGZ=$(ls kijito-tools-*.tgz)
           SMOKE=$(mktemp -d); mkdir -p "$SMOKE/home" "$SMOKE/pkg"
           tar xzf "$TGZ" -C "$SMOKE/pkg" --strip-components=1
           HOME="$SMOKE/home" bash "$SMOKE/pkg/install.sh"

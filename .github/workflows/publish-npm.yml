@@ -1,10 +1,10 @@
 name: publish-npm
 
-# Publishes kijito-claude to npm using Trusted Publishing (OIDC) — no NPM_TOKEN stored;
+# Publishes kijito-tools to npm using Trusted Publishing (OIDC) — no NPM_TOKEN stored;
 # npm exchanges a short-lived workflow credential and attaches provenance automatically.
 #
 # v0.1.0 was published manually (npm can't OIDC-publish a brand-new package). The trusted
-# publisher IS configured on npmjs.com (KijitoAI/kijito-claude + publish-npm.yml).
+# publisher IS configured on npmjs.com (KijitoAI/kijito-tools + publish-npm.yml).
 #
 # ⛔ DO NOT ADD `registry-url` TO setup-node HERE. It is the thing that breaks OIDC, and it has now
 # broken it twice. setup-node with registry-url writes an .npmrc containing
