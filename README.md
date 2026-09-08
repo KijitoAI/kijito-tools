@@ -1,10 +1,7 @@
-# kijito-claude
+# kijito-tools
 
-> **Codex dedicated-thread provider withdrawn:** do not install with `--provider codex`. Live message
-> 2630 proved it does not wake the user's already-running session. Its replacement remains plan-only
-> in [`providers/codex/same-chat-continuation-plan.md`](providers/codex/same-chat-continuation-plan.md).
-
-Tools for Claude Code sessions to track their own context window and, optionally, run unattended.
+Tools for Claude Code and Codex sessions to track their own context window and, optionally, run
+unattended.
 A session can catch up on memory at startup, report how much of its context window is actually in
 use, and recycle its context at high usage without losing the working state. It uses
 [Kijito](https://kijito.ai) as the memory backend by default, and also runs standalone (see
@@ -39,7 +36,7 @@ From source:
 
 ```bash
 git clone https://github.com/KijitoAI/kijito-tools
-cd kijito-claude && ./install.sh
+cd kijito-tools && ./install.sh
 ```
 
 `./install.sh` installs the **Claude** provider, which is the default and what every earlier version
@@ -49,7 +46,7 @@ its own installer and its own install location.
 ```bash
 ./install.sh --list-providers
 ./install.sh                      # claude (default) -> ~/.claude
-./install.sh --provider codex     # WITHDRAWN notifier; do not install (skills-only remains available)
+./install.sh --provider codex     # verify release gate only; add --skills-only to deploy skills
 ```
 
 ### Rollout safety on a SHARED checkout
@@ -72,7 +69,7 @@ bytes ARE the release and no flag is needed.
 | provider | what it installs | where | needs |
 |---|---|---|---|
 | `claude` | bash lifecycle scripts + the two skills, and merges `settings.json` | `~/.claude` | `bash`, `jq` (`tmux` for autonomy) |
-| `codex` | **WITHDRAWN notifier; not same-running-session wake. Do not install.** Skills remain available separately. | historical root: `~/.local/share/codex-kijito-hive` | Node 20+, a Codex binary |
+| `codex` | Skills (kijito-start, kijito-qa-memory) + gated native same-session wake helper. The controller-era runtime is retired. `--skills-only` deploys the skills; the native wake helper runs from a persistent checkout (advanced setup). | `~/.codex/skills` | Node 20+, a Codex binary |
 
 The wake protocol both providers rely on — event-line validation, the injection-fenced wake text,
 read-offset persistence, and the single-consumer lock — lives once in `providers/_shared/wake-core.mjs`.
@@ -92,7 +89,7 @@ pipx run kijito-claude  # via PyPI  (uvx kijito-claude also works)
 Both package runners do the same thing as the from-source install: they bundle every provider's
 payload and run `install.sh`, which defaults to the Claude provider. They need `bash`, so on Windows
 run them inside WSL (see Platform support). Pass provider flags straight through, e.g.
-`npx kijito-claude --provider codex` (withdrawn notifier; do not use except `--skills-only`).
+`npx kijito-claude --provider codex --skills-only`.
 
 The Claude installer copies the scripts to `~/.claude/`, deploys the skills to `~/.claude/skills/`, drops
 the CLAUDE.md doctrine snippet alongside them, and merges the keys it needs into `settings.json`. It
