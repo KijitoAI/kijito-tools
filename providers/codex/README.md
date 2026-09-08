@@ -9,7 +9,7 @@
 > gated hashes are frozen in the manifest's `legacyArtifacts` block. Nothing in this provider
 > starts at login, supervises a runtime, or touches the ordinary Codex home.
 
-The `codex` provider of [kijito-claude](../../README.md). What is live:
+The `codex` provider of [kijito-tools](../../README.md). What is live:
 
 - **Skills** ([`skills/`](skills/)): `kijito-start` and `kijito-qa-memory`, deployed to
   `~/.codex/skills` with their `agents/openai.yaml` interface sidecars.

@@ -18,15 +18,15 @@ def main() -> int:
     bash = shutil.which("bash")
     if bash is None:
         sys.stderr.write(
-            "kijito-claude needs bash to run its installer.\n"
+            "kijito-tools needs bash to run its installer.\n"
             "On Windows, run it inside WSL (recommended) or Git Bash.\n"
-            "See https://github.com/KijitoAI/kijito-claude#platform-support\n"
+            "See https://github.com/KijitoAI/kijito-tools#platform-support\n"
         )
         return 1
 
     # For a normally installed wheel (pip/pipx unpack to disk) this is a real path and its
     # siblings (scripts/, skills/) are present next to install.sh.
-    assets = resources.files("kijito_claude").joinpath("_assets")
+    assets = resources.files("kijito_tools").joinpath("_assets")
     install_sh = assets.joinpath("install.sh")
     return subprocess.call(
         [bash, str(install_sh), *sys.argv[1:]],

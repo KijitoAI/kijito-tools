@@ -1,11 +1,11 @@
 {
-  "name": "kijito-claude",
-  "version": "0.1.6",
+  "name": "kijito-tools",
+  "version": "0.2.0",
   "description": "Installer for kijito-tools: copies the context-tracking, session catch-up, and self-clear scripts plus the Kijito skills into ~/.claude.",
   "license": "Apache-2.0",
   "type": "commonjs",
   "bin": {
-    "kijito-claude": "bin/cli.js"
+    "kijito-tools": "bin/cli.js"
   },
   "files": [
     "bin/",

@@ -7,7 +7,7 @@ SRC="$HERE/../src"
 python3 - "$SRC" <<'PY'
 import sys, time, datetime
 sys.path.insert(0, sys.argv[1])
-from kijito_claude import d11_frozen as F
+from kijito_tools import d11_frozen as F
 
 passed = failed = 0
 def ok(name, cond, detail=""):

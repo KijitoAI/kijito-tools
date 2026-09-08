@@ -3,7 +3,7 @@
 #
 # WHY THIS EXISTS. On 2026-07-29 four of nine scripts had drifted between the repo and ~/.claude, with
 # the INSTALLED copy ahead by 3 days to 5 weeks — improvements that existed only in an un-versioned
-# location. The published packages (npx kijito-claude / pipx run kijito-claude) therefore shipped
+# location. The published packages (npx kijito-tools / pipx run kijito-tools) therefore shipped
 # months-old behaviour, and nothing anywhere reported it: lc_test.sh tested the installed copies, so a
 # drifted install looked like a passing repo.
 #
@@ -57,7 +57,7 @@ newer() {
   fi
   # ⚠️ MTIME IS EVIDENCE, NOT A VERDICT — and it is biased in one direction. `install`/`cp` stamp
   # the destination with the CURRENT time, so the installed copy is newer than the repo after ANY
-  # install, including one that deployed OLDER content (e.g. `npx kijito-claude` pulling the last
+  # install, including one that deployed OLDER content (e.g. `npx kijito-tools` pulling the last
   # published release onto a box whose checkout is ahead of it). Measured 2026-07-31: exactly that
   # host reported "INSTALLED NEWER → un-versioned work; COMMIT it" for two skills whose repo
   # versions were in fact the newer ones — advice that would have overwritten current work with

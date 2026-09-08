@@ -40,7 +40,7 @@ silently swaps "guest suspend" and "hypervisor pause" in every verdict.
     includes sleep/suspend CLOCK_BOOTTIME         CLOCK_MONOTONIC
 
 So macOS CLOCK_MONOTONIC is Linux CLOCK_BOOTTIME's semantic, and macOS has no
-CLOCK_BOOTTIME at all. Mac compatibility is a hard constraint (kijito-claude is
+CLOCK_BOOTTIME at all. Mac compatibility is a hard constraint (kijito-tools is
 a published public package; per-OS paths are permitted, breaking either OS is
 not), so this module resolves the SEMANTIC it wants per platform rather than
 naming a constant and hoping.

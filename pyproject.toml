@@ -3,8 +3,8 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "kijito-claude"
-version = "0.1.6"
+name = "kijito-tools"
+version = "0.2.0"
 description = "Installer for kijito-tools: context tracking, session catch-up, and self-clear scripts plus the Kijito skills, deployed into ~/.claude."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -30,10 +30,10 @@ Repository = "https://github.com/KijitoAI/kijito-tools"
 "Bug Tracker" = "https://github.com/KijitoAI/kijito-tools/issues"
 
 [project.scripts]
-kijito-claude = "kijito_claude.cli:main"
+kijito-tools = "kijito_tools.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/kijito_claude"]
+packages = ["src/kijito_tools"]
 
 # The per-provider payloads (bash scripts, skills, each provider's own installer) and the
 # repo-root dispatcher live outside src/ so the tree doubles as the git-clone install path. Pull
@@ -44,8 +44,8 @@ packages = ["src/kijito_claude"]
 # omitting the tests from the payload makes every codex install throw; (2) an enumerated list is a
 # fifth place to forget when a provider is added, and this repo already carries four.
 [tool.hatch.build.targets.wheel.force-include]
-"providers" = "kijito_claude/_assets/providers"
-"install.sh" = "kijito_claude/_assets/install.sh"
+"providers" = "kijito_tools/_assets/providers"
+"install.sh" = "kijito_tools/_assets/install.sh"
 
 [tool.hatch.build.targets.sdist]
 include = [
