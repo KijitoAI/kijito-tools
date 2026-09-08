@@ -11,7 +11,7 @@ SRC="$HERE/../src"
 python3 - "$SRC" <<'PY'
 import sys
 sys.path.insert(0, sys.argv[1])
-from kijito_claude import d1_queue as Q
+from kijito_tools import d1_queue as Q
 
 passed = failed = 0
 def ok(name, cond, detail=""):

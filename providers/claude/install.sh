@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# kijito-claude — the CLAUDE provider's installer. Deploys the toolkit into ~/.claude and merges
+# kijito-tools — the CLAUDE provider's installer. Deploys the toolkit into ~/.claude and merges
 # settings.json. Idempotent + non-destructive: backs up settings.json, jq-merges keys (no clobber),
 # de-dups the hook. Also the cross-machine/fleet installer: clone the repo on any box and run this.
 #
@@ -30,8 +30,8 @@ done
 # 2b) the CLAUDE.md doctrine snippet — copied alongside so npx/pipx users (who never cloned
 # the repo) still have it to paste into ~/.claude/CLAUDE.md.
 if [ -f "$PROVIDER_ROOT/CLAUDE.md.snippet" ]; then
-  install -m 0644 "$PROVIDER_ROOT/CLAUDE.md.snippet" "$DEST/kijito-claude.CLAUDE.md.snippet"
-  echo "✓ doctrine snippet → $DEST/kijito-claude.CLAUDE.md.snippet"
+  install -m 0644 "$PROVIDER_ROOT/CLAUDE.md.snippet" "$DEST/kijito-tools.CLAUDE.md.snippet"
+  echo "✓ doctrine snippet → $DEST/kijito-tools.CLAUDE.md.snippet"
 fi
 
 # 3) settings.json — merge statusLine / totalTokensReminder / env / SessionStart hook (idempotent)
@@ -131,6 +131,6 @@ fi
 
 echo
 echo "Next: add the doctrine snippet to your ~/.claude/CLAUDE.md (context self-check + session-start"
-echo "catch-up + self-clear gate). It's at $DEST/kijito-claude.CLAUDE.md.snippet"
+echo "catch-up + self-clear gate). It's at $DEST/kijito-tools.CLAUDE.md.snippet"
 echo "New sessions pick up the hook + statusline; restart a running session to apply."
 echo "Verify context self-check now:  ~/.claude/myctx.sh"
