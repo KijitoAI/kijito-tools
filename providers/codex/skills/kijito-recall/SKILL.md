@@ -12,16 +12,26 @@ better-aimed recalls.
 
 ## The decomposition pattern (multi-part questions)
 
-1. **Split** the question into at most ~3 self-contained sub-queries, each phrased in the words
+1. **Split** the question into at most 3 self-contained sub-queries, each phrased in the words
    its answer was likely *stored* under (recall matches wording — front-loaded concrete terms beat
-   abstractions).
-2. **Recall each sub-query separately**, with a smaller `limit` per call (e.g. 3 recalls × limit 8
-   instead of 1 × 24).
-3. **Merge and dedup** the results yourself — and keep the TOTAL context you carry no larger than
-   what one deep recall would have given you. Decomposition is for aiming, not for smuggling a
-   bigger context load.
+   abstractions). YOU do the decomposition, in your own reasoning — the engine makes no LLM call.
+2. **Recall them in ONE call** with the native parameter:
+   `kijito_recall(query=<the original question>, sub_queries=[<sub-query 1>, <sub-query 2>, ...])`.
+   Each sub-query runs the normal recall pipeline server-side and the ranked lists are merged for
+   you — round-robin interleave, dedup, truncated to `limit` — so the result is already the
+   aimed, budget-bounded set. The reply names the merge (`subquery_merge`); if it instead says it
+   degraded to a plain recall (blank list, or a single entry equal to `query`), your decomposition
+   was not used — fix the sub-queries rather than reading the plain result as decomposed.
+   *Fallback only* — on a server whose `kijito_recall` has no `sub_queries` parameter, recall each
+   sub-query separately with a smaller `limit` per call (e.g. 3 recalls × limit 8 instead of
+   1 × 24) and merge + dedup the results yourself. Doing that against a server that HAS the
+   parameter re-implements an already-measured merge, and worse.
+3. **Keep the budget fixed.** Whichever path ran, keep the TOTAL context you carry no larger than
+   what one deep recall would have given you (`limit` is the cap on the merged set). Decomposition
+   is for aiming, not for smuggling a bigger context load.
 4. **Chain the hops.** When an early hop's answer names the entity the next hop needs, rewrite the
-   next sub-query around that entity before recalling it.
+   next sub-query around that entity and recall again — chaining is a second call, not a bigger
+   first one.
 
 ## When NOT to decompose
 
