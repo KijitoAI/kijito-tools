@@ -25,7 +25,7 @@ better-aimed recalls.
    *Fallback only* — on a server whose `kijito_recall` has no `sub_queries` parameter, recall each
    sub-query separately with a smaller `limit` per call (e.g. 3 recalls × limit 8 instead of
    1 × 24) and merge + dedup the results yourself. Doing that against a server that HAS the
-   parameter re-implements an already-measured merge, and worse.
+   parameter re-implements, client-side and less well, a merge the server has already measured.
 3. **Keep the budget fixed.** Whichever path ran, keep the TOTAL context you carry no larger than
    what one deep recall would have given you (`limit` is the cap on the merged set). Decomposition
    is for aiming, not for smuggling a bigger context load.
