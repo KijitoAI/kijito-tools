@@ -1,6 +1,6 @@
 name: publish-pypi
 
-# Publishes kijito-claude to PyPI on a version tag, using Trusted Publishing (OIDC).
+# Publishes kijito-tools to PyPI on a version tag, using Trusted Publishing (OIDC).
 # No PyPI API token is stored — PyPI exchanges a short-lived OIDC credential and the
 # publish action attaches PEP 740 attestations automatically. Configure the trusted
 # publisher once on pypi.org first: pypi.org -> the project -> Publishing -> add this
@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/p/kijito-claude
+      url: https://pypi.org/p/kijito-tools
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
