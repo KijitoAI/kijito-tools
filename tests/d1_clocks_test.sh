@@ -12,7 +12,7 @@ SRC="$HERE/../src"
 python3 - "$SRC" <<'PY'
 import sys, os, platform, time
 sys.path.insert(0, sys.argv[1])
-from kijito_claude import d1_clocks as C
+from kijito_tools import d1_clocks as C
 
 passed = failed = 0
 def ok(name, cond, detail=""):

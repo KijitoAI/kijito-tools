@@ -63,7 +63,7 @@ git checkout is **refused**; choose explicitly:
 ./install.sh --allow-branch    # deliberately install THIS branch's bytes (e.g. testing your own work)
 ```
 
-A packaged install (`npx kijito-claude`, `pipx run kijito-claude`) is not a git checkout, so the
+A packaged install (`npx kijito-tools`, `pipx run kijito-tools`) is not a git checkout, so the
 bytes ARE the release and no flag is needed.
 
 | provider | what it installs | where | needs |
@@ -82,14 +82,14 @@ most one consumer) while leaving each lane free to say it in its own words.
 Or with a package runner, no clone needed:
 
 ```bash
-npx kijito-claude       # via npm
-pipx run kijito-claude  # via PyPI  (uvx kijito-claude also works)
+npx kijito-tools       # via npm
+pipx run kijito-tools  # via PyPI  (uvx kijito-tools also works)
 ```
 
 Both package runners do the same thing as the from-source install: they bundle every provider's
 payload and run `install.sh`, which defaults to the Claude provider. They need `bash`, so on Windows
 run them inside WSL (see Platform support). Pass provider flags straight through, e.g.
-`npx kijito-claude --provider codex --skills-only`.
+`npx kijito-tools --provider codex --skills-only`.
 
 The Claude installer copies the scripts to `~/.claude/`, deploys the skills to `~/.claude/skills/`, drops
 the CLAUDE.md doctrine snippet alongside them, and merges the keys it needs into `settings.json`. It

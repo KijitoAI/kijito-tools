@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# kijito-claude — provider dispatcher.
+# kijito-tools — provider dispatcher.
 #
 # This repo installs the Kijito session toolkit for more than one agent host. Each host is a
 # PROVIDER under providers/, owns its own installer, and installs to its own location:
@@ -15,8 +15,8 @@
 #   ./install.sh --from-main          # install the stable main bytes (branch-state-immune)
 #   ./install.sh --allow-branch       # deliberately install THIS branch's bytes (off-main opt-in)
 #
-# ⚠️ THE DEFAULT IS LOAD-BEARING AND MUST STAY `claude`. `npx kijito-claude` and
-# `pipx run kijito-claude` both land here with no arguments, and they have been installing the
+# ⚠️ THE DEFAULT IS LOAD-BEARING AND MUST STAY `claude`. `npx kijito-tools` and
+# `pipx run kijito-tools` both land here with no arguments, and they have been installing the
 # Claude toolkit since 0.1.0. Changing the default would silently retarget every existing user.
 #
 # ⚠️ ROLLOUT SAFETY — WHY --from-main EXISTS (two independent wrongs, measured 2026-08-08 by assay):
@@ -78,11 +78,11 @@ branch_guard() {
   local cur
   cur="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '(unknown)')"
   if [ "$ALLOW_BRANCH" -eq 1 ]; then
-    echo "kijito-claude: installing from '$cur' (off main) — --allow-branch given, proceeding." >&2
+    echo "kijito-tools: installing from '$cur' (off main) — --allow-branch given, proceeding." >&2
     return 0
   fi
   cat >&2 <<EOF
-ERROR: kijito-claude is checked out on '$cur', not main.
+ERROR: kijito-tools is checked out on '$cur', not main.
 The installer COPIES the current working tree into ~/.claude, so a bare install here would bake
 '$cur' bytes into your hooks and skills — and they will NOT update afterward. Choose one:
   ./install.sh --from-main       # install the stable main bytes (recommended; branch-state-immune)
@@ -93,7 +93,7 @@ EOF
 
 from_main_install() {
   git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1 || {
-    echo "ERROR: --from-main needs a git checkout of kijito-claude (this is a packaged install)." >&2
+    echo "ERROR: --from-main needs a git checkout of kijito-tools (this is a packaged install)." >&2
     exit 3; }
   local main_sha
   main_sha="$(git -C "$ROOT" rev-parse main 2>/dev/null || true)"

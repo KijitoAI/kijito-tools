@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 'use strict';
-// kijito-claude — thin launcher that runs the bundled bash installer (install.sh).
+// kijito-tools — thin launcher that runs the bundled bash installer (install.sh).
 // The package ships the scripts/skills as data; this resolves them relative to the
-// package root (never process.cwd()) and shells out to bash. Run with: npx kijito-claude
+// package root (never process.cwd()) and shells out to bash. Run with: npx kijito-tools
 const { spawnSync } = require('node:child_process');
 const path = require('node:path');
 
@@ -14,11 +14,11 @@ const installScript = path.join(pkgRoot, 'install.sh');
 const probe = spawnSync('bash', ['--version'], { stdio: 'ignore' });
 if (probe.error) {
   console.error(
-    'kijito-claude needs bash to run its installer.\n' +
+    'kijito-tools needs bash to run its installer.\n' +
     (process.platform === 'win32'
       ? 'On Windows, run it inside WSL (recommended) or Git Bash.\n'
       : 'Install bash and try again.\n') +
-    'See https://github.com/KijitoAI/kijito-claude#platform-support'
+    'See https://github.com/KijitoAI/kijito-tools#platform-support'
   );
   process.exit(1);
 }

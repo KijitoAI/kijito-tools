@@ -4,9 +4,9 @@
   "version": "1.0.0",
   "persona": "codex",
   "origin": {
-    "package": "kijito-claude",
+    "package": "kijito-tools",
     "packageVersion": "0.1.4",
-    "repository": "https://github.com/KijitoAI/kijito-claude"
+    "repository": "https://github.com/KijitoAI/kijito-tools"
   },
   "live": {
     "surface": "skills (deployed to ~/.codex/skills via install.mjs --skills-only) + native session wake helper (run from the checkout by kijito-start's arm step; never installed)",
