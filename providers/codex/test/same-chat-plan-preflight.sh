@@ -106,8 +106,10 @@ must_contain "$gate" "| N4-1 " "ROUND5_N4-1_TRACED"
 # outright with the controller era. The fences these three rows pin are now the RETIREMENT
 # declarations — same intent (nobody reinstalls or re-describes the notifier), stronger state.
 must_contain "$readme" "the controller era is over" "RETIRED_README_FENCE_PRESENT"
-must_contain "$repo_readme" 'Codex dedicated-thread provider withdrawn' \
-  "WITHDRAWN_ROOT_README_FENCE_PRESENT"
+# PR #25 (2026-09-08, public-ready sweep, codex-assessed msg 8877): the root README no longer carries the
+# withdrawal BANNER; the same intent is now the retirement declaration in the provider table. Pin that.
+must_contain "$repo_readme" 'The controller-era runtime is retired' \
+  "RETIRED_ROOT_README_FENCE_PRESENT"
 must_contain "$installer" "controller-era full install was retired at gate 6" \
   "RETIRED_INSTALLER_FENCE_PRESENT"
 must_contain "$dispatcher" "controller-era full install retired at gate 6" \
