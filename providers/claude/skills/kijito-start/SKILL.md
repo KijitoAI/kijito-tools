@@ -84,7 +84,22 @@ Run `kijito_startup(persona="<P>", project="<J>")` with the persona/project your
 Do this **before writing any memory**, or the first writes land under the wrong owner and contaminate the graph.
 
 1. **Read the briefs.** Project `./CLAUDE.md` and `~/.claude/CLAUDE.md` — they tell you who you are here (persona, project, the rules of this codebase).
-2. **Fix the wiring if needed.** If `mcp__kijito__*` tools are absent, the project is missing `.mcp.json` (server `kijito`, type `http`) and `.claude/settings.local.json` (`"enableAllProjectMcpServers": true`). Wire it to the **hosted fleet brain** — url `https://api.kijito.ai/mcp/` with header `Authorization: Bearer ${KIJITO_API_TOKEN}` (token at `~/.claude/.kijito_api_token`) — the one brain every real persona shares. (Only for a deliberate LOCAL test/dev env, use url `http://127.0.0.1:7474/mcp/` with no auth header instead — that daemon holds throwaway test data, not the fleet's memory.) Add them; new MCP tools load only on a fresh launch.
+2. **Fix the wiring if needed.** If `mcp__kijito__*` tools are absent, the project is missing `.mcp.json` (server `kijito`, type `http`) and `.claude/settings.local.json` (`"enableAllProjectMcpServers": true`). Wire it to the **hosted fleet brain** — url `https://api.kijito.ai/mcp/` with header `Authorization: Bearer ${KIJITO_API_TOKEN}` (token at `~/.claude/.kijito_api_token`) — the one brain every real persona shares — **and a second header `X-Kijito-Session: ${CLAUDE_CODE_SESSION_ID}`**, so every memory and hive message this seat writes carries WHICH SESSION wrote it (the server stores it as `session_id`; `kijito_get` renders it as `Session:`, `kijito_browse(session=…)` filters on it, and a placeholder the harness did not expand is stored as absent, never as the literal — so it costs nothing where it is unsupported). The whole file:
+   ```json
+   {
+     "mcpServers": {
+       "kijito": {
+         "type": "http",
+         "url": "https://api.kijito.ai/mcp/",
+         "headers": {
+           "Authorization": "Bearer ${KIJITO_API_TOKEN}",
+           "X-Kijito-Session": "${CLAUDE_CODE_SESSION_ID}"
+         }
+       }
+     }
+   }
+   ```
+   (Only for a deliberate LOCAL test/dev env, use url `http://127.0.0.1:7474/mcp/` with no auth header instead — that daemon holds throwaway test data, not the fleet's memory.) Add them; new MCP tools load only on a fresh launch.
 3. **Write the identity memory.** One memory establishing persona + project + what this work is. Pass `persona` + `project` on it (and on every write after).
 4. **Open AND arm the inbox.** The first `kijito_hive_inbox(persona="<P>")` provisions the inbox; a brand-new persona just gets an empty one (not an error). Then arm the live consumer exactly as in Path A step 4b — the idempotent check-then-arm (at most one persistent `Monitor`) so siblings can reach you. A new persona is still reachable; don't skip this just because the inbox is empty.
 5. **Create the current-state pointer.** A stable memory you will `kijito_update` in place going forward — record its ID. A cold boot has nothing to read otherwise. Open it with the active task and next step (or "no active work yet" if you are only setting up).
