@@ -84,13 +84,13 @@ Run `kijito_startup(persona="<P>", project="<J>")` with the persona/project your
 Do this **before writing any memory**, or the first writes land under the wrong owner and contaminate the graph.
 
 1. **Read the briefs.** Project `./CLAUDE.md` and `~/.claude/CLAUDE.md` — they tell you who you are here (persona, project, the rules of this codebase).
-2. **Fix the wiring if needed.** If `mcp__kijito__*` tools are absent, the project is missing `.mcp.json` (server `kijito`, type `http`) and `.claude/settings.local.json` (`"enableAllProjectMcpServers": true`). Wire it to the **hosted fleet brain** — url `https://api.kijito.ai/mcp/` with header `Authorization: Bearer ${KIJITO_API_TOKEN}` (token at `~/.claude/.kijito_api_token`) — the one brain every real persona shares — **and a second header `X-Kijito-Session: ${CLAUDE_CODE_SESSION_ID}`**, so every memory and hive message this seat writes carries WHICH SESSION wrote it (the server stores it as `session_id`; `kijito_get` renders it as `Session:`, `kijito_browse(session=…)` filters on it, and a placeholder the harness did not expand is stored as absent, never as the literal — so it costs nothing where it is unsupported). The whole file:
+2. **Fix the wiring if needed.** If `mcp__kijito__*` tools are absent, the project is missing `.mcp.json` (server `kijito`, type `http`) and `.claude/settings.local.json` (`"enableAllProjectMcpServers": true`). Wire it to the **hosted fleet brain** — url `https://api.kijito.ai/mcp/?session=${CLAUDE_CODE_SESSION_ID}` with header `Authorization: Bearer ${KIJITO_API_TOKEN}` (token at `~/.claude/.kijito_api_token`) — the one brain every real persona shares. The **`?session=` query parameter** carries WHICH SESSION wrote each memory and hive message (the server stores it as `session_id`; `kijito_get` renders it as `Session:`, `kijito_browse(session=…)` filters on it); the `X-Kijito-Session` header beside it says the same thing for clients that forward custom headers. ⚠️ **Measured on Claude Code 2.1.265: the client forwards ONLY `Authorization` from `headers` — every other header is dropped, so the header line alone never reaches the server — and `${CLAUDE_CODE_SESSION_ID}` expands only if the LAUNCHER exported it** (the harness does not inject it for config expansion). `claude-armed.sh` mints the id, exports it and passes `--session-id`, so an armed launch stamps every write; a plain `claude` launch sends the literal placeholder, which the server stores as absent, never as the literal — so it costs nothing where it is unsupported. The whole file:
    ```json
    {
      "mcpServers": {
        "kijito": {
          "type": "http",
-         "url": "https://api.kijito.ai/mcp/",
+         "url": "https://api.kijito.ai/mcp/?session=${CLAUDE_CODE_SESSION_ID}",
          "headers": {
            "Authorization": "Bearer ${KIJITO_API_TOKEN}",
            "X-Kijito-Session": "${CLAUDE_CODE_SESSION_ID}"

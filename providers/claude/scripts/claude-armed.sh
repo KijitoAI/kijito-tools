@@ -52,4 +52,31 @@ if [ "${KIJITO_REMOTE_CONTROL:-1}" != "0" ]; then
   fi
   [ -n "$rc_prefix" ] && rc_args+=(--remote-control-session-name-prefix "$rc_prefix")
 fi
+# Session provenance ([18500]; Kijito #624/#627). The Claude Code MCP client forwards ONLY the
+# Authorization header from .mcp.json `headers` (measured on 2.1.265 — every other header, literal or
+# not, is dropped) and expands `${VAR}` in a server URL from the LAUNCHING environment only; it never
+# injects its own session id there. So the id is minted HERE, exported for the URL
+# (`https://api.kijito.ai/mcp/?session=${CLAUDE_CODE_SESSION_ID}`) and passed as --session-id, so the
+# transcript, the hooks and the server all name the same session. Per LAUNCH: /clear rotates the
+# harness's own id (children still see the rotated one — the harness overrides an inherited value),
+# but the MCP URL was resolved at launch, so writes after a /clear carry the launch id. An explicit
+# --session-id from the caller is honoured; an INHERITED value is ignored (a nested launch would
+# otherwise reuse a live id, which `claude` refuses as "already in use").
+kjt_sid=""
+kjt_prev=""
+for kjt_arg in "$@"; do                       # an explicit --session-id X / --session-id=X wins
+  case "$kjt_prev" in --session-id) kjt_sid="$kjt_arg";; esac
+  case "$kjt_arg" in --session-id=*) kjt_sid="${kjt_arg#--session-id=}";; esac
+  kjt_prev="$kjt_arg"
+done
+if [ -z "$kjt_sid" ]; then
+  kjt_sid=$( (uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null \
+             || python3 -c 'import uuid;print(uuid.uuid4())' 2>/dev/null) | tr 'A-Z' 'a-z' | tr -d '[:space:]')
+  if [ -n "$kjt_sid" ]; then
+    set -- --session-id "$kjt_sid" "$@"
+  else
+    echo "claude-armed: no uuid source (uuidgen / /proc / python3) — launching without a minted session id; MCP writes will carry no Session:" >&2
+  fi
+fi
+[ -n "$kjt_sid" ] && export CLAUDE_CODE_SESSION_ID="$kjt_sid"   # the URL's ${CLAUDE_CODE_SESSION_ID}
 KIJITO_AUTOCATCHUP=1 claude "${rc_args[@]+"${rc_args[@]}"}" "$@"
