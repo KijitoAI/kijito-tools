@@ -22,6 +22,12 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # Bound the job so a wedged step cannot hold a runner for GitHub's 6 h default. Measured baseline
+    # on main (2026-09-10/11, three consecutive runs): whole job 14m21s–14m49s; the longest single
+    # step, the N0 mutation gate, 9–13.5 min and silent until its last line. 30 min is ~2x the job,
+    # so a timeout here is a real hang, never a slow-but-healthy run. Do NOT read a long silent
+    # mutation step as hung — compare against this baseline first.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
