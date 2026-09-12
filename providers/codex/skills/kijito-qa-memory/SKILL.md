@@ -45,9 +45,11 @@ correction, find the inbound citers and re-point them at the live id with
 `kijito_update` and `structural=true`, which preserves the operational-staleness
 clock because bracketed digits carry no meaning.
 
-Do not use the `Status:` field to detect a dead citation target.
-`GET /api/memory/{id}` reports `Status: active` on believed-false records. Judge
-liveness from `importance` (retired is at or below `0.1`) and `confidence`
+Liveness reads differently per tool (re-measured 2026-09-11): `kijito_get` renders a definitive
+`Status:` line (`retired (believed-false — corrected; …)` on a corrected record — trust it);
+`kijito_recall` / `kijito_startup` / `kijito_browse` render no Status, so there judge by
+`importance` (retired ≈ 0.1) / `confidence` (retired ≈ 0.05). An earlier version of this file said
+Status reads `active` on believed-false records — no longer true.1`) and `confidence`
 (retired is near `0.05`).
 
 After creation, correction, and pruning are complete, run `kijito_dream` now if
