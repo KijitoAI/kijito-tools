@@ -49,8 +49,7 @@ Liveness reads differently per tool (re-measured 2026-09-11): `kijito_get` rende
 `Status:` line (`retired (believed-false — corrected; …)` on a corrected record — trust it);
 `kijito_recall` / `kijito_startup` / `kijito_browse` render no Status, so there judge by
 `importance` (retired ≈ 0.1) / `confidence` (retired ≈ 0.05). An earlier version of this file said
-Status reads `active` on believed-false records — no longer true.1`) and `confidence`
-(retired is near `0.05`).
+Status reads `active` on believed-false records — no longer true.
 
 After creation, correction, and pruning are complete, run `kijito_dream` now if
 the curation batch warrants it. Dreaming can mutate themes and edges, so it
