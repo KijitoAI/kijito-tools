@@ -43,11 +43,21 @@ PERSONA=""
 TIMEOUT=90
 DO_SEND=1
 CANARY=0
+# TWO CALLERS, TWO CONTRACTS, ONE VERDICT FUNCTION (river ruling, 2026-09-21).
+# The INSTALL-TIME run legitimately has no consumer — no agent session exists yet — so a missing
+# consumer there is PARTIAL with the next step, not a failed install. The AGENT-DRIVEN ONBOARDING
+# flow runs this same check AFTER the agent has armed its consumer and must report a machine-readable
+# verdict to the server; that caller needs "WORKING means all three hops" with no PARTIAL wording to
+# misread. --require-consumer selects the second contract. The HOPS are measured identically either
+# way — only what counts as passing changes, which is the only difference that should ever be
+# configurable in a check.
+REQUIRE_CONSUMER=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --persona)  PERSONA="${2:-}"; [ -n "$PERSONA" ] || { echo "ABORT: --persona needs a value" >&2; exit 2; }; shift 2 ;;
     --timeout)  TIMEOUT="${2:-}"; shift 2 ;;
     --no-send)  DO_SEND=0; shift ;;      # observe the hops without putting a message through
+    --require-consumer) REQUIRE_CONSUMER=1; shift ;;
     --canary)   CANARY=1; shift ;;
     -h|--help)  sed -n '1,40p' "$0"; exit 0 ;;
     *)          echo "ABORT: unknown option $1" >&2; exit 2 ;;
@@ -76,6 +86,14 @@ verdict() {   # $1=producer_ok $2=stream_ok $3=consumer_ok (each 1/0) -> prints,
     printf '%s\n' "  event stream within ${TIMEOUT}s. The producer may be covering a DIFFERENT persona,"
     printf '%s\n' "  or writing somewhere other than where this check is looking."
     printf '%s\n' "  Run: producer-health.sh --persona ${PERSONA:-<persona>}   (unpiped)"
+    return 1
+  fi
+  if [ "$_c" = 0 ] && [ "$REQUIRE_CONSUMER" = 1 ]; then
+    printf '%s\n' "VERDICT: NOT WORKING — failing hop: CONSUMER"
+    printf '%s\n' "  Mail reaches the stream, but nothing is READING it, so nothing will wake this"
+    printf '%s\n' "  session. --require-consumer was passed, so a missing consumer is a FAILURE here"
+    printf '%s\n' "  rather than the expected state of a fresh install."
+    printf '%s\n' "  Arm a wake-capable consumer on: ${EVENTS:-<your events file>}"
     return 1
   fi
   if [ "$_c" = 0 ]; then
@@ -124,6 +142,20 @@ if [ "$CANARY" = 1 ]; then
   expect "stream silent names STREAM FILE"         "failing hop: STREAM FILE"  1 0 0
   expect "stream silent outranks the consumer hop" "failing hop: STREAM FILE"  1 0 1
   expect "no consumer names CONSUMER"              "failing hop: CONSUMER"     1 1 0
+  expect "no consumer is PARTIAL by default"       "VERDICT: PARTIAL"          1 1 0
+  # ...and the SECOND CONTRACT: the same missing hop must read as a flat failure for the caller that
+  # has already armed a consumer. Both are asserted, because a mode that silently behaved like the
+  # default would be worse than no mode at all — the onboarding flow would report verified=true on a
+  # session that cannot be woken.
+  REQUIRE_CONSUMER=1
+  expect "with --require-consumer it is NOT WORKING" "VERDICT: NOT WORKING"     1 1 0
+  expect "and it still names the CONSUMER hop"       "failing hop: CONSUMER"    1 1 0
+  if verdict 1 1 1 | grep -q "VERDICT: WORKING"; then
+    printf '  ok    --require-consumer still says WORKING when all three are green\n'
+  else
+    printf '  FAIL  --require-consumer broke the all-green verdict\n'; fail=1
+  fi
+  REQUIRE_CONSUMER=0
   expect "all three green says WORKING"            "VERDICT: WORKING"          1 1 1
   # ⛔ AND THE DIRECTION THAT MATTERS MOST: WORKING must require ALL THREE. A verdict that said
   # WORKING with a dead hop is the defect this row was opened for, stated exactly.

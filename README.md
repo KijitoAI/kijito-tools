@@ -96,6 +96,40 @@ the CLAUDE.md doctrine snippet alongside them, and merges the keys it needs into
 backs up `settings.json` and merges with `jq`, so it leaves your existing settings alone and is safe
 to re-run, including on other machines. Requires `jq`. The autonomy features require `tmux`.
 
+## Proving the inbox wake path
+
+The install ends by pushing a real message through the wake path and reporting which hop, if any,
+broke — because a broken wake path is indistinguishable from a working one with no mail on it. It
+fails as silence, so an installer that only reports on itself ("files copied, settings merged") can
+exit 0 over a dead inbox. Run it any time:
+
+```sh
+~/.claude/inbox-selftest.sh                      # resolves the persona from .kijito_persona
+~/.claude/inbox-selftest.sh --persona 'name (purpose)'
+```
+
+Three hops, and the verdict names the one that broke: **producer** (a producer runs *and covers this
+persona*, not a sibling's) · **stream** (the message actually lands in this persona's event file) ·
+**consumer** (something wake-capable is attached and would be re-invoked).
+
+Exit codes are the answer: `0` WORKING · `1` NOT WORKING / PARTIAL · `2` COULD NOT MEASURE (no
+token, no persona, no resolvable stream — deliberately *not* the same as a failure). Run it unpiped:
+piping replaces `$?` with the last pipeline stage's status.
+
+**Two callers, two contracts.** At install time there is no agent session yet, so a missing consumer
+is `PARTIAL` with the next step rather than a failed install. An **agent-driven onboarding flow**
+runs the same check *after* arming its consumer and needs "WORKING means all three hops" with no
+PARTIAL to misread — that caller passes `--require-consumer`, which makes a missing consumer a flat
+failure. The hops are measured identically either way; only what counts as passing changes.
+
+The onboarding step that verifies the wake channel should run exactly:
+
+```sh
+~/.claude/inbox-selftest.sh --require-consumer
+```
+
+and report `verified=true` only on exit `0`.
+
 ## Platform support
 
 The scripts are POSIX-style `bash` and avoid GNU-only flags (epoch and timestamp formatting work on
