@@ -47,9 +47,18 @@ esac
 # network, no state file). We ask it. If we CANNOT ask it — no producer installed, or one too old to
 # answer — we do NOT fall back to guessing, because a guess is what produced this defect; we say so
 # and name the fix. A wrong path here is unfalsifiable by construction: it fails as silence.
+# The marker read lives in kijito-persona-lib.sh so the status line (row M309) and anything added
+# later cannot drift from it the way the filename rule did. Falling back to the inline loop keeps a
+# partially-installed ~/.claude working rather than silently resolving no persona at all.
 _persona=""
+_lib="$(dirname -- "${BASH_SOURCE[0]:-$0}")/kijito-persona-lib.sh"
+if [ -r "$_lib" ]; then
+  # shellcheck source=/dev/null
+  . "$_lib"
+  _persona=$(kijito_persona_from_marker "${CLAUDE_PROJECT_DIR:-}" "$hook_cwd" "$PWD" || true)
+fi
 for d in "${CLAUDE_PROJECT_DIR:-}" "$hook_cwd" "$PWD"; do
-  if [ -n "$d" ] && [ -f "$d/.kijito_persona" ]; then
+  if [ -z "$_persona" ] && [ -n "$d" ] && [ -f "$d/.kijito_persona" ]; then
     # ⛔ TRIM THE ENDS, NEVER THE MIDDLE (row M290). This read was `tr -d '[:space:]'`, which deletes
     # EVERY space in the name: a persona written `name (purpose)` in the marker became `name(purpose)`
     # here and `name_purpose_` as a filename, while the producer — which receives the name with its
@@ -205,9 +214,9 @@ if pgrep -f "kijito_inbox_monitor\.py|bin/kijito-inbox-monitor" >/dev/null 2>&1 
     # We know the persona and a producer is running, but the installed producer cannot tell us how it
     # spells that persona as a filename. Naming a path here would be a guess, and a guessed path fails
     # as SILENCE. Say what is unknown and how to make it knowable.
-    _prod="inbox-monitor producer: RUNNING, but this hook cannot name YOUR event stream — the installed kijito-inbox-monitor ($_km_bin) does not answer --safe-persona, so the persona→filename rule is unresolved and any path printed here would be a guess. Upgrade the producer (that flag is how the rule is published), then re-open this session."
+    _prod="inbox-monitor producer: RUNNING, but this hook cannot name the event stream for '$_persona' — the installed kijito-inbox-monitor ($_km_bin) does not answer --safe-persona, so the persona→filename rule is unresolved and any path printed here would be a guess. Upgrade the producer (that flag is how the rule is published), then re-open this session."
   elif [ "$_rule" = no-producer ]; then
-    _prod="inbox-monitor producer: a producer process is running, but no kijito-inbox-monitor executable is on this PATH, so this hook cannot resolve where YOUR events are written (set \$KIJITOMON_BIN if it lives somewhere unusual)."
+    _prod="inbox-monitor producer: a producer process is running, but no kijito-inbox-monitor executable is on this PATH, so this hook cannot resolve where '$_persona''s events are written (set \$KIJITOMON_BIN if it lives somewhere unusual)."
   elif [ -e "$_events" ]; then
     _prod="inbox-monitor producer: UP for '$_persona' ($_sup; events → $_events)."
   else
