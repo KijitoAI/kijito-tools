@@ -34,6 +34,17 @@ grn() { printf "  ok    %s\n" "$1"; pass=$((pass+1)); }
 command -v jq >/dev/null 2>&1 || { echo "SKIP: jq not installed — the hook parses its stdin with jq."; exit 0; }
 
 SHIMDIR="$(mktemp -d)"
+# ── THE PRODUCER ITSELF, ON PATH ──────────────────────────────────────────────────────────────────
+# Not a stand-in: this execs the producer this repo vendors, which is where the persona->filename rule
+# lives. That is the whole point of the parity checks below — if the oracle were a second copy of the
+# rule written here, the test could only prove the test agrees with itself, which is exactly the
+# mistake that produced row M290 (three hand-written copies, each confident).
+cat > "$SHIMDIR/kijito-inbox-monitor" <<SHIM
+#!/usr/bin/env bash
+exec python3 "$REPO/providers/monitor/kijito_inbox_monitor.py" "\$@"
+SHIM
+chmod +x "$SHIMDIR/kijito-inbox-monitor"
+
 cat > "$SHIMDIR/pgrep" <<'SHIM'
 #!/usr/bin/env bash
 # Fake pgrep. The hook probes twice with different patterns; answer each from the environment so a
@@ -111,6 +122,36 @@ check_hook() {
   else red "$label: no producer on linux → missing DOWN or systemd hint"; bad=1; fi
   rm -rf "$h"
 
+  # ---- P: PERSONA-NAME PARITY (row M290) ----------------------------------------------------
+  # The defect: the hook derived the events filename with its own `sed 's/[^A-Za-z0-9._-]/_/g'` while
+  # the producer's rule CASEFOLDS and accepts any Unicode alphanumeric. A persona named `Loom` was
+  # therefore sent to tail Loom.jsonl while its mail went to loom.jsonl — "not being collected",
+  # forever, with no error.
+  # ⚠️ WHY THE ASSERTION IS SHAPED AS "== WHAT THE PRODUCER SAYS" AND NOT "== <expected string>":
+  # a literal expectation here would be a FOURTH copy of the rule, and would pass happily on the day
+  # the producer's rule changes. The producer is asked, every time, for every name.
+  # ⚠️ AND WHY THE EVENTS FILE IS CREATED FROM THE PRODUCER'S ANSWER: on macOS the filesystem is
+  # case-INSENSITIVE, so a test that merely asked "did the hook find a file?" would pass on a Mac
+  # even with the bug present. These check the STRING the agent is told to tail.
+  local name safe evf
+  for name in "river" "Loom" "UPPER" "Claude-Chat" "name (purpose)" "spaced name" "a/b" "café" "Ωmega"; do
+    safe="$(PATH="$SHIMDIR:$PATH" kijito-inbox-monitor --safe-persona "$name" 2>/dev/null)"
+    if [ -z "$safe" ]; then
+      red "$label: parity → the producer would not answer --safe-persona for '$name'"; bad=1; continue
+    fi
+    h="$(mktemp -d)"; mkdir -p "$h/.kijito-monitor"
+    evf="$h/.kijito-monitor/$safe.jsonl"
+    : > "$evf"
+    proj2="$(make_proj "$name")"
+    out="$(FAKE_PRODUCER=1 FAKE_ARMED=0 run_hook "$hook" "$h" "$proj2")"
+    if grep -qF "$evf" <<<"$out"; then
+      grn "$label: parity → '$name' → the hook names the producer's own path ($safe)"
+    else
+      red "$label: parity → '$name' → hook does NOT name $evf (the producer's path)"; bad=1
+    fi
+    rm -rf "$h" "$proj2"
+  done
+
   # ---- D: macOS seat still works — this is a portability fix, not a platform swap ----
   # ⚠️ Without this direction, deleting the Mac branch entirely would pass every other check while
   # breaking every existing user. The fix must be additive.
@@ -168,6 +209,64 @@ if [ "${1:-}" = "--mutation" ]; then
     fi
   fi
   rm -rf "$(dirname "$mut")"
+
+  # ── The two row-M290 defects, each restored on its own ─────────────────────────────────────────
+  # Restoring them SEPARATELY matters: they produced the same user-visible symptom ("your mail is not
+  # being collected") from different causes, and a single combined mutant could be killed by either
+  # check while the other silently tested nothing.
+  #
+  # ⛔ THE MUTATOR VERIFIES ITS OWN MUTANT BEFORE BELIEVING THE KILL. The first version of this block
+  # built mutants with `sed` expressions that ERRORED on their own quoting: sed wrote nothing, the
+  # empty file differed from the original, every check failed, and all three mutations reported
+  # "killed". A mutation harness whose mutant-builder can fail reports a FALSE GREEN in the one
+  # direction that matters — it says the checks work when they were never exercised. So a mutant is
+  # only accepted if it (a) changed exactly the intended text, (b) still PARSES as a shell script,
+  # and (c) actually contains the restored defect.
+  mutate_and_expect_red() {   # $1=label  $2=anchor  $3=replacement
+    local label="$1" anchor="$2" repl="$3"
+    local m; m="$(mktemp -d)/session-catchup-hint.sh"
+    mkdir -p "$(dirname "$m")"
+    if ! MUT_SRC="$HOOK_DEFAULT" MUT_DST="$m" MUT_A="$anchor" MUT_B="$repl" python3 - <<'PYMUT'
+import os, sys
+src = open(os.environ["MUT_SRC"], encoding="utf-8").read()
+a, b = os.environ["MUT_A"], os.environ["MUT_B"]
+if src.count(a) != 1:
+    sys.stderr.write("anchor matched %d times\n" % src.count(a)); sys.exit(1)
+open(os.environ["MUT_DST"], "w", encoding="utf-8").write(src.replace(a, b, 1))
+PYMUT
+    then
+      red "mutation '$label': the mutant could not be BUILT (anchor missing?) — proves nothing"
+      rm -rf "$(dirname "$m")"; return
+    fi
+    if ! bash -n "$m" 2>/dev/null; then
+      red "mutation '$label': the mutant does not PARSE — a broken file fails every check for the wrong reason"
+      rm -rf "$(dirname "$m")"; return
+    fi
+    if ! grep -qF "$repl" "$m"; then
+      red "mutation '$label': the restored defect is not present in the mutant"
+      rm -rf "$(dirname "$m")"; return
+    fi
+    local _p=$pass _f=$fail mrc
+    check_hook "$m" "MUTANT" >/dev/null 2>&1; mrc=$?
+    pass=$_p; fail=$_f
+    if [ "$mrc" -eq 0 ]; then
+      red "mutation SURVIVED — '$label' passes every check, so the parity checks test nothing"
+    else
+      grn "mutation killed — '$label'"
+    fi
+    rm -rf "$(dirname "$m")"
+  }
+
+  # (1) the marker read that deleted EVERY space, so `name (purpose)` became `name(purpose)` before
+  #     any sanitizer ran — the literal filenames in beta feedback #14/#16.
+  mutate_and_expect_red "marker read strips interior spaces" \
+    "tr -d '\\r\\n')" \
+    "tr -d '[:space:]')"
+
+  # (2) the hand-written sanitizer that neither casefolded nor understood Unicode.
+  mutate_and_expect_red "hook re-implements the filename rule (the old sed)" \
+    'if [ -n "$_km_bin" ] && _safe=$("$_km_bin" --safe-persona "$_persona" 2>/dev/null) && [ -n "$_safe" ]; then' \
+    'if _safe=$(printf "%s" "$_persona" | sed "s/[^A-Za-z0-9._-]/_/g") && [ -n "$_safe" ]; then'
 fi
 
 echo
