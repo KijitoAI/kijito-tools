@@ -107,7 +107,35 @@ if len(hits) == 1:
     sys.stdout.write(hits[0])
 PYSCAN
 )
-      if [ -n "${_found:-}" ]; then _rule=by-content; fi
+      # ⛔ A FILE EXISTING IS NOT A PRODUCER RUNNING (assay cert finding F1, 2026-09-21). The first
+      # version of this route stopped here and reported "producer: UP for '<persona>'" on the
+      # strength of a glob hit. A STALE stream file — a persona whose producer died, or one that
+      # moved seats — then manufactured a confident UP, and because the path was found BY GLOBBING
+      # EXISTING FILES it could never reach the "a producer is running but NOT for you" branch
+      # below: that message was unreachable on this route by construction. The agent would arm a
+      # Monitor on a dead file AND be told everything was fine, so nothing would ever contradict it.
+      # That is worse than the silence this whole row is about, and it is reachable exactly in the
+      # population the row exists for (seats whose producer predates --safe-persona).
+      # ⇒ Require EVIDENCE THAT A LIVE PRODUCER COVERS THIS PERSONA, from a running process's own
+      # argv. Any one of three suffices, because the supervisors spell it differently:
+      #   · the resolved path appears verbatim   (systemd's --events-file <path>)
+      #   · --persona <this persona> appears     (a per-persona unit, whatever path spelling)
+      #   · --all-personas appears               (one producer covering every persona, incl. ours)
+      # A launchd producer passes --events-file-template, so its argv holds the TEMPLATE and not the
+      # resolved path — which is precisely why the second and third forms are needed and why
+      # matching the path alone would have been a new false-negative to replace the false positive.
+      if [ -n "${_found:-}" ]; then
+        _live=""
+        if command -v pgrep >/dev/null 2>&1; then
+          _live=$(pgrep -af "kijito[-_]inbox[-_]monitor" 2>/dev/null \
+                  | grep -F -e "$_found" -e "--persona $_persona" -e "--all-personas" | head -n1)
+        fi
+        if [ -n "$_live" ]; then
+          _rule=by-content
+        else
+          _rule=stale-stream
+        fi
+      fi
     fi
   fi
 fi
@@ -128,9 +156,14 @@ fi
 # supervisor definition is the next-best evidence. uname is the last resort, not the first test.
 _mac_events="$HOME/.cache/kijito-inbox-monitor/events.${_safe}.ndjson"
 _lnx_events="$HOME/.kijito-monitor/${_safe}.jsonl"
-if   [ "$_rule" = by-content ]; then
+if   [ "$_rule" = by-content ] || [ "$_rule" = stale-stream ]; then
   # The producer's own output named this file. It outranks every derivation below, because it is the
   # only one of them that was written by the process we are asking about.
+  # ⚠️ A STALE stream still resolves to THIS path deliberately: it is genuinely this persona's file,
+  # it is simply not being written any more. Falling through to the derivations below would be worse
+  # than useless here — with no --safe-persona answer they would produce `~/.kijito-monitor/.jsonl`,
+  # an empty component that looks like a path and names nothing. The producer line says it is stale;
+  # the arming block should still point at the file that will come back when it restarts.
   _events="$_found"
   case "$_events" in *.jsonl) _sup="systemd" ;; *) _sup="launchd" ;; esac
 elif [ -n "$_safe" ] && [ -e "$_lnx_events" ]; then _events="$_lnx_events"; _sup="systemd"
@@ -159,7 +192,15 @@ if pgrep -f "kijito_inbox_monitor\.py|bin/kijito-inbox-monitor" >/dev/null 2>&1 
   if [ -z "$_persona" ]; then
     _prod="inbox-monitor producer: a producer process is running (persona unknown here — no .kijito_persona marker, so this hook cannot tell whether it covers YOUR inbox)."
   elif [ "$_rule" = by-content ]; then
-    _prod="inbox-monitor producer: UP for '$_persona' ($_sup; events → $_events — identified from the stream's own persona stamp, because the installed producer could not be asked for the filename rule)."
+    _prod="inbox-monitor producer: UP for '$_persona' ($_sup; events → $_events — identified from the stream's own persona stamp and confirmed against a running producer's own arguments, because the installed producer could not be asked for the filename rule)."
+  elif [ "$_rule" = stale-stream ]; then
+    # The most diagnosable state of the lot, and it used to read as UP: the file is there, nothing is
+    # writing it. Say that, rather than the generic "not being collected" — a stale file and a missing
+    # file need different fixes and a reader cannot tell them apart from the generic wording.
+    _prod="inbox-monitor producer: NOT running for '$_persona' — a stream file exists ($_found) but NO running producer names that path, this persona, or --all-personas, so it is STALE and your mail is not being collected. Anything tailing it will wait forever without an error. Start one: $(
+      [ "$_sup" = launchd ] \
+        && printf 'launchctl kickstart -k gui/$(id -u)/com.kijito.inbox-monitor' \
+        || printf 'systemctl --user enable --now kijito-inbox-monitor@%s' "$_persona" )"
   elif [ "$_rule" = too-old ]; then
     # We know the persona and a producer is running, but the installed producer cannot tell us how it
     # spells that persona as a filename. Naming a path here would be a guess, and a guessed path fails

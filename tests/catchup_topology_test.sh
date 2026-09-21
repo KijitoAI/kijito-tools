@@ -53,7 +53,21 @@ cat > "$SHIMDIR/pgrep" <<'SHIM'
 pat="$*"
 case "$pat" in
   *"tail -n 0 -F"*) [ "${FAKE_ARMED:-0}" = 1 ] && { echo 4242; exit 0; }; exit 1 ;;
-  *)                [ "${FAKE_PRODUCER:-0}" = 1 ] && { echo 1111; exit 0; }; exit 1 ;;
+  *)
+    [ "${FAKE_PRODUCER:-0}" = 1 ] || exit 1
+    # ⛔ THE -af FORM MUST CARRY AN ARGV, NOT JUST A PID (assay cert F1). The hook now asks a running
+    # producer WHICH persona it covers, and it can only ask by reading the command line. A shim that
+    # answers every probe with a bare pid makes "a producer is running" and "a producer is running
+    # FOR ME" indistinguishable — which is exactly the conflation that let a stale stream file report
+    # UP. FAKE_PRODUCER_PERSONA says who the running producer actually covers; unset means "nobody in
+    # particular", i.e. a sibling's.
+    case "$pat" in
+      *-af*|*-a\ *)
+        _who=${FAKE_PRODUCER_PERSONA:-someone-else}
+        echo "1111 /usr/bin/python3 /home/u/.local/bin/kijito-inbox-monitor --persona $_who --state-file $HOME/.kijito-monitor/$_who.state --events-file $HOME/.kijito-monitor/$_who.jsonl --heartbeat 900"
+        exit 0 ;;
+      *) echo 1111; exit 0 ;;
+    esac ;;
 esac
 SHIM
 chmod 0755 "$SHIMDIR/pgrep"
@@ -121,6 +135,43 @@ check_hook() {
     grn "$label: no producer on linux → DOWN with a systemd restart hint"
   else red "$label: no producer on linux → missing DOWN or systemd hint"; bad=1; fi
   rm -rf "$h"
+
+  # ---- S: A STALE STREAM FILE IS NOT A RUNNING PRODUCER (assay cert F1) ----------------------
+  # The by-content route resolves the stream by reading the persona each file stamps into its own
+  # events. That answers WHICH file, and says nothing about whether anyone is still WRITING it. The
+  # first version stopped there and reported UP, and because the path had been found by globbing
+  # files that exist, the "a producer is running but NOT for you" branch was unreachable on that
+  # route — so a dead inbox reported healthy and nothing could contradict it. Worse than silence.
+  #
+  # ⚠️ REACHABLE EXACTLY WHERE IT HURTS: the by-content route is what runs on a seat whose producer
+  # predates --safe-persona, i.e. every beta seat until kijito-tools ships.
+  local ghost_home
+  ghost_home="$(mktemp -d)"; mkdir -p "$ghost_home/.kijito-monitor"
+  printf '{"event": "heartbeat", "persona": "ghost", "ts": "2026-08-01T00:00:00+00:00"}\n' \
+    > "$ghost_home/.kijito-monitor/ghost.jsonl"
+  proj2="$(make_proj ghost)"
+  # KIJITOMON_BIN points at something that cannot answer --safe-persona, forcing the by-content route.
+  out="$(printf '{"source":"startup","cwd":"%s"}' "$proj2" \
+        | PATH="$SHIMDIR:$PATH" HOME="$ghost_home" CLAUDE_PROJECT_DIR="$proj2" \
+          KIJITOMON_BIN=/bin/false FAKE_PRODUCER=1 FAKE_ARMED=0 \
+          bash "$hook" 2>/dev/null)"
+  if grep -q "UP for 'ghost'" <<<"$out"; then
+    red "$label: stale stream → reported UP with no producer writing it (F1 regression)"; bad=1
+  else grn "$label: stale stream → not reported UP"; fi
+  if grep -qE "STALE|NOT running for 'ghost'" <<<"$out"; then
+    grn "$label: stale stream → named as stale, not as a generic absence"
+  else red "$label: stale stream → the verdict does not say the file is stale"; bad=1; fi
+
+  # ...and the CONTROL, without which the check above is satisfied by a script that never says UP:
+  # same fixture, but the running producer's argv names THIS persona.
+  out="$(printf '{"source":"startup","cwd":"%s"}' "$proj2" \
+        | PATH="$SHIMDIR:$PATH" HOME="$ghost_home" CLAUDE_PROJECT_DIR="$proj2" \
+          KIJITOMON_BIN=/bin/false FAKE_PRODUCER=1 FAKE_PRODUCER_PERSONA=ghost FAKE_ARMED=0 \
+          bash "$hook" 2>/dev/null)"
+  if grep -q "UP for 'ghost'" <<<"$out"; then
+    grn "$label: live producer for this persona → by-content route still reports UP"
+  else red "$label: live producer for this persona → by-content route no longer reports UP"; bad=1; fi
+  rm -rf "$ghost_home" "$proj2"
 
   # ---- P: PERSONA-NAME PARITY (row M290) ----------------------------------------------------
   # The defect: the hook derived the events filename with its own `sed 's/[^A-Za-z0-9._-]/_/g'` while
