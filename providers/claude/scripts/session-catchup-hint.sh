@@ -136,7 +136,16 @@ PYSCAN
       if [ -n "${_found:-}" ]; then
         _live=""
         if command -v pgrep >/dev/null 2>&1; then
+          # ⛔ A PROCESS THAT MERELY MENTIONS THE PRODUCER IS NOT THE PRODUCER (assay observation, 2026-09-21:
+          # their verification SHELL matched this three times, because its command line contained both the
+          # product name and `--persona <p>` — and it then reported UP for a persona with no producer, which
+          # is F1's exact symptom arriving through the CHECKER instead of through a stale file). The
+          # sibling tool producer-health.sh already guards this by requiring the match to be a PYTHON
+          # process; the same rule belongs here, and a checker that can satisfy its own check is worth
+          # more caution than its low reachability suggests.
           _live=$(pgrep -af "kijito[-_]inbox[-_]monitor" 2>/dev/null \
+                  | grep -E "[Pp]ython|/kijito-inbox-monitor( |$)" \
+                  | grep -v -e "[[:space:]]grep[[:space:]]" -e "session-catchup-hint" \
                   | grep -F -e "$_found" -e "--persona $_persona" -e "--all-personas" | head -n1)
         fi
         if [ -n "$_live" ]; then

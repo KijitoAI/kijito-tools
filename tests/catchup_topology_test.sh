@@ -33,6 +33,14 @@ grn() { printf "  ok    %s\n" "$1"; pass=$((pass+1)); }
 
 command -v jq >/dev/null 2>&1 || { echo "SKIP: jq not installed — the hook parses its stdin with jq."; exit 0; }
 
+# ⛔ EVERY TEMP DIRECTORY THIS TEST MAKES LIVES UNDER ONE ROOT, AND THE ROOT IS TRAPPED. Cleaning up
+# per-fixture was what leaked: the S-block and the parity loop both bind $proj2, the mutants make
+# their own dirs, and any early `exit` skips whatever rm came after it. Pointing TMPDIR at a single
+# run-scoped root makes cleanup total and exit-path-independent — a test that litters /tmp is a test
+# whose own hygiene nobody is asserting (assay saw "Directory not empty" on both runs).
+_RUNTMP="$(mktemp -d)"; export TMPDIR="$_RUNTMP"
+trap 'rm -rf "$_RUNTMP"' EXIT INT TERM
+
 SHIMDIR="$(mktemp -d)"
 # ── THE PRODUCER ITSELF, ON PATH ──────────────────────────────────────────────────────────────────
 # Not a stand-in: this execs the producer this repo vendors, which is where the persona->filename rule
@@ -202,6 +210,10 @@ check_hook() {
     fi
     rm -rf "$h" "$proj2"
   done
+  # ⚠️ The S-block above and the parity loop both bind $proj2; without this the S-block's directory
+  # is orphaned when the loop rebinds it (assay saw "Directory not empty" on both runs). A test that
+  # litters /tmp is a test whose own hygiene nobody is asserting.
+  unset proj2
 
   # ---- D: macOS seat still works — this is a portability fix, not a platform swap ----
   # ⚠️ Without this direction, deleting the Mac branch entirely would pass every other check while
