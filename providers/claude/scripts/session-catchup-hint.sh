@@ -31,17 +31,132 @@ esac
 
 # ── Resolve THIS project's persona from a .kijito_persona marker (self-describing, travels with
 # the project, survives a rename — preferred over parsing CLAUDE.md prose or a central dir->persona
-# map that rots). Search order: $CLAUDE_PROJECT_DIR, the hook-reported cwd, $PWD. Sanitize to match
-# the inbox-monitor producer's filename rule (_state_safe_persona: any char not [alnum . _ -] -> _),
-# else an exotic persona name would point the watcher at the wrong events.<persona>.ndjson file.
+# map that rots). Search order: $CLAUDE_PROJECT_DIR, the hook-reported cwd, $PWD.
+#
+# ── ASK THE PRODUCER FOR THE FILENAME RULE; NEVER RE-IMPLEMENT IT (row M290) ──────────────────────
+# This line used to read `sed 's/[^A-Za-z0-9._-]/_/g'`, described as matching the producer's rule. It
+# did not, in two ways that matter: the producer CASEFOLDS (the local filesystem is case-insensitive,
+# so it must) and it accepts any UNICODE alphanumeric. So a persona named `Loom` got `Loom.jsonl` here
+# and `loom.jsonl` from the producer; `Ωmega` got `_mega` here and `ωmega` there. The hook then told
+# the user their mail was "not being collected" and pointed a Monitor at a file that will never exist
+# — silence forever, no error (beta feedback #14/#16).
+# ⚠️ AND IT WAS INVISIBLE TO EVERYONE WHO TESTED IT ON A MAC: APFS is case-INSENSITIVE, so the `-e`
+# probe below SUCCEEDS on the producer's differently-cased file. The bug only exists on Linux, which
+# is why it reached a user rather than a reviewer.
+# ⇒ The producer publishes the rule as `--safe-persona NAME` (a pure string transform: no token, no
+# network, no state file). We ask it. If we CANNOT ask it — no producer installed, or one too old to
+# answer — we do NOT fall back to guessing, because a guess is what produced this defect; we say so
+# and name the fix. A wrong path here is unfalsifiable by construction: it fails as silence.
+# The marker read lives in kijito-persona-lib.sh so the status line (row M309) and anything added
+# later cannot drift from it the way the filename rule did. Falling back to the inline loop keeps a
+# partially-installed ~/.claude working rather than silently resolving no persona at all.
 _persona=""
+_lib="$(dirname -- "${BASH_SOURCE[0]:-$0}")/kijito-persona-lib.sh"
+if [ -r "$_lib" ]; then
+  # shellcheck source=/dev/null
+  . "$_lib"
+  _persona=$(kijito_persona_from_marker "${CLAUDE_PROJECT_DIR:-}" "$hook_cwd" "$PWD" || true)
+fi
 for d in "${CLAUDE_PROJECT_DIR:-}" "$hook_cwd" "$PWD"; do
-  if [ -n "$d" ] && [ -f "$d/.kijito_persona" ]; then
-    _persona=$(head -n1 "$d/.kijito_persona" | tr -d '[:space:]')
+  if [ -z "$_persona" ] && [ -n "$d" ] && [ -f "$d/.kijito_persona" ]; then
+    # ⛔ TRIM THE ENDS, NEVER THE MIDDLE (row M290). This read was `tr -d '[:space:]'`, which deletes
+    # EVERY space in the name: a persona written `name (purpose)` in the marker became `name(purpose)`
+    # here and `name_purpose_` as a filename, while the producer — which receives the name with its
+    # space intact from the API — wrote `name__purpose_`. THAT is the exact pair of filenames beta
+    # feedback #14/#16 reported, and it is a different defect from the sanitizer mismatch beside it:
+    # the name was already corrupted BEFORE any sanitizer ran, so fixing only the sanitizer would have
+    # left this case broken while looking fixed. A marker file's payload is its first line with the
+    # ends trimmed; anything stricter silently renames the user's persona.
+    _persona=$(head -n1 "$d/.kijito_persona" | tr -d '\r\n')
+    _persona="${_persona#"${_persona%%[![:space:]]*}"}"   # strip leading blanks
+    _persona="${_persona%"${_persona##*[![:space:]]}"}"   # strip trailing blanks
     [ -n "$_persona" ] && break
   fi
 done
-_safe=$(printf '%s' "$_persona" | sed 's/[^A-Za-z0-9._-]/_/g')
+_km_bin=""
+for _c in "${KIJITOMON_BIN:-}" "$(command -v kijito-inbox-monitor 2>/dev/null)" \
+          "$HOME/.local/bin/kijito-inbox-monitor" "/usr/local/bin/kijito-inbox-monitor"; do
+  if [ -n "$_c" ] && [ -x "$_c" ]; then _km_bin=$_c; break; fi
+done
+_safe=""; _rule=no-producer
+if [ -n "$_persona" ]; then
+  if [ -n "$_km_bin" ] && _safe=$("$_km_bin" --safe-persona "$_persona" 2>/dev/null) && [ -n "$_safe" ]; then
+    _rule=ok
+  else
+    # ── SECOND NON-GUESSING ROUTE: ASK THE STREAM WHO IT BELONGS TO ─────────────────────────────────
+    # No producer on PATH, or one from before --safe-persona existed. The tempting fallback is to
+    # re-implement the rule "just for this case" — that is precisely how the three drifted copies got
+    # written, so it is the one thing we will not do. Instead we read the producer's OWN OUTPUT: every
+    # event line it writes carries the persona it was written for, so the file itself can say whose
+    # mail it collects. That is evidence, not inference, and it stays correct no matter how the rule
+    # changes. (A brand-new persona with no stream yet simply has no answer here — correctly so: the
+    # honest report is then "nothing is collecting your mail", which is the truth.)
+    _safe=""; _rule=too-old
+    [ -z "$_km_bin" ] && _rule=no-producer
+    if command -v python3 >/dev/null 2>&1; then
+      _found=$(KJ_PERSONA="$_persona" python3 - <<'PYSCAN' 2>/dev/null
+import glob, json, os, sys
+want = os.environ["KJ_PERSONA"].casefold()
+home = os.path.expanduser("~")
+hits = []
+for pat in (os.path.join(home, ".kijito-monitor", "*.jsonl"),
+            os.path.join(home, ".cache", "kijito-inbox-monitor", "events.*.ndjson")):
+    for path in glob.glob(pat):
+        try:
+            with open(path, "rb") as fh:
+                # the FIRST line is enough and is O(1): the producer stamps every event with its
+                # persona, and a stream never mixes personas (one owned sink per persona).
+                line = fh.readline(65536)
+            who = json.loads(line).get("persona")
+        except Exception:
+            continue
+        if isinstance(who, str) and who.casefold() == want:
+            hits.append(path)
+if len(hits) == 1:
+    sys.stdout.write(hits[0])
+PYSCAN
+)
+      # ⛔ A FILE EXISTING IS NOT A PRODUCER RUNNING (assay cert finding F1, 2026-09-21). The first
+      # version of this route stopped here and reported "producer: UP for '<persona>'" on the
+      # strength of a glob hit. A STALE stream file — a persona whose producer died, or one that
+      # moved seats — then manufactured a confident UP, and because the path was found BY GLOBBING
+      # EXISTING FILES it could never reach the "a producer is running but NOT for you" branch
+      # below: that message was unreachable on this route by construction. The agent would arm a
+      # Monitor on a dead file AND be told everything was fine, so nothing would ever contradict it.
+      # That is worse than the silence this whole row is about, and it is reachable exactly in the
+      # population the row exists for (seats whose producer predates --safe-persona).
+      # ⇒ Require EVIDENCE THAT A LIVE PRODUCER COVERS THIS PERSONA, from a running process's own
+      # argv. Any one of three suffices, because the supervisors spell it differently:
+      #   · the resolved path appears verbatim   (systemd's --events-file <path>)
+      #   · --persona <this persona> appears     (a per-persona unit, whatever path spelling)
+      #   · --all-personas appears               (one producer covering every persona, incl. ours)
+      # A launchd producer passes --events-file-template, so its argv holds the TEMPLATE and not the
+      # resolved path — which is precisely why the second and third forms are needed and why
+      # matching the path alone would have been a new false-negative to replace the false positive.
+      if [ -n "${_found:-}" ]; then
+        _live=""
+        if command -v pgrep >/dev/null 2>&1; then
+          # ⛔ A PROCESS THAT MERELY MENTIONS THE PRODUCER IS NOT THE PRODUCER (assay observation, 2026-09-21:
+          # their verification SHELL matched this three times, because its command line contained both the
+          # product name and `--persona <p>` — and it then reported UP for a persona with no producer, which
+          # is F1's exact symptom arriving through the CHECKER instead of through a stale file). The
+          # sibling tool producer-health.sh already guards this by requiring the match to be a PYTHON
+          # process; the same rule belongs here, and a checker that can satisfy its own check is worth
+          # more caution than its low reachability suggests.
+          _live=$(pgrep -af "kijito[-_]inbox[-_]monitor" 2>/dev/null \
+                  | grep -E "[Pp]ython|/kijito-inbox-monitor( |$)" \
+                  | grep -v -e "[[:space:]]grep[[:space:]]" -e "session-catchup-hint" \
+                  | grep -F -e "$_found" -e "--persona $_persona" -e "--all-personas" | head -n1)
+        fi
+        if [ -n "$_live" ]; then
+          _rule=by-content
+        else
+          _rule=stale-stream
+        fi
+      fi
+    fi
+  fi
+fi
 
 # ── Producer topology. THE PRODUCER WRITES A DIFFERENT PATH ON EACH SUPERVISOR, and this script
 # used to hardcode the macOS one in all five places it appears. On a Linux seat that meant: a pgrep
@@ -59,7 +174,17 @@ _safe=$(printf '%s' "$_persona" | sed 's/[^A-Za-z0-9._-]/_/g')
 # supervisor definition is the next-best evidence. uname is the last resort, not the first test.
 _mac_events="$HOME/.cache/kijito-inbox-monitor/events.${_safe}.ndjson"
 _lnx_events="$HOME/.kijito-monitor/${_safe}.jsonl"
-if   [ -n "$_safe" ] && [ -e "$_lnx_events" ]; then _events="$_lnx_events"; _sup="systemd"
+if   [ "$_rule" = by-content ] || [ "$_rule" = stale-stream ]; then
+  # The producer's own output named this file. It outranks every derivation below, because it is the
+  # only one of them that was written by the process we are asking about.
+  # ⚠️ A STALE stream still resolves to THIS path deliberately: it is genuinely this persona's file,
+  # it is simply not being written any more. Falling through to the derivations below would be worse
+  # than useless here — with no --safe-persona answer they would produce `~/.kijito-monitor/.jsonl`,
+  # an empty component that looks like a path and names nothing. The producer line says it is stale;
+  # the arming block should still point at the file that will come back when it restarts.
+  _events="$_found"
+  case "$_events" in *.jsonl) _sup="systemd" ;; *) _sup="launchd" ;; esac
+elif [ -n "$_safe" ] && [ -e "$_lnx_events" ]; then _events="$_lnx_events"; _sup="systemd"
 elif [ -n "$_safe" ] && [ -e "$_mac_events" ]; then _events="$_mac_events"; _sup="launchd"
 elif [ -d "$HOME/.kijito-monitor" ]; then          _events="$_lnx_events"; _sup="systemd"
 elif [ -d "$HOME/.cache/kijito-inbox-monitor" ]; then _events="$_mac_events"; _sup="launchd"
@@ -82,13 +207,32 @@ esac
 # appears in a command line, never on the bare product name.
 if pgrep -f "kijito_inbox_monitor\.py|bin/kijito-inbox-monitor" >/dev/null 2>&1 \
    || pgrep -f "kijito-inbox-monitor .*--persona" >/dev/null 2>&1; then
-  if [ -z "$_safe" ]; then
+  if [ -z "$_persona" ]; then
     _prod="inbox-monitor producer: a producer process is running (persona unknown here — no .kijito_persona marker, so this hook cannot tell whether it covers YOUR inbox)."
+  elif [ "$_rule" = by-content ]; then
+    _prod="inbox-monitor producer: UP for '$_persona' ($_sup; events → $_events — identified from the stream's own persona stamp and confirmed against a running producer's own arguments, because the installed producer could not be asked for the filename rule)."
+  elif [ "$_rule" = stale-stream ]; then
+    # The most diagnosable state of the lot, and it used to read as UP: the file is there, nothing is
+    # writing it. Say that, rather than the generic "not being collected" — a stale file and a missing
+    # file need different fixes and a reader cannot tell them apart from the generic wording.
+    _prod="inbox-monitor producer: NOT running for '$_persona' — a stream file exists ($_found) but NO running producer names that path, this persona, or --all-personas, so it is STALE and your mail is not being collected. Anything tailing it will wait forever without an error. Start one: $(
+      [ "$_sup" = launchd ] \
+        && printf 'launchctl kickstart -k gui/$(id -u)/com.kijito.inbox-monitor' \
+        || printf 'systemctl --user enable --now kijito-inbox-monitor@%s' "$_persona" )"
+  elif [ "$_rule" = too-old ]; then
+    # We know the persona and a producer is running, but the installed producer cannot tell us how it
+    # spells that persona as a filename. Naming a path here would be a guess, and a guessed path fails
+    # as SILENCE. Say what is unknown and how to make it knowable.
+    _prod="inbox-monitor producer: RUNNING, but this hook cannot name the event stream for '$_persona' — the installed kijito-inbox-monitor ($_km_bin) does not answer --safe-persona, so the persona→filename rule is unresolved and any path printed here would be a guess. Upgrade the producer (that flag is how the rule is published), then re-open this session."
+  elif [ "$_rule" = no-producer ]; then
+    _prod="inbox-monitor producer: a producer process is running, but no kijito-inbox-monitor executable is on this PATH, so this hook cannot resolve where '$_persona''s events are written (set \$KIJITOMON_BIN if it lives somewhere unusual)."
   elif [ -e "$_events" ]; then
     _prod="inbox-monitor producer: UP for '$_persona' ($_sup; events → $_events)."
   else
     # The case that actually bit river on 2026-07-31: assay's producer was up, river's was not, and
     # a host-global check would have called that UP and sent the agent off to tail a missing file.
+    # The path below came from the PRODUCER's own rule, so "does not exist" now means the stream is
+    # genuinely absent rather than that we spelled the name differently than the writer did.
     _prod="inbox-monitor producer: a producer is running but NOT for '$_persona' — $_events does not exist, so YOUR mail is not being collected. Start one: $(
       [ "$_sup" = launchd ] \
         && printf 'launchctl kickstart -k gui/$(id -u)/com.kijito.inbox-monitor' \
