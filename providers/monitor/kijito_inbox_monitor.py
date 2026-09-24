@@ -33,7 +33,7 @@ try:
 except ImportError:  # pragma: no cover - Windows
     fcntl = None
 
-__version__ = "0.5.0"
+__version__ = "0.5.3"
 SOURCE = "kijito-inbox"
 # A named User-Agent is REQUIRED: api.kijito.ai is fronted by a WAF that 403s the default Python-urllib UA.
 USER_AGENT = "kijito-inbox-monitor/%s" % __version__
@@ -332,6 +332,14 @@ _PERSONA_RETIRED = {}
 # so the producer can ship before the API populates the field with zero behaviour change. A boolean.
 _PERSONA_WRITE_ONLY = {}
 
+# Declared `reserved` flag per persona from /api/personas (server row M315; consumed here for row M332).
+# TRUE = a legacy row named after the hive-wide BROADCAST name ('all'): it can no longer be created, but
+# an account that minted one before the guard existed still holds it, and it is an ordinary inbox that
+# NOBODY works as. The server calls it debris and names the remedy (retire it). For alarm purposes it is
+# therefore treated exactly like a declared-`retired` row: see _is_debris. Its mail is still READ and
+# still counted - only the alarms change. Same tri-state discipline: absent/non-bool => undeclared.
+_PERSONA_RESERVED = {}
+
 
 def _row_memory_count(row):
     """Memories owned by this persona, or None if the server did not say.
@@ -387,6 +395,25 @@ def _row_write_only(row):
     return w if isinstance(w, bool) else None
 
 
+def _row_reserved(row):
+    """The persona's declared `reserved` flag as a strict bool, or None if the server did not report it.
+
+    Same tri-state discipline as _row_retired: only a genuine bool is a declaration. A server that
+    predates the field reports nothing, and the producer then behaves exactly as it did before (row M332
+    ships ahead of, or behind, the server with zero behaviour change).
+    """
+    r = row.get("reserved")
+    return r if isinstance(r, bool) else None
+
+
+def _is_debris(persona):
+    """True when the directory DECLARES that nobody works as this persona: `retired`, or `reserved`
+    (the legacy broadcast-name row, row M332). A positive declaration only (`is True`); an undeclared
+    flag is never debris. Debris is classified as clearable in the stranded tier and never fires the
+    urgent-unanswered alarm - there is no member there to be unresponsive."""
+    return _PERSONA_RETIRED.get(persona) is True or _PERSONA_RESERVED.get(persona) is True
+
+
 def fetch_personas(opener, headers):
     """Fetch the account persona directory for default/explicit all-persona mode."""
     req = urllib.request.Request(PERSONAS_URL, headers=headers, method="GET")
@@ -410,6 +437,7 @@ def fetch_personas(opener, headers):
             _PERSONA_READ_COUNTS[row["persona"]] = _row_read_count(row)
             _PERSONA_RETIRED[row["persona"]] = _row_retired(row)
             _PERSONA_WRITE_ONLY[row["persona"]] = _row_write_only(row)
+            _PERSONA_RESERVED[row["persona"]] = _row_reserved(row)
     if not personas:
         raise FatalConfig("/api/personas returned no personas")
     return personas
@@ -2341,7 +2369,14 @@ class WatchTarget:
                                                   "reason": "state file present but unusable; re-emitting the "
                                                             "visible window instead of baselining over it"})
                     elif self.cursor is None:
-                        self.cursor = max((m["id"] for m in items), default=0)
+                        # An EMPTY first window baselines BELOW id 0, not AT it. Message ids start at 0
+                        # on a new account, and every emission test is `id > cursor`, so a cursor of 0
+                        # on an empty inbox swallowed the account's very first message forever - the
+                        # producer only ever logged it as a quiet "dormant inbox (1 unread)". -1 is the
+                        # value the fail-closed branch above already produces for an empty window, so it
+                        # is a value every later comparison already tolerates. A NON-empty first window
+                        # still baselines to its newest id (never flood a new agent with history).
+                        self.cursor = max((m["id"] for m in items), default=-1)
                         # ⛔ AN ABSENT STATE FILE MEANS TWO THINGS THAT DEMAND OPPOSITE BEHAVIOUR, AND
                         # NOTHING HERE CAN TELL THEM APART. A genuine first launch must baseline - never
                         # flood a new agent with inbox history. A LOST state file must not: everything
@@ -3043,6 +3078,12 @@ _REPORTED_URGENT_QUIET = set()
 # Same once-per-member, EXACT-keyed discipline as _REPORTED_STRANDED / _REPORTED_DORMANT.
 _REPORTED_URGENT_WO = set()
 
+# DEBRIS rows (declared retired, or the reserved broadcast-name row - row M332) holding urgent unread.
+# Surfaced QUIETLY (a stderr NOTICE) once per member, never the loud alarm: "nobody is answering
+# escalated mail" presumes a member who could answer, and debris by declaration has none. Its own set so
+# no tier can gag another; re-armed by intersection_update like the others.
+_REPORTED_URGENT_DEBRIS = set()
+
 
 def urgent_unanswered(directory):
     """Directory personas holding SENDER-ESCALATED mail while showing no observed activity (§5.5).
@@ -3106,10 +3147,25 @@ def report_urgent_unanswered(directory, targets, emitter):
     # Partition by the DECLARED write_only fact, exactly as _partition_stranded does. `is True` is strict:
     # an undeclared or False flag leaves the member in the LOUD tier unchanged (graceful degradation, the
     # same tri-state _row_write_only guarantees).
+    # DEBRIS FIRST (row M332): a declared-retired row or the reserved broadcast-name row has no member to
+    # be unresponsive, so it leaves the loud tier whatever its other flags say; named quietly below.
+    debris_quiet = [(p, n) for p, n in current if _is_debris(p)]
+    current = [(p, n) for p, n in current if not _is_debris(p)]
     wo_quiet = [(p, n) for p, n in current if _PERSONA_WRITE_ONLY.get(p) is True]
     alerting = [(p, n) for p, n in current if _PERSONA_WRITE_ONLY.get(p) is not True]
     _REPORTED_URGENT_QUIET.intersection_update({p for p, _ in alerting})  # release: leaving re-arms alarm
     _REPORTED_URGENT_WO.intersection_update({p for p, _ in wo_quiet})
+    _REPORTED_URGENT_DEBRIS.intersection_update({p for p, _ in debris_quiet})
+    for persona, n in debris_quiet:
+        if persona in _REPORTED_URGENT_DEBRIS:
+            continue
+        _REPORTED_URGENT_DEBRIS.add(persona)
+        sys.stderr.write(
+            "kijito-inbox-monitor: NOTICE urgent-unanswered on debris (quiet, not alarmed) - %s (%d urgent "
+            "unread; declared %s, so nobody works as it - its mail is still readable; retire or clear it) "
+            "(further notices for %r suppressed)\n"
+            % (persona, n, "reserved (the broadcast name)" if _PERSONA_RESERVED.get(persona) is True
+               else "retired", persona))
     fresh = [(p, n) for p, n in alerting if p not in _REPORTED_URGENT_QUIET]
     fresh_wo = [(p, n) for p, n in wo_quiet if p not in _REPORTED_URGENT_WO]
     # QUIET-BUT-NAMED tier: a stderr NOTICE is a non-waking channel (the event-stream grep filters
@@ -3242,8 +3298,8 @@ def _partition_stranded(directory, counts):
         if read > 0:
             continue                             # someone is consuming it - not stranded at all
         # read == 0: this inbox has never been consumed. Partition by the DECLARED retired flag.
-        if _PERSONA_RETIRED.get(p) is True:
-            loud.append(p)                       # declared clearable debris -> loud, exactly like today
+        if _is_debris(p):
+            loud.append(p)                       # declared clearable debris (retired or reserved) -> loud
         else:
             dormant.append(p)                    # real-but-dormant -> quiet, must NOT ride the loud alarm
     return loud, dormant
@@ -3272,9 +3328,11 @@ def _stranded_detail(persona, directory, counts):
     if twin is not None:
         return "%s (%s unread; case-variant of known persona %r)" % (persona, counts.get(persona), twin)
     in_dir = persona in set(directory)
-    if in_dir and _PERSONA_READ_COUNTS.get(persona) == 0 and _PERSONA_RETIRED.get(persona) is True:
-        return ("%s (%s unread; never consumed (read 0) and declared retired, so it is clearable debris)"
-                % (persona, counts.get(persona)))
+    if in_dir and _PERSONA_READ_COUNTS.get(persona) == 0 and _is_debris(persona):
+        return ("%s (%s unread; never consumed (read 0) and declared %s, so it is clearable debris)"
+                % (persona, counts.get(persona),
+                   "reserved (the broadcast name, not an identity)" if _PERSONA_RESERVED.get(persona) is True
+                   else "retired"))
     if in_dir and _PERSONA_MEMORY_COUNTS.get(persona) == 0:
         return "%s (%s unread; registered as a recipient but owns no memories, so nobody works as it)" % (
             persona, counts.get(persona))

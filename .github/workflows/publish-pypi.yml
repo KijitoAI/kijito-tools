@@ -25,6 +25,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      # Row M314: the package must not ship a vendored monitor that differs from the upstream release
+      # providers/monitor/UPSTREAM names. Fails the build on any drift.
+      - run: bash tests/vendored_monitor_test.sh
       - run: pipx run build          # builds sdist + wheel into dist/
       - run: pipx run twine check dist/*
       - uses: pypa/gh-action-pypi-publish@release/v1   # v1.11+ attaches attestations by default

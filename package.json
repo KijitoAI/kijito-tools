@@ -1,6 +1,6 @@
 {
   "name": "kijito-tools",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Installer for kijito-tools: copies the context-tracking, session catch-up, and self-clear scripts plus the Kijito skills into ~/.claude.",
   "license": "Apache-2.0",
   "type": "commonjs",
@@ -35,7 +35,7 @@
     "kijito"
   ],
   "scripts": {
-    "prepublishOnly": "npm pack --dry-run",
+    "prepublishOnly": "bash tests/vendored_monitor_test.sh && npm pack --dry-run",
     "test:n0-subject": "node providers/codex/test/n0-subject-boundary.mjs && node --test providers/codex/test/n0-subject-boundary.test.mjs",
     "test:n0": "node --test providers/codex/test/n0-harness.test.mjs && echo N0_HARNESS_BASELINE_GREEN",
     "test:n0-cli": "node --test providers/codex/test/n0-cli-refusal.test.mjs && echo N0_CLI_REFUSAL_GREEN",
