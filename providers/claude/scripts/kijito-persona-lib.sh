@@ -38,3 +38,57 @@ kijito_truncate() {
   [ "$max" -le 1 ] && { printf '%s' "${s:0:$max}"; return 0; }
   printf '%s…' "${s:0:$((max-1))}"
 }
+
+# kijito_stream_for_persona <persona> -> prints the producer's event-stream path for it, or nothing.
+# TWO NON-GUESSING ROUTES, in order (moved here from inbox-selftest.sh for row M291, so the heartbeat
+# watchdog and the self-test cannot drift — the M290 lesson):
+#   1. ask the producer: `kijito-inbox-monitor --safe-persona` publishes the persona->filename rule;
+#   2. read the streams: the producer stamps every event with the persona it was written for, so the
+#      file itself says whose mail it holds — works on a seat whose producer predates --safe-persona.
+kijito_stream_for_persona() {
+  local want=${1:-} km="" c safe="" cand
+  [ -n "$want" ] || return 1
+  for c in "${KIJITOMON_BIN:-}" "$(command -v kijito-inbox-monitor 2>/dev/null)" \
+           "$HOME/.local/bin/kijito-inbox-monitor" "/usr/local/bin/kijito-inbox-monitor"; do
+    if [ -n "$c" ] && [ -x "$c" ]; then km=$c; break; fi
+  done
+  [ -n "$km" ] && safe=$("$km" --safe-persona "$want" 2>/dev/null)
+  if [ -n "$safe" ]; then
+    for cand in "$HOME/.kijito-monitor/$safe.jsonl" "$HOME/.cache/kijito-inbox-monitor/events.$safe.ndjson"; do
+      [ -e "$cand" ] && { printf '%s' "$cand"; return 0; }
+    done
+  fi
+  command -v python3 >/dev/null 2>&1 || return 1
+  cand=$(KJ_WANT="$want" python3 - <<'PYSCAN' 2>/dev/null
+import glob, json, os, sys
+want = os.environ["KJ_WANT"].casefold(); home = os.path.expanduser("~"); hits = []
+for pat in (os.path.join(home, ".kijito-monitor", "*.jsonl"),
+            os.path.join(home, ".cache", "kijito-inbox-monitor", "events.*.ndjson")):
+    for path in glob.glob(pat):
+        try:
+            with open(path, "rb") as fh:
+                who = json.loads(fh.readline(65536)).get("persona")
+        except Exception:
+            continue
+        if isinstance(who, str) and who.casefold() == want:
+            hits.append(path)
+if len(hits) == 1:
+    sys.stdout.write(hits[0])
+PYSCAN
+)
+  [ -n "$cand" ] && { printf '%s' "$cand"; return 0; }
+  return 1
+}
+
+# kijito_stream_consumed <stream-path> -> 0 if a wake-capable consumer (`tail -n 0 -F …`) reads it.
+# ⚠️ ANCHOR ON WHAT THE PROCESS *IS*. An unanchored pgrep on the events path SELF-MATCHES the producer
+# (its own argv contains that path), and the harness's `bash -c … eval` wrappers carry the same argv —
+# armed-looking and deaf. Only a process whose comm is `tail` counts.
+kijito_stream_consumed() {
+  local s=${1:-} p
+  [ -n "$s" ] || return 1
+  for p in $(pgrep -f "tail -n 0 -F.*$(basename "$s")" 2>/dev/null); do
+    [ "$(ps -o comm= -p "$p" 2>/dev/null)" = tail ] && return 0
+  done
+  return 1
+}

@@ -192,42 +192,13 @@ fi
 
 # The producer publishes the persona->filename rule; asking it is the only way to be sure this check
 # looks where the producer writes (row M290 — three hand-written copies had already drifted).
-KM_BIN=""
-for c in "${KIJITOMON_BIN:-}" "$(command -v kijito-inbox-monitor 2>/dev/null)" \
-         "$HOME/.local/bin/kijito-inbox-monitor" "/usr/local/bin/kijito-inbox-monitor"; do
-  if [ -n "$c" ] && [ -x "$c" ]; then KM_BIN=$c; break; fi
-done
-SAFE=""
-[ -n "$KM_BIN" ] && SAFE=$("$KM_BIN" --safe-persona "$PERSONA" 2>/dev/null) || true
-
-EVENTS=""
-if [ -n "$SAFE" ]; then
-  for cand in "$HOME/.kijito-monitor/$SAFE.jsonl" "$HOME/.cache/kijito-inbox-monitor/events.$SAFE.ndjson"; do
-    [ -e "$cand" ] && { EVENTS=$cand; break; }
-  done
-fi
-if [ -z "$EVENTS" ] && command -v python3 >/dev/null 2>&1; then
-  # Second non-guessing route: the producer stamps every event with the persona it was written for,
-  # so the stream itself says whose mail it holds. Evidence, not inference — and it works on a seat
-  # whose producer predates --safe-persona.
-  EVENTS=$(KJ_WANT="$PERSONA" python3 - <<'PYSCAN' 2>/dev/null || true
-import glob, json, os, sys
-want = os.environ["KJ_WANT"].casefold(); home = os.path.expanduser("~"); hits = []
-for pat in (os.path.join(home, ".kijito-monitor", "*.jsonl"),
-            os.path.join(home, ".cache", "kijito-inbox-monitor", "events.*.ndjson")):
-    for path in glob.glob(pat):
-        try:
-            with open(path, "rb") as fh:
-                who = json.loads(fh.readline(65536)).get("persona")
-        except Exception:
-            continue
-        if isinstance(who, str) and who.casefold() == want:
-            hits.append(path)
-if len(hits) == 1:
-    sys.stdout.write(hits[0])
-PYSCAN
-)
-fi
+# Resolved through the SHARED helper (row M291 moved it into kijito-persona-lib.sh, so the heartbeat
+# watchdog and this check cannot disagree about where a persona's stream lives).
+_st_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/kijito-persona-lib.sh"
+[ -r "$_st_lib" ] || _st_lib="$HOME/.claude/kijito-persona-lib.sh"
+# shellcheck source=/dev/null
+. "$_st_lib" || { echo "COULD NOT MEASURE: cannot source kijito-persona-lib.sh"; exit 2; }
+EVENTS=$(kijito_stream_for_persona "$PERSONA" || true)
 
 printf '%s\n' "kijito inbox self-test [persona=$PERSONA]"
 
@@ -295,11 +266,7 @@ fi
 # ⚠️ ANCHOR THE PATTERN. An unanchored pgrep on the events path SELF-MATCHES the producer (its own
 # argv contains that path) and reports a consumer where there is none — armed-looking and deaf.
 consumer_ok=0
-if [ -n "$EVENTS" ]; then
-  for p in $(pgrep -f "tail -n 0 -F.*$(basename "$EVENTS")" 2>/dev/null || true); do
-    if [ "$(ps -o comm= -p "$p" 2>/dev/null)" = tail ]; then consumer_ok=1; break; fi
-  done
-fi
+if [ -n "$EVENTS" ] && kijito_stream_consumed "$EVENTS"; then consumer_ok=1; fi
 if [ "$consumer_ok" = 1 ]; then
   printf '  ok    consumer: a wake-capable consumer is attached to the stream\n'
 else

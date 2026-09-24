@@ -122,6 +122,38 @@ lc_marker_legacy() {                                     # exists but carries no
   [ -f "$f" ] && [ ! -s "$f" ]
 }
 
+# ── M291: NEVER TYPE INTO A MENU ─────────────────────────────────────────────────────────────────
+# Anything that sends keys into a pane (the heartbeat nudge above all) must first ask whether the pane
+# is showing an interactive MENU rather than the chat input. The case that makes this a hard rule:
+# Claude Code's folder-trust dialog, whose second option is "No, exit" — a nudge's Enter there does
+# not deliver a prompt, it can QUIT the session, turning a stuck-but-recoverable pane into a dead one.
+# Any numbered selection menu has the same shape (Enter picks whatever is highlighted), so the rule is
+# stated for menus, with the trust dialog as the case pinned by a test.
+# Reads pane TEXT on stdin (pure, so a test can drive it with fixtures); 0 = a menu is showing.
+lc_text_is_menu() {
+  grep -Eq -- 'No, exit|Do you trust|trust (the files in )?this folder|Enter to confirm|❯ ?[0-9]+\.'
+}
+lc_pane_at_menu() {                                      # $1 = pane id; the last 20 NON-BLANK-ended lines
+  # ⚠️ capture-pane returns the WHOLE pane height, blank rows included, and a dialog drawn in a fresh
+  # pane sits at the TOP — so a bare `tail -20` of a 50-row pane reads twenty blank lines and misses the
+  # trust dialog entirely (measured by this row's own test). Trim trailing blank rows first.
+  tmux capture-pane -p -t "$1" 2>/dev/null \
+    | awk '{ l[NR] = $0 } NF { last = NR } END { s = (last > 20) ? last - 19 : 1; for (i = s; i <= last; i++) print l[i] }' \
+    | lc_text_is_menu
+}
+
+# ── M291: IS A BACKUP HEARTBEAT ALREADY WATCHING THIS PANE? ──────────────────────────────────────
+# A watchdog's argv ENDS with its pane id (hand-run, nohup, the systemd unit's `%%%i`, and a launchd
+# ProgramArguments all render `…/heartbeat-watchdog.sh %N`), so anchoring on the END is what stops
+# `%1` from matching `%11`.
+# ⚠️ KNOWN LIMIT: the argv names a pane, not a tmux SERVER. A seat running two tmux servers (a second
+# `-L` socket) can see a watchdog for ITS `%2` as one for yours; the result is a skipped start, never a
+# double one. One server per seat — the normal layout — is unaffected.
+lc_heartbeat_running() {                                 # $1 = pane id
+  [ -n "${1:-}" ] || return 1
+  pgrep -f "heartbeat-watchdog\.sh ${1}\$" >/dev/null 2>&1
+}
+
 lc_env_armed()    { [ "${KIJITO_AUTOCATCHUP:-0}" = "1" ]; }
 lc_is_armed()     { lc_marker_armed "${1:-}" || lc_env_armed; }
 
