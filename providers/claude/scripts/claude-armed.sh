@@ -19,7 +19,26 @@ mkdir -p "$(dirname "$marker")" 2>/dev/null
 if command -v lc_marker_write >/dev/null 2>&1 && [ -n "${TMUX_PANE:-}" ]; then
   lc_marker_write "$TMUX_PANE" || echo "claude-armed: could not stamp an arm marker for $TMUX_PANE (not a live tmux pane?) — relying on KIJITO_AUTOCATCHUP" >&2
 fi
-trap 'rm -f "$marker"' EXIT INT TERM
+# ── THE BACKUP HEARTBEAT STARTS WITH THE SESSION (row M291) ─────────────────────────────────────
+# It used to be a separate, manual step (wiring/README.md), so most armed panes ran without one — and
+# the heartbeat is the only thing that recovers a session whose inbox loop a usage-limit outage ended
+# silently. Idempotent: if a watchdog already watches this pane (a systemd/launchd unit, or an earlier
+# launch), it is left alone and NOT stopped on exit — only the one started here is ours to stop.
+# Opt out with KIJITO_HEARTBEAT=0.
+hb_pid=""
+if [ "${KIJITO_HEARTBEAT:-1}" != "0" ] && [ -n "${TMUX_PANE:-}" ]; then
+  hb_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/heartbeat-watchdog.sh"
+  [ -f "$hb_script" ] || hb_script="$HOME/.claude/heartbeat-watchdog.sh"
+  if [ ! -f "$hb_script" ]; then
+    echo "claude-armed: no heartbeat-watchdog.sh next to this script or in ~/.claude — running without the backup heartbeat" >&2
+  elif command -v lc_heartbeat_running >/dev/null 2>&1 && lc_heartbeat_running "$TMUX_PANE"; then
+    :   # already watched — by a supervisor unit or a previous launch
+  else
+    nohup bash "$hb_script" "$TMUX_PANE" >/dev/null 2>&1 &
+    hb_pid=$!
+  fi
+fi
+trap 'rm -f "$marker"; [ -n "$hb_pid" ] && kill "$hb_pid" 2>/dev/null' EXIT INT TERM
 
 # Hosted Kijito MCP bearer token for .mcp.json's ${KIJITO_API_TOKEN} — read from a file so it is
 # reliable inside the armed loop regardless of which shell profile did (or didn't) load. Only set it

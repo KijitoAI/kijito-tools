@@ -58,4 +58,10 @@ col=$(awk -v p="$pct" 'BEGIN { if (p>=80) printf "\033[31m"; else if (p>=60) pri
 if [ -n "$persona" ]; then
   printf '\033[36m%s\033[0m · ' "$(kijito_truncate "$persona" 18)"
 fi
+# ROW M291: the heartbeat watchdog raises this flag when this pane's persona has unread wake events
+# in its stream and NO consumer reading it (typically after a usage-limit outage ended the loop). It
+# is the one place a human watching the pane will see it; the watchdog removes it on re-arm.
+if [ -n "${TMUX_PANE:-}" ] && [ -f "${KIJITO_LC_DIR:-$HOME/.claude/.lifecycle}/unconsumed.$TMUX_PANE" ]; then
+  printf '\033[31m⚠ inbox deaf\033[0m · '
+fi
 printf '%s · ctx %b%s/%s (%s%%)\033[0m' "$model" "$col" "$uk" "$wk" "$pct"

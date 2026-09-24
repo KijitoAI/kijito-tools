@@ -104,6 +104,12 @@ jobs:
 
       - name: lifecycle suite
         run: bash tests/lc_test.sh
+      - name: heartbeat, inbox self-test and status-line suites (rows M290 M304 M309 M291)
+        run: |
+          bash tests/heartbeat_nonce_test.sh
+          bash tests/heartbeat_m291_test.sh
+          bash tests/inbox_selftest_test.sh
+          bash tests/statusline_persona_test.sh
 
       # A packaging manifest that drops a provider breaks users and nothing else. There are four
       # manifests (npm files[], wheel force-include, sdist include, and the installer's own

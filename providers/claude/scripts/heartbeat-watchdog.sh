@@ -38,11 +38,19 @@ set -u
 PANE="${1:-}"
 POLL="${HEARTBEAT_POLL:-300}"
 QUIET_CHECKS="${HEARTBEAT_QUIET:-4}"
+# M291: how long a persona's event stream may carry unread wake events with NO consumer before this
+# says so. Default 10 min: longer than a Monitor re-arm gap, far shorter than a usage-limit outage.
+UNCONSUMED_SECS="${HEARTBEAT_UNCONSUMED_SECS:-600}"
 
 _kjt_lib="${KIJITO_LC_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lifecycle-lib.sh}"
 [ -f "$_kjt_lib" ] || _kjt_lib="$HOME/.claude/lifecycle-lib.sh"
 # shellcheck disable=SC1090
 . "$_kjt_lib" 2>/dev/null || { echo "heartbeat-watchdog: cannot source lifecycle-lib" >&2; exit 2; }
+
+_kjt_plib="$(dirname "$_kjt_lib")/kijito-persona-lib.sh"
+[ -f "$_kjt_plib" ] || _kjt_plib="$HOME/.claude/kijito-persona-lib.sh"
+# shellcheck disable=SC1090
+. "$_kjt_plib" 2>/dev/null || true      # optional: without it the stream check is skipped, not faked
 
 command -v tmux >/dev/null 2>&1 || { lc_log HEARTBEAT_SKIP "no tmux"; exit 0; }
 [ -n "$PANE" ] || { echo "usage: heartbeat-watchdog.sh <tmux-pane-id>   (e.g. %3)" >&2; exit 2; }
@@ -50,6 +58,54 @@ command -v tmux >/dev/null 2>&1 || { lc_log HEARTBEAT_SKIP "no tmux"; exit 0; }
 # Change detection only — `cksum` is POSIX and present on both BSD and GNU userland, unlike md5sum
 # (absent on macOS, where it is `md5`). We need "did this differ", not a cryptographic digest.
 _pane_hash() { tmux capture-pane -p -t "$1" 2>/dev/null | tail -40 | cksum | awk '{print $1"-"$2}'; }
+
+# ── M291: THE UNCONSUMED-STREAM CHECK ────────────────────────────────────────────────────────────
+# WHY: a Claude usage-limit hit ends the agent's turn loop, and the wake-capable consumer (a Monitor
+# tail) dies or expires with it. When the limit clears NOTHING re-arms it: the producer keeps writing
+# events, nobody reads them, and the session is permanently deaf while every health signal reads
+# green (producer up, heartbeat fresh, mail landing). That is DIFFERENT from the producer's "dormant
+# inbox" notice, which is about mail nobody has READ on the server; this is about a local stream
+# nobody is CONSUMING — and it has a different fix (re-arm the consumer), so it gets its own name.
+#
+# RAISED WHEN: this pane's persona has an event stream, no `tail` consumer has been attached for
+# UNCONSUMED_SECS, AND at least one wake-worthy event was appended since the consumer went missing
+# (no events = nothing missed = nothing to alarm about; the heartbeat rows the producer writes every
+# minute are excluded by the same filter a consumer uses).
+# SURFACED AS: an `HEARTBEAT_UNCONSUMED_STREAM` lifecycle-log line, a flag file the status line shows
+# (`unconsumed.<pane>`), and a nudge prompt that says to re-arm the consumer FIRST. Cleared (with a
+# `HEARTBEAT_STREAM_CONSUMED` line) the moment a consumer is attached again.
+WAKE_EVENTS='"event": ?"(new|alert|recovered|state_corrupt|baseline_skipped|seed_ahead|replay_capped|persona_added)"'
+UNCONSUMED_FLAG="$KIJITO_LC_DIR/unconsumed.$PANE"
+st_missing_since=""; st_offset=""; st_alerted=0; st_path=""
+
+_stream_check() {
+  command -v kijito_stream_for_persona >/dev/null 2>&1 || return 0
+  local dir persona path now size n
+  dir=$(tmux display-message -p -t "$PANE" '#{pane_current_path}' 2>/dev/null)
+  persona=$(kijito_persona_from_marker "$dir" 2>/dev/null) || persona=""
+  [ -n "$persona" ] || return 0
+  path=$(kijito_stream_for_persona "$persona" 2>/dev/null) || path=""
+  [ -n "$path" ] && [ -f "$path" ] || return 0
+  if kijito_stream_consumed "$path"; then
+    if [ "$st_alerted" = 1 ]; then lc_log HEARTBEAT_STREAM_CONSUMED "target_pane=$PANE persona=$persona stream=$path"; fi
+    rm -f "$UNCONSUMED_FLAG" 2>/dev/null
+    st_missing_since=""; st_offset=""; st_alerted=0; st_path=""
+    return 0
+  fi
+  now=$(lc_now); size=$(wc -c < "$path" 2>/dev/null | tr -d ' ')
+  if [ -z "$st_missing_since" ] || [ "$path" != "$st_path" ]; then
+    st_missing_since=$now; st_offset=$size; st_path=$path; return 0
+  fi
+  # the producer self-rotates its stream; a shrunken file means everything in it is new
+  [ "${size:-0}" -lt "${st_offset:-0}" ] && st_offset=0
+  [ "$st_alerted" = 0 ] || return 0
+  [ $((now - st_missing_since)) -ge "$UNCONSUMED_SECS" ] || return 0
+  n=$(tail -c +"$((st_offset + 1))" "$path" 2>/dev/null | grep -cE -- "$WAKE_EVENTS")
+  [ "${n:-0}" -gt 0 ] || return 0
+  st_alerted=1
+  lc_log HEARTBEAT_UNCONSUMED_STREAM "target_pane=$PANE persona=$persona stream=$path events=$n no_consumer_for=$((now - st_missing_since))s"
+  printf 'persona=%s\nstream=%s\nevents=%s\nsince=%s\n' "$persona" "$path" "$n" "$st_missing_since" > "$UNCONSUMED_FLAG" 2>/dev/null
+}
 
 lc_log HEARTBEAT_START "pane=$PANE poll=${POLL}s quiet=$QUIET_CHECKS"
 last=""; unchanged=0
@@ -65,10 +121,21 @@ while true; do
 
   lc_is_armed "$PANE" || { lc_log HEARTBEAT_SKIP "pane $PANE not armed"; unchanged=0; continue; }
 
+  _stream_check
+
   cur="$(_pane_hash "$PANE")"
   [ -n "$cur" ] || { unchanged=0; continue; }
   if [ "$cur" = "$last" ]; then unchanged=$((unchanged+1)); else unchanged=0; last="$cur"; fi
   [ "$unchanged" -ge "$QUIET_CHECKS" ] || continue
+
+  # ⛔ M291: NEVER TYPE INTO A MENU. The folder-trust dialog's second option is "No, exit"; an Enter
+  # there does not deliver the nudge, it can END the session. Checked AFTER the idle window so a
+  # quiet pane sitting on a dialog is logged once per window, not on every poll — and nothing is sent.
+  if lc_pane_at_menu "$PANE"; then
+    lc_log HEARTBEAT_SKIP "target_pane=$PANE shows an interactive menu (e.g. folder trust, where Enter = No, exit); not typing into it"
+    unchanged=0; last="$(_pane_hash "$PANE")"
+    continue
+  fi
 
   # ── WAKE NONCE ────────────────────────────────────────────────────────────
   # Every nudge carries an identity. Without one, EVERY heartbeat nudge is
@@ -120,7 +187,10 @@ while true; do
   # fleet has hit repeatedly; a distinct name avoids it without touching the
   # shared lc_log prefix, whose blast radius is every log line we emit.
   lc_log HEARTBEAT_NUDGE "target_pane=$PANE nonce=$_nonce idle ~$((unchanged*POLL))s"
-  prompt="Backup heartbeat [wake-nonce: $_nonce]: this pane has been idle. Re-read your current-state pointer by ID (never by recall) and CONTINUE the active work autonomously to its DONE-WHEN. If your measured context is at or past the self-clear target, run the kijito-qa-memory skill and then self-clear. If there is genuinely no active work left, say so and stop."
+  prompt="Backup heartbeat [wake-nonce: $_nonce]: this pane has been idle. Make sure your wake-capable inbox consumer is armed (a usage-limit outage ends it silently). Re-read your current-state pointer by ID (never by recall) and CONTINUE the active work autonomously to its DONE-WHEN. If your measured context is at or past the self-clear target, run the kijito-qa-memory skill and then self-clear. If there is genuinely no active work left, say so and stop."
+  if [ "$st_alerted" = 1 ]; then
+    prompt="Backup heartbeat [wake-nonce: $_nonce]: YOUR INBOX IS DEAF - the event stream $st_path has unread wake events and NO consumer is reading it. FIRST re-arm your wake-capable inbox consumer on that file (a usage-limit outage ends it silently), then read your inbox. Then re-read your current-state pointer by ID (never by recall) and CONTINUE the active work to its DONE-WHEN. If your measured context is at or past the self-clear target, run the kijito-qa-memory skill and then self-clear."
+  fi
 
   # Same paste-buffer discipline as session-autosend: a gap before the Enter, then verify, because
   # an Enter inside the TUI's ingest burst is absorbed as a newline and the nudge would sit unsent —
