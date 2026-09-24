@@ -84,7 +84,7 @@ test("R2: the armed-record byte stamps equal the sha256 of the files actually lo
 // ── Gate-7 seam extension (argus 7819 conditions a/b): the NEW_LENIENT 8-kind set ──
 
 test("seam: every diagnostic kind wakes with a lifecycle key; armed/heartbeat provably never wake", () => {
-  const DIAG = ["alert", "recovered", "state_corrupt", "baseline_skipped", "seed_ahead", "replay_capped", "persona_added"];
+  const DIAG = ["alert", "recovered", "state_corrupt", "baseline_skipped", "seed_ahead", "replay_capped", "persona_added", "still_unread"];
   for (const kind of DIAG) {
     const parsed = parseEventLine(JSON.stringify({ source: "kijito-inbox", persona: "codex", event: kind, ts: "2026-08-15T08:04:46.059708+00:00" }), "codex");
     assert.equal(parsed.event?.trigger, "lifecycle", `${kind} must wake as lifecycle`);
