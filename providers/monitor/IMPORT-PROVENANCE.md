@@ -66,3 +66,23 @@ Old-source transition (kijito-inbox-monitor stays the publish/pin home until fle
 P0-C7 terminal), `_shared` doorbell + authenticated consumer lease (§4.4), and F29/A29 certify+enforce
 of opaque `--no-content` output in both service templates plus the live Mac-producer gap (§4.6) are
 tracked separately and not claimed here.
+
+## Re-import 2026-09-24 (row M314) — the vendored copy is now verified, not asserted
+
+By 2026-09-24 this copy had drifted both ways from upstream: upstream had fixes it lacked (M289, the
+empty-first-window baseline), and it carried two changes upstream lacked (`--safe-persona`, row M290,
+and the opaque-output rule in `OPAQUE-OUTPUT-ENFORCEMENT.md`). Both local changes were first sent
+upstream verbatim (kijito-inbox-monitor #4 → v0.5.2, #5 → v0.5.3), so a byte-exact re-import reverts
+nothing.
+
+| role | SHA | tree |
+|---|---|---|
+| imported (tag `v0.5.3`) | `803c53da623fa2d9bd97f5a9e75f01a78571ea2e` | `0c8d80201933589363305f9e2753e7d717f348d8` |
+
+From here on **never hand-edit `providers/monitor`**:
+- `providers/monitor/UPSTREAM` records the upstream sha, its git tree id and the full file listing.
+- `tests/vendored_monitor_test.sh` recomputes the git tree id of this directory from the files on disk
+  (excluding `UPSTREAM`, this file and `OPAQUE-OUTPUT-ENFORCEMENT.md`, which belong to kijito-tools) and
+  fails on any difference. It runs in the test workflow, in both publish workflows before the package is
+  built, and in npm `prepublishOnly`, so a drifted copy cannot be published.
+- To move to a new upstream release: `scripts/import-monitor.sh <sha-or-tag>`.

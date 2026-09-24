@@ -54,4 +54,6 @@ jobs:
             npm config get //registry.npmjs.org/:_authToken >&2
             exit 1
           fi
+      # Row M314 (also enforced by prepublishOnly, so a manual `npm publish` checks it too).
+      - run: bash tests/vendored_monitor_test.sh
       - run: npm publish --access public

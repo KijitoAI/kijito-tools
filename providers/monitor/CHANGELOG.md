@@ -3,6 +3,44 @@
 All notable changes to kijito-inbox-monitor are documented in this file.
 The format is based on Keep a Changelog, and this project follows Semantic Versioning.
 
+## [0.5.3] - 2026-09-24
+
+### Changed
+- **Both shipped service templates run opaque (`--no-content`).** A producer deployed from
+  `com.kijito.inbox-monitor.plist.template` or `kijito-inbox-monitor@.service.template` now writes
+  event rows that carry a message's identity, sender and timestamps but never its body. An event file
+  is a plain local file that other tools and agents read; message text does not belong in it by
+  default. To keep a bounded content preview, remove `--no-content` from your unit (or pass
+  `--content-chars N`). `OpaqueOutputEnforcementTest` pins both templates and the flag's behaviour.
+  (Previously enforced only in the copy vendored by kijito-tools; upstreamed so the two are identical.)
+
+## [0.5.2] - 2026-09-24
+
+### Added
+- **`--safe-persona PERSONA`** prints the filename component the producer derives from a persona name
+  (casefold, any Unicode alphanumeric kept) and exits. It is the one published persona->filename rule,
+  so the SessionStart hook, the inbox self-test and health tools ask the producer instead of
+  re-implementing it (three copies had drifted).
+
+### Fixed
+- **The persona `reserved` flag is honoured.** `/api/personas` marks the legacy row named after the
+  hive-wide broadcast name (`all`) as `reserved`: nobody works as it. The watcher now treats that row
+  exactly like a declared-`retired` one for alarm purposes: its urgent mail no longer fires the loud
+  "urgent-unanswered" alert (it is named once on the quiet stderr channel instead, and stays readable
+  and counted), and a never-read reserved inbox is classified as clearable debris. A server that does
+  not send the field changes nothing.
+
+## [0.5.1] - 2026-09-24
+
+### Fixed
+- **An empty first window no longer swallows message id 0.** On a first launch with nothing in the inbox
+  the watcher baselined its cursor to `0` (`max(ids, default=0)`), and every emission test is
+  `id > cursor`, so the very first hive message on a new account (the server numbers it `0`) could
+  never be emitted. The producer only logged a quiet `dormant inbox (1 unread)` notice and the agent
+  never woke. An empty first window now baselines to `-1`, the value the fail-closed corrupt-state
+  branch already produced for an empty window; a non-empty first window still baselines to its newest
+  id. Two regression tests cover both cases (`EmptyFirstWindowBaselineTest`).
+
 ## [0.5.0] - 2026-08-15
 
 ### Fixed

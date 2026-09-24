@@ -1,5 +1,9 @@
 # Opaque output enforcement (P0-F29/A29)
 
+> **Upstreamed 2026-09-24 (row M314):** both template edits and `OpaqueOutputEnforcementTest` now live in
+> `KijitoAI/kijito-inbox-monitor` itself (v0.5.3), and this directory is a byte-exact copy of that release.
+> The record below is kept as the history of why the rule exists.
+
 **Steward:** argus · **Date:** 2026-08-17 · **Row:** `P0-F29`/`A29`, anchor `monitor-foundation-v1`
 (clause: *opaque output*). This is the **certify + enforce** half of the row — the `--no-content`
 capability already exists in shipped code, so nothing is built here; it is made non-optional in the
