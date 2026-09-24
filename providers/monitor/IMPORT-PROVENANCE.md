@@ -86,3 +86,13 @@ From here on **never hand-edit `providers/monitor`**:
   fails on any difference. It runs in the test workflow, in both publish workflows before the package is
   built, and in npm `prepublishOnly`, so a drifted copy cannot be published.
 - To move to a new upstream release: `scripts/import-monitor.sh <sha-or-tag>`.
+
+## Re-import 2026-09-24 (row M313) — v0.5.4
+
+| role | SHA | tree |
+|---|---|---|
+| imported (tag `v0.5.4`) | see `providers/monitor/UPSTREAM` (`scripts/import-monitor.sh v0.5.4`) | idem |
+
+v0.5.4: the shipped systemd unit passes `--persona %I` and the producer names every file
+(`--state-file-template`, `--token-file-template`, `--events-file-template`), plus
+`scripts/migrate-systemd-unit.sh` for deployed units.
