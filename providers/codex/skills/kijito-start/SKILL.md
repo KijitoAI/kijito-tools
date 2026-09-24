@@ -111,7 +111,7 @@ session please") works with no flags and outranks this default.
        ```
        If nothing prints, arm exactly ONE persistent Monitor:
        ```
-       Monitor(command="tail -n 0 -F $STREAM | grep --line-buffered -E '\"event\": ?\"(new|alert|recovered|state_corrupt|baseline_skipped|seed_ahead|replay_capped|persona_added)\"'", persistent=true)
+       Monitor(command="tail -n 0 -F $STREAM | grep --line-buffered -E '\"event\": ?\"(new|alert|recovered|state_corrupt|baseline_skipped|seed_ahead|replay_capped|persona_added|still_unread)\"'", persistent=true)
        ```
        Report **armed-live (Claude Code fallback)**. This is not an ad-hoc
        watcher — it is the standard, battle-tested Claude Code wake path.

@@ -52,12 +52,14 @@ function requirePersona(persona) {
 // silently — measured live 2026-08-15: a real corrupt-state producer emitted baseline_skipped
 // into an armed stream and the helper ignored it, the exact "a diagnostic added to kill a
 // silent failure is itself silent unless the consumer's filter learned its name" class the
-// monitor documents. This is now the certified NEW_LENIENT 8-kind set. `armed` and `heartbeat`
+// monitor documents. This is now the certified NEW_LENIENT 8-kind set plus `still_unread` (row
+// M229, monitor v0.5.5: the bounded reminder for mail announced once and still unread; a
+// diagnostics-only batch already carries the reconcile-inbox peek below). `armed` and `heartbeat`
 // stay EXCLUDED deliberately — liveness kinds must never wake (heartbeat fires every 900s, and
 // armed's exclusion is why "I was not woken" does not mean "nothing arrived").
 const MAIL_KINDS = Object.freeze(["new"]);
 const DIAGNOSTIC_KINDS = Object.freeze([
-  "alert", "recovered", "state_corrupt", "baseline_skipped", "seed_ahead", "replay_capped", "persona_added",
+  "alert", "recovered", "state_corrupt", "baseline_skipped", "seed_ahead", "replay_capped", "persona_added", "still_unread",
 ]);
 
 export function parseEventLine(line, persona) {

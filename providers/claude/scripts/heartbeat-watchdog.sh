@@ -74,7 +74,7 @@ _pane_hash() { tmux capture-pane -p -t "$1" 2>/dev/null | tail -40 | cksum | awk
 # SURFACED AS: an `HEARTBEAT_UNCONSUMED_STREAM` lifecycle-log line, a flag file the status line shows
 # (`unconsumed.<pane>`), and a nudge prompt that says to re-arm the consumer FIRST. Cleared (with a
 # `HEARTBEAT_STREAM_CONSUMED` line) the moment a consumer is attached again.
-WAKE_EVENTS='"event": ?"(new|alert|recovered|state_corrupt|baseline_skipped|seed_ahead|replay_capped|persona_added)"'
+WAKE_EVENTS='"event": ?"(new|alert|recovered|state_corrupt|baseline_skipped|seed_ahead|replay_capped|persona_added|still_unread)"'
 UNCONSUMED_FLAG="$KIJITO_LC_DIR/unconsumed.$PANE"
 st_missing_since=""; st_offset=""; st_alerted=0; st_path=""
 
