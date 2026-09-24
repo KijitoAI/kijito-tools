@@ -54,7 +54,11 @@ kijito_stream_for_persona() {
   done
   [ -n "$km" ] && safe=$("$km" --safe-persona "$want" 2>/dev/null)
   if [ -n "$safe" ]; then
-    for cand in "$HOME/.kijito-monitor/$safe.jsonl" "$HOME/.cache/kijito-inbox-monitor/events.$safe.ndjson"; do
+    # THREE layouts: the fleet's systemd units, the launchd plist, and the monitor's own shipped systemd
+    # template (~/.local/state, XDG state) - the last one was missing until row M313's follow-up, so a
+    # Linux user who installed the unit from the monitor repo had a stream nothing here would find.
+    for cand in "$HOME/.kijito-monitor/$safe.jsonl" "$HOME/.cache/kijito-inbox-monitor/events.$safe.ndjson" \
+                "$HOME/.local/state/kijito-inbox-monitor/events.$safe.ndjson"; do
       [ -e "$cand" ] && { printf '%s' "$cand"; return 0; }
     done
   fi
@@ -63,7 +67,8 @@ kijito_stream_for_persona() {
 import glob, json, os, sys
 want = os.environ["KJ_WANT"].casefold(); home = os.path.expanduser("~"); hits = []
 for pat in (os.path.join(home, ".kijito-monitor", "*.jsonl"),
-            os.path.join(home, ".cache", "kijito-inbox-monitor", "events.*.ndjson")):
+            os.path.join(home, ".cache", "kijito-inbox-monitor", "events.*.ndjson"),
+            os.path.join(home, ".local", "state", "kijito-inbox-monitor", "events.*.ndjson")):
     for path in glob.glob(pat):
         try:
             with open(path, "rb") as fh:

@@ -100,7 +100,8 @@ want = os.environ["KJ_PERSONA"].casefold()
 home = os.path.expanduser("~")
 hits = []
 for pat in (os.path.join(home, ".kijito-monitor", "*.jsonl"),
-            os.path.join(home, ".cache", "kijito-inbox-monitor", "events.*.ndjson")):
+            os.path.join(home, ".cache", "kijito-inbox-monitor", "events.*.ndjson"),
+            os.path.join(home, ".local", "state", "kijito-inbox-monitor", "events.*.ndjson")):
     for path in glob.glob(pat):
         try:
             with open(path, "rb") as fh:
@@ -174,6 +175,10 @@ fi
 # supervisor definition is the next-best evidence. uname is the last resort, not the first test.
 _mac_events="$HOME/.cache/kijito-inbox-monitor/events.${_safe}.ndjson"
 _lnx_events="$HOME/.kijito-monitor/${_safe}.jsonl"
+# The monitor repo's OWN shipped systemd template writes here (XDG state). A third layout, and until row
+# M313's follow-up this script did not know it: a user who installed the unit from the monitor README got
+# "nothing is collecting your mail" while their producer was writing mail into this file.
+_tpl_events="$HOME/.local/state/kijito-inbox-monitor/events.${_safe}.ndjson"
 if   [ "$_rule" = by-content ] || [ "$_rule" = stale-stream ]; then
   # The producer's own output named this file. It outranks every derivation below, because it is the
   # only one of them that was written by the process we are asking about.
@@ -183,18 +188,21 @@ if   [ "$_rule" = by-content ] || [ "$_rule" = stale-stream ]; then
   # an empty component that looks like a path and names nothing. The producer line says it is stale;
   # the arming block should still point at the file that will come back when it restarts.
   _events="$_found"
-  case "$_events" in *.jsonl) _sup="systemd" ;; *) _sup="launchd" ;; esac
+  case "$_events" in *.jsonl|*/.local/state/*) _sup="systemd" ;; *) _sup="launchd" ;; esac
 elif [ -n "$_safe" ] && [ -e "$_lnx_events" ]; then _events="$_lnx_events"; _sup="systemd"
 elif [ -n "$_safe" ] && [ -e "$_mac_events" ]; then _events="$_mac_events"; _sup="launchd"
+elif [ -n "$_safe" ] && [ -e "$_tpl_events" ]; then _events="$_tpl_events"; _sup="systemd"
 elif [ -d "$HOME/.kijito-monitor" ]; then          _events="$_lnx_events"; _sup="systemd"
+elif [ -d "$HOME/.local/state/kijito-inbox-monitor" ]; then _events="$_tpl_events"; _sup="systemd"
 elif [ -d "$HOME/.cache/kijito-inbox-monitor" ]; then _events="$_mac_events"; _sup="launchd"
 elif [ -f "$HOME/Library/LaunchAgents/com.kijito.inbox-monitor.plist" ]; then _events="$_mac_events"; _sup="launchd"
 elif [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then _events="$_mac_events"; _sup="launchd"
 else _events="$_lnx_events"; _sup="systemd"; fi
 # The generic (no-marker) branch cannot name a file, so it shows the directory shape instead.
-case "$_sup" in
-  launchd) _events_tmpl="\$HOME/.cache/kijito-inbox-monitor/events.<persona>.ndjson" ;;
-  *)       _events_tmpl="\$HOME/.kijito-monitor/<persona>.jsonl" ;;
+case "$_sup:$_events" in
+  launchd:*)            _events_tmpl="\$HOME/.cache/kijito-inbox-monitor/events.<persona>.ndjson" ;;
+  *:*/.local/state/*)   _events_tmpl="\$HOME/.local/state/kijito-inbox-monitor/events.<persona>.ndjson" ;;
+  *)                    _events_tmpl="\$HOME/.kijito-monitor/<persona>.jsonl" ;;
 esac
 
 # Producer health, PER PERSONA — because "a producer is running" and "YOUR mail is being collected"
