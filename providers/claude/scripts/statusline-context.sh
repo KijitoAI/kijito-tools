@@ -58,6 +58,14 @@ col=$(awk -v p="$pct" 'BEGIN { if (p>=80) printf "\033[31m"; else if (p>=60) pri
 if [ -n "$persona" ]; then
   printf '\033[36m%s\033[0m · ' "$(kijito_truncate "$persona" 18)"
 fi
+# ROW M309, second half: the persona's unread count, from the producer's own state file (fresh only).
+# Shown only when non-zero, so a quiet pane keeps the line it had.
+if [ -n "$persona" ]; then
+  unread=$(kijito_unread_for_persona "$persona" || true)
+  if [ -n "$unread" ] && [ "$unread" -gt 0 ]; then
+    printf '\033[33m✉ %s\033[0m · ' "$unread"
+  fi
+fi
 # ROW M291: the heartbeat watchdog raises this flag when this pane's persona has unread wake events
 # in its stream and NO consumer reading it (typically after a usage-limit outage ended the loop). It
 # is the one place a human watching the pane will see it; the watchdog removes it on re-arm.

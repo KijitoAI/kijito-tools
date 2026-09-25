@@ -23,7 +23,7 @@ command -v jq >/dev/null 2>&1 || { echo "SKIP: jq not installed"; exit 0; }
 
 render() {  # $1=cwd  -> statusline output with ANSI stripped
   printf '{"model":{"display_name":"Opus 5"},"workspace":{"current_dir":"%s"},"context_window":{"used_tokens":420000,"total_tokens":1000000}}' "$1" \
-    | bash "$SL" 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g'
+    | env -u TMUX_PANE bash "$SL" 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g'
 }
 
 echo "statusline persona checks:"
@@ -40,7 +40,10 @@ fi
 # 2. ⭐ ONE MARKER READER: the status line and the hook must resolve the SAME name. Asserted against
 #    each other rather than against a literal, because a literal would pass on the day they agree
 #    with the test and disagree with each other.
-hook_out="$(printf '{"source":"startup","cwd":"%s"}' "$D" | CLAUDE_PROJECT_DIR="$D" bash "$HOOK" 2>/dev/null)"
+# ⛔ NEVER WITH THE CALLER'S TMUX PANE: on an ARMED pane the hook autosends the catch-up prompt into
+# it, so running this suite from an agent's own pane typed a boot prompt into that agent once per run.
+hook_out="$(printf '{"source":"startup","cwd":"%s"}' "$D" \
+  | env -u TMUX -u TMUX_PANE -u KIJITO_AUTOCATCHUP CLAUDE_PROJECT_DIR="$D" bash "$HOOK" 2>/dev/null)"
 if [[ "$hook_out" == *"name (purpose)"* ]]; then
   grn "the hook resolves the same persona the status line shows"
 else
@@ -75,6 +78,79 @@ else
   red "no marker changed the line: '$out'"
 fi
 rm -rf "$D"
+
+# ── row M309, second half: the unread count, read from the producer's STATE file ───────────────────
+# Every case runs under a scratch HOME, so the seat's real state files can never make a case pass.
+echo "statusline unread-count checks:"
+H="$(mktemp -d)"; D="$(mktemp -d)"; printf 'argus\n' > "$D/.kijito_persona"
+mkdir -p "$H/.kijito-monitor" "$H/.cache/kijito-inbox-monitor"
+state() {  # $1=path $2=persona $3=unread-json-fragment ("" = no field)
+  printf '{"identity":["https","api.kijito.ai",443,"/api/inbox",[["persona","%s"]]],"cursor":1,"state":"UP","consecutive_failures":0%s}' \
+    "$2" "${3:+,\"unread\":$3}" > "$1"
+}
+hrender() { HOME="$H" render "$D"; }
+
+state "$H/.kijito-monitor/argus.state" argus 4
+out="$(hrender)"
+if [[ "$out" == "argus · ✉ 4 · Opus 5 · ctx 420k/1m (42%)" ]]; then
+  grn "a fresh state file's count is shown after the persona"
+else
+  red "count not shown as expected: '$out'"
+fi
+
+state "$H/.kijito-monitor/argus.state" argus 0
+out="$(hrender)"
+if [[ "$out" == "argus · Opus 5 · ctx 420k/1m (42%)" ]]; then
+  grn "zero unread → the line is unchanged"
+else
+  red "zero unread changed the line: '$out'"
+fi
+
+state "$H/.kijito-monitor/argus.state" argus 4
+touch -t 202001010000 "$H/.kijito-monitor/argus.state"
+out="$(hrender)"
+if [[ "$out" != *"✉"* ]]; then
+  grn "a STALE state file (producer stopped writing) shows no count"
+else
+  red "a stale count was shown: '$out'"
+fi
+
+rm -f "$H/.kijito-monitor/argus.state"
+state "$H/.kijito-monitor/river.state" river 9
+out="$(hrender)"
+if [[ "$out" != *"✉"* ]]; then
+  grn "another persona's state file is never read as this pane's"
+else
+  red "a sibling's count leaked onto this pane: '$out'"
+fi
+
+# the NEWEST file for this persona decides; its "unknown" must not be filled from an older file
+state "$H/.cache/kijito-inbox-monitor/hive.argus.json" argus 6
+touch -t "$(date -d '-5 min' +%Y%m%d%H%M 2>/dev/null || date -v-5M +%Y%m%d%H%M)" "$H/.cache/kijito-inbox-monitor/hive.argus.json"
+state "$H/.kijito-monitor/argus.state" argus ""
+out="$(hrender)"
+if [[ "$out" != *"✉"* ]]; then
+  grn "the newest state file's UNKNOWN is not replaced by an older file's figure"
+else
+  red "an older file's count stood in for an unknown: '$out'"
+fi
+rm -f "$H/.kijito-monitor/argus.state"
+out="$(hrender)"
+if [[ "$out" == *"✉ 6"* ]]; then
+  grn "the launchd layout (hive.<persona>.json) is found too"
+else
+  red "the launchd-layout count was not found: '$out'"
+fi
+
+# the marker's spelling and the URL's may differ in case; the file still says whose it is
+printf 'Argus\n' > "$D/.kijito_persona"
+out="$(hrender)"
+if [[ "$out" == *"✉ 6"* ]]; then
+  grn "the persona is matched case-insensitively"
+else
+  red "case-variant persona missed its count: '$out'"
+fi
+rm -rf "$H" "$D"
 
 echo
 echo "passed: $pass   failed: $fail"

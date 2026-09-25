@@ -85,6 +85,32 @@ PYSCAN
   return 1
 }
 
+# kijito_unread_for_persona <persona> -> prints the persona's unread count, or nothing (row M309).
+# The producer (kijito-inbox-monitor >= 0.5.7) writes `unread` into the persona's STATE file on every poll
+# that had a count, and omits it when it had none. Nothing is printed unless a FRESH state file for this
+# persona holds one: a stale or missing figure is a confident wrong number on a pane, which is worse than none.
+# ⛔ THE FILE IS FOUND BY WHAT IT SAYS, NOT BY ITS NAME. Re-deriving the persona->filename rule here would be a
+# third copy of it (the M290 lesson); every state file records its own watched persona in `identity`, so one
+# jq pass over the known layouts asks the files instead. Newest first, and the NEWEST match decides: if it
+# holds no count (unknown), an older file's figure must not stand in for it.
+kijito_unread_for_persona() {
+  local want=${1:-} f n files=()
+  [ -n "$want" ] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  # rewritten every poll, so anything older than 10 min is a producer that has stopped writing it
+  while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done < <(
+    find "$HOME/.kijito-monitor" "$HOME/.cache/kijito-inbox-monitor" "$HOME/.local/state/kijito-inbox-monitor" \
+         -maxdepth 1 -type f \( -name '*.state' -o -name 'hive.*.json' -o -name 'state.*.json' \) -mmin -10 \
+         2>/dev/null)
+  [ "${#files[@]}" -gt 0 ] || return 1
+  # shellcheck disable=SC2012  # the paths come from find above; ls is only ordering them by mtime
+  n=$(ls -t "${files[@]}" 2>/dev/null | tr '\n' '\0' | xargs -0 jq -rn --arg w "$(printf '%s' "$want" | tr '[:upper:]' '[:lower:]')" '
+        first(inputs | select((try (.identity[4] | map(select(.[0] == "persona")) | .[0][1] | ascii_downcase)
+                               catch null) == $w)) | .unread // empty' 2>/dev/null)
+  case "$n" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "$n"
+}
+
 # kijito_stream_consumed <stream-path> -> 0 if a wake-capable consumer (`tail -n 0 -F …`) reads it.
 # ⚠️ ANCHOR ON WHAT THE PROCESS *IS*. An unanchored pgrep on the events path SELF-MATCHES the producer
 # (its own argv contains that path), and the harness's `bash -c … eval` wrappers carry the same argv —
