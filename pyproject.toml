@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kijito-tools"
-version = "0.2.5"
+version = "0.2.6"
 description = "Installer for kijito-tools: context tracking, session catch-up, and self-clear scripts plus the Kijito skills, deployed into ~/.claude."
 readme = "README.md"
 requires-python = ">=3.9"

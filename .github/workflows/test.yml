@@ -110,6 +110,7 @@ jobs:
           bash tests/heartbeat_m291_test.sh
           bash tests/inbox_selftest_test.sh
           bash tests/statusline_persona_test.sh
+          bash tests/statusline_render_test.sh
           bash tests/stream_layouts_test.sh
       - name: vendored monitor is byte-identical to its recorded upstream release, and its own suite passes (M314 M332)
         run: |
