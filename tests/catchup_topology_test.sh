@@ -85,7 +85,7 @@ trap 'rm -rf "$SHIMDIR"' EXIT
 # $1=hook  $2=HOME  $3=project dir  (FAKE_PRODUCER / FAKE_ARMED come from the caller's env)
 run_hook() {
   printf '{"source":"startup","cwd":"%s"}' "$3" \
-    | PATH="$SHIMDIR:$PATH" HOME="$2" CLAUDE_PROJECT_DIR="$3" bash "$1" 2>/dev/null
+    | env -u TMUX -u TMUX_PANE -u KIJITO_AUTOCATCHUP PATH="$SHIMDIR:$PATH" HOME="$2" CLAUDE_PROJECT_DIR="$3" bash "$1" 2>/dev/null
 }
 
 # Build a synthetic seat. $1=layout (linux|mac|none), $2=persona, $3=create events file? (yes|no)
@@ -160,7 +160,7 @@ check_hook() {
   proj2="$(make_proj ghost)"
   # KIJITOMON_BIN points at something that cannot answer --safe-persona, forcing the by-content route.
   out="$(printf '{"source":"startup","cwd":"%s"}' "$proj2" \
-        | PATH="$SHIMDIR:$PATH" HOME="$ghost_home" CLAUDE_PROJECT_DIR="$proj2" \
+        | env -u TMUX -u TMUX_PANE -u KIJITO_AUTOCATCHUP PATH="$SHIMDIR:$PATH" HOME="$ghost_home" CLAUDE_PROJECT_DIR="$proj2" \
           KIJITOMON_BIN=/bin/false FAKE_PRODUCER=1 FAKE_ARMED=0 \
           bash "$hook" 2>/dev/null)"
   if grep -q "UP for 'ghost'" <<<"$out"; then
@@ -173,7 +173,7 @@ check_hook() {
   # ...and the CONTROL, without which the check above is satisfied by a script that never says UP:
   # same fixture, but the running producer's argv names THIS persona.
   out="$(printf '{"source":"startup","cwd":"%s"}' "$proj2" \
-        | PATH="$SHIMDIR:$PATH" HOME="$ghost_home" CLAUDE_PROJECT_DIR="$proj2" \
+        | env -u TMUX -u TMUX_PANE -u KIJITO_AUTOCATCHUP PATH="$SHIMDIR:$PATH" HOME="$ghost_home" CLAUDE_PROJECT_DIR="$proj2" \
           KIJITOMON_BIN=/bin/false FAKE_PRODUCER=1 FAKE_PRODUCER_PERSONA=ghost FAKE_ARMED=0 \
           bash "$hook" 2>/dev/null)"
   if grep -q "UP for 'ghost'" <<<"$out"; then
