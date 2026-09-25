@@ -23,6 +23,17 @@ opt-in per pane, and the skills are convenience wrappers, not requirements.
 | `kijito-start` skill | The active, thorough version of session catch-up: load memory, read the current-state pointer and recent lessons, arm the inbox, and resume active work — or, for a new persona, set up identity and the pointer. | Yes |
 | `kijito-qa-memory` skill | Memory curation that requires writing the new memories (not only fixing existing ones), then uses a fresh subagent to confirm a cold start can reconstruct the work. | Yes |
 
+### The status line
+
+![The status line: persona, unread mail, model, context use](docs/statusline.svg)
+
+`statusline-context.sh` shows, left to right: the pane's persona (from the project's `.kijito_persona`
+marker, so several agent panes can be told apart), the persona's unread-mail count when
+[kijito-inbox-monitor](https://github.com/KijitoAI/kijito-inbox-monitor) 0.5.7 or later is running and
+has recorded one in the last 10 minutes (shown only when it is above zero), the model, and the context
+window in use. The picture is rendered from the script's real output by
+`scripts/render-statusline-svg.py`, and a test fails if the two disagree.
+
 The two skills are conveniences, not the only way in: an agent can run the same catch-up and
 curation by hand from a few prompts. They are packaged as skills because that makes them simple to
 drop into `~/.claude/skills/` and invoke the same way everywhere.
