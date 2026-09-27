@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+# Does the producer/consumer detection tell the truth on NATIVE WINDOWS (Git Bash / MSYS)?
+#
+# WHY THIS EXISTS. praetor ran the monitor on a real Windows 11 seat (2026-09-27): Git Bash has no
+# `pgrep`, and MSYS `ps` cannot see native Windows processes, so every probe answered "not running".
+# session-catchup-hint.sh said "producer: DOWN" beside a producer that was delivering mail, suggested
+# launchctl/systemctl (neither exists there), and the duplicate-consumer check could never find the
+# consumer that was already armed.
+#
+# ⛔ THE PROPERTY UNDER TEST: when a host gives the scripts no way to look, the answer is COULD NOT
+# MEASURE, never DOWN. And when it can look (PowerShell / Win32_Process), it must look there.
+#
+# HOW IT TESTS THE REAL SCRIPTS. There is no Windows here, so the two things that differ are shimmed on
+# PATH: `uname` (reports MINGW64) and `powershell.exe` (answers the process counts the scripts ask for,
+# from the environment). The shipped scripts run byte-for-byte.
+#
+#   bash tests/windows_detect_test.sh
+set -u
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LIB="$REPO/providers/claude/scripts/kijito-persona-lib.sh"
+HOOK="$REPO/providers/claude/scripts/session-catchup-hint.sh"
+SELFTEST="$REPO/providers/claude/scripts/inbox-selftest.sh"
+pass=0; fail=0
+red() { printf "  FAIL  %s\n" "$1"; fail=$((fail+1)); }
+grn() { printf "  ok    %s\n" "$1"; pass=$((pass+1)); }
+
+command -v jq >/dev/null 2>&1 || { echo "SKIP: jq not installed — the hook parses its stdin with jq."; exit 0; }
+
+_RUNTMP="$(mktemp -d)"; export TMPDIR="$_RUNTMP"
+trap 'rm -rf "$_RUNTMP"' EXIT INT TERM
+
+# Two shim dirs: WIN has uname + powershell.exe; WIN_NOPS has uname only (a host where we cannot look).
+WIN="$_RUNTMP/win"; WIN_NOPS="$_RUNTMP/win-nops"; mkdir -p "$WIN" "$WIN_NOPS"
+for d in "$WIN" "$WIN_NOPS"; do
+  printf '#!/usr/bin/env bash\necho MINGW64_NT-10.0-26200\n' > "$d/uname"
+  cat > "$d/kijito-inbox-monitor" <<SHIM
+#!/usr/bin/env bash
+exec python3 "$REPO/providers/monitor/kijito_inbox_monitor.py" "\$@"
+SHIM
+  chmod +x "$d/uname" "$d/kijito-inbox-monitor"
+done
+cat > "$WIN/powershell.exe" <<'SHIM'
+#!/usr/bin/env bash
+# Fake PowerShell: answer the Win32_Process count the caller asked for. Records every query so the test
+# can assert WHAT was asked (the tail.exe anchor, the stream's basename).
+printf '%s\n' "$*" >> "${PS_LOG:-/dev/null}"
+[ -n "${FAKE_PS_GARBAGE:-}" ] && { echo "Get-CimInstance : Access denied"; exit 1; }
+case "$*" in
+  *"-eq 'tail.exe'"*) echo "${FAKE_TAIL:-0}" ;;
+  *)          echo "${FAKE_PROD:-0}" ;;
+esac
+SHIM
+chmod +x "$WIN/powershell.exe"
+
+lib_call() {  # $1=shimdir, rest = function + args; prints "rc=<n>" (and any stdout)
+  local sd="$1"; shift
+  env PATH="$sd:$PATH" bash -c '. "$0"; "$@"; echo "rc=$?"' "$LIB" "$@" 2>/dev/null
+}
+
+echo "windows detection checks:"
+
+# ── the library ──────────────────────────────────────────────────────────────────────────────────
+[ "$(lib_call "$WIN" kijito_host_is_windows)" = "rc=0" ] && grn "MINGW uname is recognised as native Windows" \
+  || red "MINGW uname not recognised as Windows"
+[ "$(env PATH="/usr/bin:/bin" bash -c '. "$0"; kijito_host_is_windows; echo rc=$?' "$LIB")" = "rc=1" ] \
+  && grn "a real Linux uname is not Windows" || red "Linux was classified as Windows"
+
+out=$(FAKE_PROD=2 lib_call "$WIN" kijito_producer_running)
+[ "$out" = "rc=0" ] && grn "producer: PowerShell count 2 (a venv launcher + child) => running (0)" || red "count 2 gave $out"
+out=$(FAKE_PROD=0 lib_call "$WIN" kijito_producer_running)
+[ "$out" = "rc=1" ] && grn "producer: PowerShell count 0 => not running (1)" || red "count 0 gave $out"
+out=$(lib_call "$WIN_NOPS" kijito_producer_running)
+[ "$out" = "rc=2" ] && grn "producer: no PowerShell => COULD NOT MEASURE (2), not DOWN" || red "no PowerShell gave $out"
+out=$(FAKE_PS_GARBAGE=1 lib_call "$WIN" kijito_producer_running)
+[ "$out" = "rc=2" ] && grn "producer: PowerShell error text => COULD NOT MEASURE (2), never parsed as a count" || red "garbage gave $out"
+
+export PS_LOG="$_RUNTMP/ps.log"; : > "$PS_LOG"
+out=$(FAKE_TAIL=1 lib_call "$WIN" kijito_stream_consumed "/c/Users/j/.cache/kijito-inbox-monitor/events.praetor.ndjson")
+[ "$out" = "rc=0" ] && grn "consumer: a tail.exe on the stream => consumed (0)" || red "tail count 1 gave $out"
+if grep -q "tail.exe" "$PS_LOG" && grep -q "events.praetor.ndjson" "$PS_LOG"; then
+  grn "consumer: the query is anchored on tail.exe AND this stream's basename"
+else red "consumer query lacks the tail.exe anchor or the basename: $(cat "$PS_LOG")"; fi
+unset PS_LOG
+out=$(FAKE_TAIL=0 lib_call "$WIN" kijito_stream_consumed "/x/events.praetor.ndjson")
+[ "$out" = "rc=1" ] && grn "consumer: no tail.exe => not consumed (1)" || red "tail count 0 gave $out"
+out=$(lib_call "$WIN_NOPS" kijito_stream_consumed "/x/events.praetor.ndjson")
+[ "$out" = "rc=2" ] && grn "consumer: no PowerShell => COULD NOT MEASURE (2)" || red "no PowerShell consumer gave $out"
+
+out=$(lib_call "$WIN" kijito_restart_hint task praetor)
+if grep -q "kijito-inbox-monitor --persona praetor" <<<"$out" && grep -q "schtasks" <<<"$out" \
+   && ! grep -qE "launchctl|systemctl" <<<"$out"; then
+  grn "restart hint on Windows: manual start first, Scheduled Task as the opt-in, no launchctl/systemctl"
+else red "Windows restart hint wrong: $out"; fi
+
+# ── the SessionStart hook, on praetor's layout (~/.cache/kijito-inbox-monitor/events.<p>.ndjson) ─────
+run_hook() {  # $1=shimdir $2=HOME $3=project
+  printf '{"source":"startup","cwd":"%s"}' "$3" \
+    | env -u TMUX -u TMUX_PANE -u KIJITO_AUTOCATCHUP PATH="$1:$PATH" HOME="$2" CLAUDE_PROJECT_DIR="$3" bash "$HOOK" 2>/dev/null
+}
+H="$(mktemp -d)"; mkdir -p "$H/.cache/kijito-inbox-monitor"; : > "$H/.cache/kijito-inbox-monitor/events.praetor.ndjson"
+P="$(mktemp -d)"; echo praetor > "$P/.kijito_persona"
+
+out=$(FAKE_PROD=1 FAKE_TAIL=0 run_hook "$WIN" "$H" "$P")
+grep -q "producer: UP for 'praetor'" <<<"$out" && grn "hook: a running Windows producer reads UP (was DOWN)" \
+  || red "hook did not report UP on Windows: $(grep -o 'inbox-monitor producer:[^.]*' <<<"$out" | head -1)"
+grep -qE "launchctl|systemctl" <<<"$out" && red "hook still offers launchctl/systemctl on Windows" \
+  || grn "hook: no launchctl/systemctl on Windows"
+
+out=$(FAKE_PROD=0 run_hook "$WIN" "$H" "$P")
+if grep -q "producer: DOWN" <<<"$out" && grep -q "kijito-inbox-monitor --persona praetor" <<<"$out"; then
+  grn "hook: a genuinely absent Windows producer reads DOWN with the manual start command"
+else red "hook DOWN-on-Windows output wrong: $(grep -o 'inbox-monitor producer:.*' <<<"$out" | head -1)"; fi
+
+out=$(run_hook "$WIN_NOPS" "$H" "$P")
+if grep -q "COULD NOT CHECK" <<<"$out" && ! grep -q "producer: DOWN" <<<"$out"; then
+  grn "hook: no way to look => COULD NOT CHECK, never DOWN"
+else red "hook without PowerShell said: $(grep -o 'inbox-monitor producer:.*' <<<"$out" | head -1)"; fi
+grep -q "could NOT check for an existing consumer" <<<"$out" \
+  && grn "hook: warns that the duplicate-consumer check could not run" \
+  || red "hook gave no could-not-check caveat for the consumer"
+
+out=$(FAKE_PROD=1 FAKE_TAIL=1 run_hook "$WIN" "$H" "$P")
+grep -q "a consumer already tails your stream" <<<"$out" \
+  && grn "hook: an armed tail.exe is recognised (no second consumer suggested)" \
+  || red "hook missed the armed Windows consumer"
+
+# ── inbox-selftest ──────────────────────────────────────────────────────────────────────────────
+out=$(env PATH="$WIN_NOPS:$PATH" HOME="$H" bash "$SELFTEST" --persona praetor --no-send 2>&1); rc=$?
+if [ "$rc" -eq 2 ] && grep -q "COULD NOT MEASURE" <<<"$out" && ! grep -q "FAIL  consumer" <<<"$out"; then
+  grn "selftest: consumer unknowable => exit 2 COULD NOT MEASURE, not FAIL"
+else red "selftest without PowerShell gave rc=$rc: $(tail -3 <<<"$out")"; fi
+out=$(env PATH="$WIN:$PATH" FAKE_TAIL=1 HOME="$H" bash "$SELFTEST" --persona praetor --no-send 2>&1); rc=$?
+grep -q "ok    consumer" <<<"$out" && grn "selftest: an armed tail.exe passes the consumer hop" \
+  || red "selftest missed the armed Windows consumer (rc=$rc): $(tail -3 <<<"$out")"
+
+echo
+echo "passed: $pass   failed: $fail"
+[ "$fail" -eq 0 ] || exit 1
