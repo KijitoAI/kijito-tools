@@ -348,11 +348,13 @@ EOF
 fi
 
 # Armed auto-send (detached so it never blocks startup or pollutes the additionalContext above).
-if command -v lc_is_armed >/dev/null 2>&1 && [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] && lc_is_armed "$TMUX_PANE"; then
-  lc_log HOOK "src=$src autosend=ARMED pane=$TMUX_PANE"
+# The pane is tmux's or (native Windows) wtmux's; lc_self_pane answers for both.
+_pane=""; command -v lc_self_pane >/dev/null 2>&1 && _pane=$(lc_self_pane 2>/dev/null)
+if [ -n "$_pane" ] && lc_is_armed "$_pane"; then
+  lc_log HOOK "src=$src autosend=ARMED pane=$_pane"
   _autosend="$_kjt_dir/session-autosend.sh"
   [ -f "$_autosend" ] || _autosend="$HOME/.claude/session-autosend.sh"
-  nohup bash "$_autosend" "$TMUX_PANE" >/dev/null 2>&1 &
+  nohup bash "$_autosend" "$_pane" >/dev/null 2>&1 &
 else
-  command -v lc_log >/dev/null 2>&1 && lc_log HOOK "src=$src autosend=skip(not-armed-or-no-tmux) tmux=${TMUX:+y} pane=${TMUX_PANE:-none}"
+  command -v lc_log >/dev/null 2>&1 && lc_log HOOK "src=$src autosend=skip(not-armed-or-no-tmux) tmux=${TMUX:+y} wtmux=${WTMUX_PANE:+y} pane=${_pane:-none}"
 fi

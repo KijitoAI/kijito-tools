@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Delayed self-send of the catch-up prompt INTO a tmux pane → instigates the first turn.
 # Called (detached, via nohup &) by the SessionStart hook ONLY when the pane is armed + in tmux.
-# Args: $1 = target tmux pane (normally "$TMUX_PANE"). Fixed-delay approach — proven reliable.
+# Args: $1 = target pane id (lc_self_pane: tmux "%N", or wtmux "wtmux-<PID>-<PANE>" on native Windows). Fixed-delay approach — proven reliable.
 # Needs Kijito: OPTIONAL — set KIJITO_AUTOCATCHUP_PROMPT for your own text, or KIJITO_MODE=off for a
 #   generic (non-Kijito) default prompt.
 set -u
@@ -11,7 +11,9 @@ _kjt_lib="${KIJITO_LC_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lifecyc
 [ -f "$_kjt_lib" ] || _kjt_lib="$HOME/.claude/lifecycle-lib.sh"
 . "$_kjt_lib"
 pane="${1:?target pane required}"
-command -v tmux >/dev/null 2>&1 || exit 0
+# The multiplexer that owns the pane must exist; lifecycle-lib routes every call by the id's shape.
+if _lc_wt_valid "$pane"; then command -v wtmux >/dev/null 2>&1 || exit 0
+else command -v tmux >/dev/null 2>&1 || exit 0; fi
 lc_stopped && { lc_log AUTOSEND_SKIP "kill switch"; exit 0; }
 
 if [ -n "${KIJITO_AUTOCATCHUP_PROMPT:-}" ]; then
@@ -34,7 +36,7 @@ lc_stopped             && { lc_log AUTOSEND_ABORT "stop appeared"; exit 0; }
 lc_pane_alive "$pane"  || { lc_log AUTOSEND_ABORT "pane gone"; exit 0; }
 # NOTE: do NOT gate on pane_current_command — it's unreliable (reports "bash" for a wrapped
 # claude, the version for an exec'd one). send-keys reaches the pane's TTY (claude) regardless.
-tmux send-keys -t "$pane" -l -- "$prompt" 2>/dev/null
+lc_send_text "$pane" "$prompt"
 
 # ⛔ THE ENTER NEEDS A GAP AFTER THE TEXT, AND WITHOUT ONE THE WHOLE AUTONOMOUS LOOP SILENTLY DIES.
 # Observed 2026-08-01 (Jason, live): "the injected start prompt was just entered into the input but
@@ -60,9 +62,9 @@ sleep "$settle"
 probe=$(printf '%s' "$prompt" | tail -c 40)
 sent=0
 for _try in 1 2 3; do
-  tmux send-keys -t "$pane" Enter 2>/dev/null
+  lc_send_enter "$pane"
   sleep 1.5
-  if ! tmux capture-pane -p -t "$pane" 2>/dev/null | tail -6 | grep -qF -- "$probe"; then
+  if ! lc_capture "$pane" | tail -6 | grep -qF -- "$probe"; then
     sent=1; break
   fi
   lc_log AUTOSEND_RETRY "enter did not submit (attempt $_try)"
