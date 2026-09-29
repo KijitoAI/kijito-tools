@@ -14,7 +14,7 @@
   },
   "artifacts": {
     "wakeCoreSha256": "f6ca4f88841b371409dfb4946e3b427e83150bd511f38068b364de1090c5cd35",
-    "workflowSha256": "250317597163ced09dfe9b5e8a02b0bde8c0c51108ed9a89e9bc4751a3eccd78",
+    "workflowSha256": "cc567afa382247c18d6f3d5a614f17ae5f8a73fb9183f9f17b86a02caaf0c973",
     "planSha256": "d9d666b86ac06414f6e6a13a3e3e2115983a1dad44fcfded7eccc51b191fb451",
     "wakeHelperSha256": "838f6b4462ba037a23a14b6fdb8dc34ee8b8f4a7df258b428832bc092fac3ea4",
     "wsUdsSha256": "4da13eef89b572fb735e756cb06846a021919dec7f91c6d07989377944cc776c",

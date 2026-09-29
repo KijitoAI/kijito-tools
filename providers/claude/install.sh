@@ -10,7 +10,7 @@ set -euo pipefail
 PROVIDER_ROOT="$(cd "$(dirname "$0")" && pwd)"
 DEST="$HOME/.claude"
 command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is required."; exit 1; }
-command -v tmux >/dev/null 2>&1 || echo "WARN: tmux not found — armed-pane autonomy + auto-send need tmux. (Context self-check works without it.)"
+command -v tmux >/dev/null 2>&1 || echo "note: tmux not found — only the OPTIONAL armed-pane autonomy needs it. Memory, the inbox and the context self-check work without it."
 
 mkdir -p "$DEST/skills" "$DEST/.lifecycle"
 
@@ -120,8 +120,16 @@ mv "$SET_REAL.tmp" "$SET_REAL"
 # SILENTLY is wrong: the output read "mode 0600" identically whether it had been 0600 all along or
 # had just been changed underneath the user. A deliberate loosening should be visibly reverted, not
 # quietly undone — otherwise the installer is making a policy decision the operator cannot see.
+# ⛔ AND SAY ONLY WHAT IS TRUE (row M386). This line used to claim the file "holds a bearer token" on
+# every tighten, and a stranger's cold run caught it asserting that over an env block that held nothing
+# but KIJITO_AUTOCATCHUP_DELAY. Name the credential-looking keys when there are some (never a value).
 if [ -n "$PREV_MODE" ] && [ "$PREV_MODE" != "600" ] && [ "$FRESH" = 0 ]; then
-  echo "  ⚠️  tightened settings.json $PREV_MODE → 600 (it holds a bearer token; no other user should read it)"
+  CRED_KEYS=$(jq -r '(.env // {}) | keys | map(select(test("TOKEN|SECRET|PASSWORD|API_?KEY"; "i"))) | join(", ")' "$SET_REAL" 2>/dev/null || true)
+  if [ -n "$CRED_KEYS" ]; then
+    echo "  ⚠️  tightened settings.json $PREV_MODE → 600 (its env holds a credential: $CRED_KEYS; no other user should read it)"
+  else
+    echo "  ⚠️  tightened settings.json $PREV_MODE → 600 (it is where credentials such as KIJITO_API_TOKEN go, so it is kept owner-only)"
+  fi
 fi
 if [ "$FRESH" = 1 ]; then
   echo "✓ settings.json created, mode 0600"
@@ -130,8 +138,15 @@ else
 fi
 
 echo
-echo "Next: add the doctrine snippet to your ~/.claude/CLAUDE.md (context self-check + session-start"
-echo "catch-up + self-clear gate). It's at $DEST/kijito-tools.CLAUDE.md.snippet"
+# ⛔ OPT-IN, IN PLAIN WORDS (row M385). This used to say "Next: add the doctrine snippet", which pushed
+# the Kijito fleet's OPERATOR doctrine (self-clear, armed panes) at every stranger; a cold-run agent said
+# it "goes further than what you agreed to". Nothing installed above needs it, so offer it and say what
+# it would change.
+echo "Optional — only if you want it: $DEST/kijito-tools.CLAUDE.md.snippet is the doctrine the"
+echo "Kijito team's own agents run under: a context self-check, a catch-up step at session start, and"
+echo "a self-clear loop that lets an agent clear its own context in a terminal pane you have armed."
+echo "Memory, the inbox and the status line work without it. It changes how your agent behaves, so"
+echo "read it first; add it to ~/.claude/CLAUDE.md only if you want that."
 echo
 # ⚠️ SAY THE RESTART PLAINLY, AND SAY WHAT IT AFFECTS. Reported from the first external onboarding:
 # the skills simply did not appear, and nothing had told the user that a RUNNING session cannot pick
@@ -166,8 +181,13 @@ if [ -x "$DEST/inbox-selftest.sh" ]; then
   if [ "$st" -eq 0 ]; then
     echo "✓ wake path PROVEN end to end (a real message reached your stream and a consumer read it)."
   elif [ "$st" -eq 2 ]; then
-    echo "⚠️  The wake path could NOT BE TESTED (see above) - that is not the same as working."
-    echo "    Re-run it once a persona marker and token are in place:  $DEST/inbox-selftest.sh"
+    # ⛔ NAME THE LAST STEP, NOT JUST THE GAP (row M383). The stranger cold run stopped here with
+    # "COULD NOT MEASURE: no persona" and a monitor that was installed but never started.
+    echo "⚠️  The inbox is NOT set up yet - installed is not the same as working (see above)."
+    echo "    To start the inbox monitor for your persona and prove it with a real message, run:"
+    echo "      $DEST/kijito-inbox-start.sh --persona <name>"
+    echo "    It names exactly what is missing (persona, the monitor, an API key), and it is not done"
+    echo "    until a message you send yourself wakes your agent."
   elif "$DEST/inbox-selftest.sh" --no-send ${SELFTEST_PERSONA:+--persona "$SELFTEST_PERSONA"} \
          >/dev/null 2>&1; then
     # --no-send passing means producer+stream are fine and only the consumer hop is missing: the
