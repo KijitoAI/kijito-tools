@@ -95,6 +95,8 @@ jobs:
         run: |
           ./install.sh --allow-branch
           bash tests/drift_test.sh
+      - name: installer output on the stranger path (rows M385 M386)
+        run: bash tests/install_stranger_path_test.sh
 
       - name: codex skills deploy
         run: |
