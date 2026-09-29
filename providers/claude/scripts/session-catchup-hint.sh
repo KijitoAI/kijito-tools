@@ -198,6 +198,14 @@ elif [ -d "$HOME/.cache/kijito-inbox-monitor" ]; then _events="$_mac_events"; _s
 elif [ -f "$HOME/Library/LaunchAgents/com.kijito.inbox-monitor.plist" ]; then _events="$_mac_events"; _sup="launchd"
 elif [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then _events="$_mac_events"; _sup="launchd"
 else _events="$_lnx_events"; _sup="systemd"; fi
+# NATIVE WINDOWS (Git Bash): the stream may sit in the macOS-shaped path, but nothing there is launchd.
+# The supervisor is whatever the user registered - in practice a Scheduled Task (praetor, 2026-09-27).
+if command -v kijito_host_is_windows >/dev/null 2>&1 && kijito_host_is_windows; then _sup="task"; fi
+_hint() {
+  if command -v kijito_restart_hint >/dev/null 2>&1; then kijito_restart_hint "$_sup" "${1:-<persona>}"
+  elif [ "$_sup" = launchd ]; then printf 'launchctl kickstart -k gui/$(id -u)/com.kijito.inbox-monitor'
+  else printf 'systemctl --user enable --now kijito-inbox-monitor@%s' "${1:-<persona>}"; fi
+}
 # The generic (no-marker) branch cannot name a file, so it shows the directory shape instead.
 case "$_sup:$_events" in
   launchd:*)            _events_tmpl="\$HOME/.cache/kijito-inbox-monitor/events.<persona>.ndjson" ;;
@@ -213,8 +221,15 @@ esac
 # the string "kijito-inbox-monitor", so a loose pattern reports the producer UP whenever any agent is
 # merely tailing — a false green in the one direction that matters. Anchor on how the executable
 # appears in a command line, never on the bare product name.
-if pgrep -f "kijito_inbox_monitor\.py|bin/kijito-inbox-monitor" >/dev/null 2>&1 \
-   || pgrep -f "kijito-inbox-monitor .*--persona" >/dev/null 2>&1; then
+# THREE ANSWERS, NOT TWO: 0 running, 1 not running, 2 COULD NOT MEASURE (no pgrep and no PowerShell -
+# e.g. Git Bash on Windows before this lib learned to ask Win32_Process). "Could not look" is never DOWN.
+if command -v kijito_producer_running >/dev/null 2>&1; then
+  kijito_producer_running; _prc=$?
+elif ! command -v pgrep >/dev/null 2>&1; then _prc=2
+elif pgrep -f "kijito_inbox_monitor\.py|bin/kijito-inbox-monitor" >/dev/null 2>&1 \
+   || pgrep -f "kijito-inbox-monitor .*--persona" >/dev/null 2>&1; then _prc=0
+else _prc=1; fi
+if [ "$_prc" = 0 ]; then
   if [ -z "$_persona" ]; then
     _prod="inbox-monitor producer: a producer process is running (persona unknown here — no .kijito_persona marker, so this hook cannot tell whether it covers YOUR inbox)."
   elif [ "$_rule" = by-content ]; then
@@ -223,10 +238,7 @@ if pgrep -f "kijito_inbox_monitor\.py|bin/kijito-inbox-monitor" >/dev/null 2>&1 
     # The most diagnosable state of the lot, and it used to read as UP: the file is there, nothing is
     # writing it. Say that, rather than the generic "not being collected" — a stale file and a missing
     # file need different fixes and a reader cannot tell them apart from the generic wording.
-    _prod="inbox-monitor producer: NOT running for '$_persona' — a stream file exists ($_found) but NO running producer names that path, this persona, or --all-personas, so it is STALE and your mail is not being collected. Anything tailing it will wait forever without an error. Start one: $(
-      [ "$_sup" = launchd ] \
-        && printf 'launchctl kickstart -k gui/$(id -u)/com.kijito.inbox-monitor' \
-        || printf 'systemctl --user enable --now kijito-inbox-monitor@%s' "$_persona" )"
+    _prod="inbox-monitor producer: NOT running for '$_persona' — a stream file exists ($_found) but NO running producer names that path, this persona, or --all-personas, so it is STALE and your mail is not being collected. Anything tailing it will wait forever without an error. Start one: $(_hint "$_persona")"
   elif [ "$_rule" = too-old ]; then
     # We know the persona and a producer is running, but the installed producer cannot tell us how it
     # spells that persona as a filename. Naming a path here would be a guess, and a guessed path fails
@@ -241,16 +253,16 @@ if pgrep -f "kijito_inbox_monitor\.py|bin/kijito-inbox-monitor" >/dev/null 2>&1 
     # a host-global check would have called that UP and sent the agent off to tail a missing file.
     # The path below came from the PRODUCER's own rule, so "does not exist" now means the stream is
     # genuinely absent rather than that we spelled the name differently than the writer did.
-    _prod="inbox-monitor producer: a producer is running but NOT for '$_persona' — $_events does not exist, so YOUR mail is not being collected. Start one: $(
-      [ "$_sup" = launchd ] \
-        && printf 'launchctl kickstart -k gui/$(id -u)/com.kijito.inbox-monitor' \
-        || printf 'systemctl --user enable --now kijito-inbox-monitor@%s' "$_persona" )"
+    _prod="inbox-monitor producer: a producer is running but NOT for '$_persona' — $_events does not exist, so YOUR mail is not being collected. Start one: $(_hint "$_persona")"
+  fi
+elif [ "$_prc" = 2 ]; then
+  if [ -n "$_safe" ] && [ -e "$_events" ]; then
+    _prod="inbox-monitor producer: COULD NOT CHECK the process on this host (no pgrep, no PowerShell), so this is NOT a verdict of DOWN. Your stream exists ($_events); if new mail stops appearing in it, restart the producer: $(_hint "${_persona:-<persona>}")"
+  else
+    _prod="inbox-monitor producer: COULD NOT CHECK the process on this host (no pgrep, no PowerShell), and no event stream for '${_persona:-<persona>}' exists yet ($_events). If a producer should be running: $(_hint "${_persona:-<persona>}")"
   fi
 else
-  _prod="inbox-monitor producer: DOWN — no events will arrive until restarted: $(
-    [ "$_sup" = launchd ] \
-      && printf 'launchctl kickstart -k gui/$(id -u)/com.kijito.inbox-monitor' \
-      || printf 'systemctl --user enable --now kijito-inbox-monitor@%s' "${_persona:-<persona>}" )"
+  _prod="inbox-monitor producer: DOWN — no events will arrive until restarted: $(_hint "${_persona:-<persona>}")"
 fi
 
 # Catch-up reminder.
@@ -276,13 +288,21 @@ EOF
 # "nothing is armed" path and told a returning session to arm again — re-introducing the very
 # duplicate-monitor bug this block was written to fix, on exactly the hosts where nobody was
 # looking for it. Match on the resolved events file's basename instead.
-_armed=""
+_armed=""; _armed_unknown=""
 if [ -n "$_safe" ]; then
   _evbase=$(basename "$_events")
   # basename is a literal filename; escape the regex metacharacter it can contain (.) so a dot
   # cannot match an arbitrary character and over-report.
   _evpat=$(printf '%s' "$_evbase" | sed 's/\./\\./g')
-  _armed=$(pgrep -f "tail -n 0 -F.*${_evpat}" 2>/dev/null | tr '\n' ' ')
+  if command -v pgrep >/dev/null 2>&1 && ! { command -v kijito_host_is_windows >/dev/null 2>&1 && kijito_host_is_windows; }; then
+    _armed=$(pgrep -f "tail -n 0 -F.*${_evpat}" 2>/dev/null | tr '\n' ' ')
+  elif command -v kijito_stream_consumed >/dev/null 2>&1; then
+    # No pgrep (native Windows): ask the shared probe. It cannot list pids there, only whether one exists.
+    kijito_stream_consumed "$_events"; case $? in
+      0) _armed="(a native tail.exe process)" ;;
+      2) _armed_unknown=1 ;;
+    esac
+  else _armed_unknown=1; fi
 fi
 
 if [ -n "$_safe" ] && [ -n "$_armed" ]; then
@@ -310,7 +330,7 @@ as a live notification. Your persona for this project is "$_persona":
 
   Monitor(command="tail -n 0 -F $_events | grep --line-buffered -E '\"event\": ?\"(new|alert|recovered|state_corrupt|baseline_skipped|seed_ahead|replay_capped|persona_added|still_unread)\"'", persistent=true)
 
-First confirm nothing is already monitoring that stream this session (avoid double-arming). $_prod
+First confirm nothing is already monitoring that stream this session (avoid double-arming).${_armed_unknown:+ ⚠️ This hook could NOT check for an existing consumer on this host (no pgrep / PowerShell), so it may be armed already: check your task list before arming.} $_prod
 EOF
 else
 cat <<EOF
@@ -328,11 +348,14 @@ EOF
 fi
 
 # Armed auto-send (detached so it never blocks startup or pollutes the additionalContext above).
-if command -v lc_is_armed >/dev/null 2>&1 && [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] && lc_is_armed "$TMUX_PANE"; then
-  lc_log HOOK "src=$src autosend=ARMED pane=$TMUX_PANE"
+# The pane is tmux's or (native Windows) wtmux's; lc_self_pane answers for both.
+_pane=""; command -v lc_self_pane >/dev/null 2>&1 && _pane=$(lc_self_pane 2>/dev/null)
+case "$_pane" in wtmux-*|'') ;; *) [ -n "${TMUX:-}" ] || _pane="" ;; esac   # a tmux pane also needs $TMUX, as before
+if [ -n "$_pane" ] && lc_is_armed "$_pane"; then
+  lc_log HOOK "src=$src autosend=ARMED pane=$_pane"
   _autosend="$_kjt_dir/session-autosend.sh"
   [ -f "$_autosend" ] || _autosend="$HOME/.claude/session-autosend.sh"
-  nohup bash "$_autosend" "$TMUX_PANE" >/dev/null 2>&1 &
+  nohup bash "$_autosend" "$_pane" >/dev/null 2>&1 &
 else
-  command -v lc_log >/dev/null 2>&1 && lc_log HOOK "src=$src autosend=skip(not-armed-or-no-tmux) tmux=${TMUX:+y} pane=${TMUX_PANE:-none}"
+  command -v lc_log >/dev/null 2>&1 && lc_log HOOK "src=$src autosend=skip(not-armed-or-no-tmux) tmux=${TMUX:+y} wtmux=${WTMUX_PANE:+y} pane=${_pane:-none}"
 fi

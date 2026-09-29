@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AGENT-INVOKED self-/clear — the agent's FINAL action, only after /kijito-qa-memory passed.
-# Hard gates (all must hold): kill-switch off · armed · not-a-subagent · in tmux · pane alive ·
+# Hard gates (all must hold): kill-switch off · armed · not-a-subagent · in tmux or wtmux · pane alive ·
 # FRESH qa-pass token. Never auto-fired. (Cycle cap + every-5 checkpoint REMOVED 2026-07-29 — see C2.)
 set -u
 # Resolve the shared lib NEXT TO THIS SCRIPT so the repo copy is runnable/testable in place, and
@@ -18,9 +18,12 @@ lc_is_child && refuse "subagent marker set — would clear the PARENT pane" 6
 # itself exits 1 outside tmux, so that refusal pointed at a remedy which cannot work. It is the
 # familiar shape: COULD-NOT-MEASURE wearing the costume of THE-CLAIM-IS-FALSE. Ask the question
 # that can actually be answered first.
-{ [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ]; } || refuse "not in tmux (TMUX/TMUX_PANE unset)" 4
-lc_pane_alive "$TMUX_PANE" || refuse "target pane $TMUX_PANE no longer exists" 4
-lc_is_armed "${TMUX_PANE:-}" || refuse "not an armed pane — self-clear only runs in autonomous sessions (launch via ~/.claude/claude-armed.sh, or ~/.claude/arm-session.sh on); plain 'claude' is human-managed" 3
+# The pane is tmux's ($TMUX_PANE) or wtmux's on native Windows ($WTMUX_PID + $WTMUX_PANE); lifecycle-lib
+# speaks both, and everything below uses the id it returns.
+PANE=$(lc_self_pane) || refuse "not in tmux or wtmux (TMUX/TMUX_PANE and WTMUX_PID/WTMUX_PANE unset)" 4
+case "$PANE" in wtmux-*) ;; *) [ -n "${TMUX:-}" ] || refuse "not in tmux (TMUX unset)" 4 ;; esac
+lc_pane_alive "$PANE" || refuse "target pane $PANE no longer exists" 4
+lc_is_armed "$PANE" || refuse "not an armed pane — self-clear only runs in autonomous sessions (launch via ~/.claude/claude-armed.sh, or ~/.claude/arm-session.sh on); plain 'claude' is human-managed" 3
 # (no pane_current_command gate — unreliable label; send-keys reaches the TTY regardless)
 
 # C1 — require a FRESH /kijito-qa-memory pass for THIS session
@@ -101,7 +104,7 @@ fi
 lc_log SELFCLEAR_FIRE "cycle=$cyc delay=$delay ctx=$ctx"
 ( sleep "$delay"
   lc_stopped               && { lc_log SELFCLEAR_ABORT "stop during delay"; exit 0; }
-  lc_pane_alive "$TMUX_PANE" || { lc_log SELFCLEAR_ABORT "pane gone during delay"; exit 0; }
+  lc_pane_alive "$PANE" || { lc_log SELFCLEAR_ABORT "pane gone during delay"; exit 0; }
   # ⛔ BRANCH ON DELIVERY. `SELFCLEAR_DONE` used to be logged UNCONDITIONALLY, with both send-keys
   # calls discarding stderr and nothing reading their status — so a REFUSED delivery still wrote
   # DONE (argus, 2026-08-01). An audit log asserting an action that did not occur is the one thing
@@ -111,7 +114,7 @@ lc_log SELFCLEAR_FIRE "cycle=$cyc delay=$delay ctx=$ctx"
   # ★ THE TWO FAILURES ARE LOGGED SEPARATELY ON PURPOSE: "not typed" and "typed but not submitted"
   # are different states with different causes, and the second is exactly what Jason observed for
   # session-autosend. Collapsing them would hide the one the settle-sleep below addresses.
-  if tmux send-keys -t "$TMUX_PANE" -l -- "/clear" 2>/dev/null; then
+  if lc_send_text "$PANE" "/clear"; then
     # Same paste-buffer race that broke session-autosend — an Enter arriving inside the TUI's ingest
     # burst is taken as a newline rather than as submit. "/clear" is short and has fired ~88 times
     # successfully, so this gap is hardening rather than a repair; the cost of failing here is the
@@ -121,14 +124,14 @@ lc_log SELFCLEAR_FIRE "cycle=$cyc delay=$delay ctx=$ctx"
     # wiping the auto-resume prompt the SessionStart hook had just injected — stopping the loop by
     # way of the very mechanism meant to protect it. Fire once.
     sleep "${KIJITO_SEND_SETTLE:-1.2}"
-    if tmux send-keys -t "$TMUX_PANE" Enter 2>/dev/null; then
+    if lc_send_enter "$PANE"; then
       lc_log SELFCLEAR_DONE "cycle=$cyc"
     else
-      lc_log SELFCLEAR_FAILED "cycle=$cyc Enter refused pane=$TMUX_PANE — /clear typed, NOT submitted"
+      lc_log SELFCLEAR_FAILED "cycle=$cyc Enter refused pane=$PANE — /clear typed, NOT submitted"
     fi
   else
-    lc_log SELFCLEAR_FAILED "cycle=$cyc send-keys refused pane=$TMUX_PANE — NOT cleared"
+    lc_log SELFCLEAR_FAILED "cycle=$cyc send-keys refused pane=$PANE — NOT cleared"
   fi
 ) >/dev/null 2>&1 &
-echo "self-clear scheduled (cycle $cyc, uncapped): /clear → $TMUX_PANE in ${delay}s. This MUST be your FINAL action — stop now; SessionStart re-catches-up and resumes the preloaded work."
+echo "self-clear scheduled (cycle $cyc, uncapped): /clear → $PANE in ${delay}s. This MUST be your FINAL action — stop now; SessionStart re-catches-up and resumes the preloaded work."
 exit 0

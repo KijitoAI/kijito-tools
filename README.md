@@ -151,12 +151,20 @@ both BSD and GNU `date`), so they run the same on Linux and macOS.
 | Linux | yes | yes | yes (needs `tmux`) |
 | macOS | yes | yes | yes (needs `tmux`) |
 | Windows via WSL | yes | yes | yes — run `claude` inside the WSL distro, where `tmux` works |
-| Windows native (no WSL) | with Git Bash | with Git Bash | no — `tmux` is not available |
+| Windows native (no WSL) | with Git Bash | with Git Bash | inside `wtmux` (Git Bash + PowerShell); see below |
 
-On Windows, use WSL: install and launch `claude` inside the Linux distro and everything works as it
-does on native Linux. The autonomy harness drives a session by typing into its own `tmux` pane, which
-has no native-Windows equivalent, so without WSL only the context check and the by-hand catch-up
-apply. Requirements everywhere: `bash` and `jq`; add `tmux` for the autonomy features.
+On Windows, WSL is the simplest route: install and launch `claude` inside the Linux distro and
+everything works as it does on native Linux. The autonomy harness drives a session by typing into its
+own multiplexer pane. On native Windows that pane is `wtmux`'s: run `claude` inside wtmux from Git
+Bash and the lifecycle scripts use `$WTMUX_PID`/`$WTMUX_PANE` in place of `$TMUX_PANE`. wtmux cannot
+list panes, so a pane counts as alive when `wtmux capture-pane` answers for it, and an arming is tied
+to the wtmux server process and its start time, which is read through PowerShell. If PowerShell cannot
+answer, the pane counts as not armed. The backup heartbeat watchdog is tmux-only for now. Tested
+against a stand-in wtmux (`tests/wtmux_lifecycle_test.sh`); the first real-seat run is pending.
+If Claude Code runs in auto mode there, the auto-mode classifier refuses an agent's own edits to
+`~/.claude/settings.json`, so apply any settings change for self-drive yourself.
+Requirements everywhere: `bash` and `jq`; add `tmux` (or `wtmux` on native Windows) for the autonomy
+features.
 
 ## Managed vs. autonomous panes
 
@@ -178,7 +186,7 @@ A pane clears itself only after both steps:
 1. `/kijito-qa-memory` curates memory, writes a current-state note that begins with `RESUME NOW:`,
    and confirms with a fresh subagent that a cold start can resume. It records a pass token.
 2. `self-clear.sh` checks that the kill switch is off, the pane is armed, it is not a subagent, it is
-   in tmux, the target pane is alive, and the pass token is **fresh**.
+   in tmux (or wtmux), the target pane is alive, and the pass token is **fresh**.
 
 Every one of those is a property of *this* clear — above all, "is the handoff good enough to survive
 it?" A count-based cycle cap and an every-N human checkpoint used to sit here too and were removed on

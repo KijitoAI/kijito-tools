@@ -103,7 +103,9 @@ jobs:
           test -f "$HOME/.codex/skills/kijito-start/agents/openai.yaml"
 
       - name: lifecycle suite
-        run: bash tests/lc_test.sh
+        run: |
+          bash tests/lc_test.sh
+          bash tests/wtmux_lifecycle_test.sh
       - name: heartbeat, inbox self-test and status-line suites (rows M290 M304 M309 M291)
         run: |
           bash tests/heartbeat_nonce_test.sh
@@ -112,6 +114,8 @@ jobs:
           bash tests/statusline_persona_test.sh
           bash tests/statusline_render_test.sh
           bash tests/stream_layouts_test.sh
+          bash tests/windows_detect_test.sh
+          bash tests/catchup_topology_test.sh
       - name: vendored monitor is byte-identical to its recorded upstream release, and its own suite passes (M314 M332)
         run: |
           bash tests/vendored_monitor_test.sh

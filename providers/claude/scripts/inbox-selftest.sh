@@ -114,7 +114,9 @@ verdict() {   # $1=producer_ok $2=stream_ok $3=consumer_ok (each 1/0) -> prints,
 }
 
 restart_hint() {
-  if [ -d "$HOME/.kijito-monitor" ] || command -v systemctl >/dev/null 2>&1; then
+  if command -v kijito_host_is_windows >/dev/null 2>&1 && kijito_host_is_windows; then
+    kijito_restart_hint task "${PERSONA:-<persona>}"
+  elif [ -d "$HOME/.kijito-monitor" ] || command -v systemctl >/dev/null 2>&1; then
     printf 'systemctl --user enable --now kijito-inbox-monitor@%s' "${PERSONA:-<persona>}"
   else
     printf 'launchctl kickstart -k gui/$(id -u)/com.kijito.inbox-monitor'
@@ -209,10 +211,17 @@ producer_ok=0
 if [ -n "$EVENTS" ] && [ -e "$EVENTS" ]; then
   producer_ok=1
   printf '  ok    producer: covers %s (stream: %s)\n' "$PERSONA" "$EVENTS"
-elif pgrep -f "kijito_inbox_monitor\.py|bin/kijito-inbox-monitor" >/dev/null 2>&1; then
-  printf '  FAIL  producer: a producer is running, but none of it is writing a stream for %s\n' "$PERSONA"
 else
-  printf '  FAIL  producer: no producer process is running on this host\n'
+  # Only the DIAGNOSIS depends on the process probe; the hop already failed (no stream). A host where
+  # we cannot look (no pgrep, no PowerShell) must not be told "no producer is running".
+  _prc=0; kijito_producer_running || _prc=$?   # `|| rc=$?`, never `; rc=$?`: this script runs under set -e
+  if [ "$_prc" = 0 ]; then
+    printf '  FAIL  producer: a producer is running, but none of it is writing a stream for %s\n' "$PERSONA"
+  elif [ "$_prc" = 2 ]; then
+    printf '  FAIL  producer: no stream for %s (whether a producer process is running could NOT be checked on this host)\n' "$PERSONA"
+  else
+    printf '  FAIL  producer: no producer process is running on this host\n'
+  fi
 fi
 
 # ── HOP 2: STREAM ────────────────────────────────────────────────────────────────────────────────
@@ -265,10 +274,15 @@ fi
 # ── HOP 3: CONSUMER ──────────────────────────────────────────────────────────────────────────────
 # ⚠️ ANCHOR THE PATTERN. An unanchored pgrep on the events path SELF-MATCHES the producer (its own
 # argv contains that path) and reports a consumer where there is none — armed-looking and deaf.
-consumer_ok=0
-if [ -n "$EVENTS" ] && kijito_stream_consumed "$EVENTS"; then consumer_ok=1; fi
-if [ "$consumer_ok" = 1 ]; then
+consumer_ok=0; _crc=1
+if [ -n "$EVENTS" ]; then _crc=0; kijito_stream_consumed "$EVENTS" || _crc=$?; fi
+if [ "$_crc" = 0 ]; then
+  consumer_ok=1
   printf '  ok    consumer: a wake-capable consumer is attached to the stream\n'
+elif [ "$_crc" = 2 ]; then
+  printf '  ????  consumer: COULD NOT MEASURE - this host offers no way to list processes (no pgrep, no PowerShell)\n'
+  printf '\n%s\n' "COULD NOT MEASURE: whether anything reads ${EVENTS} is unknown here. This is not a pass."
+  exit 2
 else
   printf '  FAIL  consumer: nothing is reading the stream\n'
 fi

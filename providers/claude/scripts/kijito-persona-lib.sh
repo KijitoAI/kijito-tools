@@ -111,14 +111,77 @@ kijito_unread_for_persona() {
   printf '%s' "$n"
 }
 
-# kijito_stream_consumed <stream-path> -> 0 if a wake-capable consumer (`tail -n 0 -F …`) reads it.
+# ── NATIVE WINDOWS (Git Bash / MSYS / Cygwin). Reported by praetor on a real Windows 11 seat: Git Bash
+# has no `pgrep`, and MSYS `ps` cannot see native Windows processes at all, so every process probe below
+# answered "not running" — the hook said "producer: DOWN" beside a producer that was delivering mail, and
+# suggested launchctl/systemctl, neither of which exists there. ⛔ THE FIX IS A THIRD ANSWER, NOT A
+# GUESS: when a host gives us no way to look, the probes return 2 = COULD NOT MEASURE, and callers must
+# say so instead of reporting DOWN. On Windows we ask the OS itself (Win32_Process via PowerShell).
+kijito_host_is_windows() {
+  case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*) return 0 ;; esac
+  return 1
+}
+
+# _kijito_win_count <Where-Object filter> -> prints how many native Windows processes match; returns 2
+# (and prints nothing) when PowerShell is absent or its answer is not a number.
+_kijito_win_count() {
+  local psh n
+  psh=$(command -v powershell.exe 2>/dev/null || command -v powershell 2>/dev/null \
+        || command -v pwsh 2>/dev/null) || return 2
+  n=$("$psh" -NoProfile -NonInteractive -Command \
+      "@(Get-CimInstance Win32_Process | Where-Object { $1 }).Count" 2>/dev/null | tr -d '\r[:space:]')
+  case "$n" in ''|*[!0-9]*) return 2 ;; esac
+  printf '%s' "$n"
+}
+
+# kijito_producer_running -> 0 a producer process is running on this host, 1 none is, 2 COULD NOT MEASURE.
+# ⚠️ The pattern must not match a CONSUMER: a tail's own argv can contain "kijito-inbox-monitor" (the
+# macOS stream path does), so anchor on how the EXECUTABLE appears, and on Windows also exclude the
+# shells and tools whose command lines merely mention it (including the PowerShell asking the question).
+kijito_producer_running() {
+  local n
+  if kijito_host_is_windows; then
+    n=$(_kijito_win_count '$_.CommandLine -match "kijito_inbox_monitor\.py|kijito-inbox-monitor\.exe|bin[\\/]kijito-inbox-monitor" -and @("tail.exe","grep.exe","bash.exe","sh.exe","powershell.exe","pwsh.exe") -notcontains $_.Name') || return 2
+    [ "$n" -gt 0 ] && return 0
+    return 1
+  fi
+  command -v pgrep >/dev/null 2>&1 || return 2
+  pgrep -f "kijito_inbox_monitor\.py|bin/kijito-inbox-monitor" >/dev/null 2>&1 && return 0
+  pgrep -f "kijito-inbox-monitor .*--persona" >/dev/null 2>&1 && return 0
+  return 1
+}
+
+# kijito_restart_hint <launchd|systemd|task> [persona] -> the command that (re)starts a producer there.
+kijito_restart_hint() {
+  case "${1:-}" in
+    launchd) printf 'launchctl kickstart -k gui/$(id -u)/com.kijito.inbox-monitor' ;;
+    # Windows: MANUAL start first. Jason's ruling (2026-09-27, relayed by crucible): "Ideally in both
+    # places I want monitor start to be manual, these are gaming comps after all." A Scheduled Task is
+    # the opt-in autostart, never the default suggestion.
+    task)    printf 'start it by hand from a normal (non-sandboxed) shell: kijito-inbox-monitor --persona %s  (or your supervisor script); if you opted into autostart, run its Scheduled Task instead: schtasks /Run /TN "<task name>"' "${2:-<persona>}" ;;
+    *)       printf 'systemctl --user enable --now kijito-inbox-monitor@%s' "${2:-<persona>}" ;;
+  esac
+}
+
+# kijito_stream_consumed <stream-path> -> 0 if a wake-capable consumer (`tail -n 0 -F …`) reads it,
+# 1 if none does, 2 COULD NOT MEASURE (no way to list processes on this host). `if kijito_stream_consumed`
+# treats 2 as "not consumed", exactly as before; callers that can say "unknown" should test for 2.
 # ⚠️ ANCHOR ON WHAT THE PROCESS *IS*. An unanchored pgrep on the events path SELF-MATCHES the producer
 # (its own argv contains that path), and the harness's `bash -c … eval` wrappers carry the same argv —
 # armed-looking and deaf. Only a process whose comm is `tail` counts.
 kijito_stream_consumed() {
-  local s=${1:-} p
+  local s=${1:-} p b n
   [ -n "$s" ] || return 1
-  for p in $(pgrep -f "tail -n 0 -F.*$(basename "$s")" 2>/dev/null); do
+  b=$(basename "$s")
+  if kijito_host_is_windows; then
+    # Only tail.exe counts (the same anchor as below); its command line must carry the follow flags and
+    # this stream's basename. A basename is a literal, so match it with -like, never as a regex.
+    n=$(_kijito_win_count "\$_.Name -eq 'tail.exe' -and \$_.CommandLine -match '-n\s+0\s+-F' -and \$_.CommandLine -like '*$b*'") || return 2
+    [ "$n" -gt 0 ] && return 0
+    return 1
+  fi
+  command -v pgrep >/dev/null 2>&1 || return 2
+  for p in $(pgrep -f "tail -n 0 -F.*$b" 2>/dev/null); do
     [ "$(ps -o comm= -p "$p" 2>/dev/null)" = tail ] && return 0
   done
   return 1

@@ -9,7 +9,7 @@ lc_now() { date +%s; }                                   # epoch (portable BSD/G
 
 lc_log() {                                               # M2 — audit log:  action [detail]
   printf '%s sid=%s pane=%s %s %s\n' \
-    "$(date '+%Y-%m-%dT%H:%M:%S')" "${CLAUDE_CODE_SESSION_ID:-?}" "${TMUX_PANE:-?}" "$1" "${2:-}" \
+    "$(date '+%Y-%m-%dT%H:%M:%S')" "${CLAUDE_CODE_SESSION_ID:-?}" "$(lc_self_pane 2>/dev/null || echo '?')" "$1" "${2:-}" \
     >> "$KIJITO_LC_LOG" 2>/dev/null
 }
 
@@ -22,6 +22,85 @@ lc_stopped() { [ -f "$KIJITO_LC_STOP" ]; }              # M1 — kill switch: `t
 # (The cycle cap was part of this list until 2026-07-29, when it was removed as non-discriminating —
 # see self-clear.sh "C2". Do not cite it as protection.)
 lc_is_child() { [ -n "${CLAUDE_AGENT_TYPE:-}" ] || [ -n "${CLAUDE_CODE_AGENT:-}" ]; }
+
+# ── WHICH MULTIPLEXER IS THIS PANE IN: tmux, or wtmux (native Windows) ──────────────────────────
+# Everything below speaks in PANE IDS, and a pane id now says which multiplexer owns it:
+#   tmux   "%12"                  ($TMUX_PANE; the id tmux itself uses)
+#   wtmux  "wtmux-<PID>-<PANE>"   ($WTMUX_PID + $WTMUX_PANE, e.g. wtmux-8812-1.1)
+# ⛔ THE wtmux ID MUST CARRY THE SERVER PID. wtmux pane ids ("1.1") restart in every wtmux instance, so
+# a marker keyed on "1.1" alone is exactly the recycled-key hazard the fingerprint below exists to stop.
+# Measured on wtmux 4.0.3 (crucible, TAMALITRON, 2026-09-27): no list-panes / has-session, and
+# `display-message -t` fails even for a live pane — but `capture-pane -p -t PANE` exits 0 for a live
+# pane and 1 for a missing one, and `send-keys -t PANE ...` delivers. Those two verbs are all we use.
+# Every wtmux call needs MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' under Git Bash, or MSYS rewrites
+# "/clear" into "C:/Program Files/Git/clear" before wtmux ever sees it.
+# ⚠️ tmux is keyed on $TMUX_PANE ALONE, exactly as arm-session / claude-armed / the log / the cycle file
+# always were. self-clear.sh and the SessionStart hook ALSO require $TMUX for a tmux pane and check it
+# themselves; folding that into this helper silently changed what every other caller accepted.
+lc_self_pane() {                                         # prints THIS process's pane id; 1 = in none
+  if [ -n "${TMUX_PANE:-}" ]; then printf '%s\n' "$TMUX_PANE"; return 0; fi
+  if [ -n "${WTMUX_PANE:-}" ] && [ -n "${WTMUX_PID:-}" ]; then
+    _lc_wt_valid "wtmux-$WTMUX_PID-$WTMUX_PANE" || return 1
+    printf 'wtmux-%s-%s\n' "$WTMUX_PID" "$WTMUX_PANE"; return 0
+  fi
+  return 1
+}
+# A wtmux id is accepted only in its exact shape: a decimal pid and a dotted-decimal pane. The pane part
+# reaches a command line, so nothing else may pass.
+_lc_wt_valid() {
+  case "$1" in wtmux-*-*) ;; *) return 1 ;; esac
+  local r="${1#wtmux-}"; local pid="${r%%-*}" pn="${r#*-}"
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  case "$pn" in ''|*[!0-9.]*|.*|*.) return 1 ;; esac
+  return 0
+}
+_lc_wt_pid()  { local r="${1#wtmux-}"; printf '%s' "${r%%-*}"; }
+_lc_wt_pane() { local r="${1#wtmux-}"; printf '%s' "${r#*-}"; }
+_lc_wtmux()   { MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' wtmux "$@"; }
+# A wtmux command addresses the wtmux instance this process runs under; there is no verb to reach
+# another one. So an id naming a DIFFERENT server pid cannot be measured from here: fail closed.
+_lc_wt_reachable() {
+  _lc_wt_valid "$1" || return 1
+  command -v wtmux >/dev/null 2>&1 || return 1
+  [ "$(_lc_wt_pid "$1")" = "${WTMUX_PID:-}" ]
+}
+# The start time of a native Windows process, as .NET ticks (UTC). MSYS `ps` cannot see native
+# processes, so ask PowerShell. Empty output = could not measure (the caller fails closed).
+_lc_proc_start() {
+  local ps
+  ps=$(command -v powershell.exe 2>/dev/null || command -v pwsh 2>/dev/null) || return 1
+  case "$1" in ''|*[!0-9]*) return 1 ;; esac
+  "$ps" -NoProfile -NonInteractive -Command \
+    "(Get-Process -Id $1 -ErrorAction Stop).StartTime.ToUniversalTime().Ticks" 2>/dev/null \
+    | tr -d '\r' | awk 'NF { v = $1 } END { if (v ~ /^[0-9]+$/) print v; else exit 1 }'
+}
+lc_capture() {                                           # $1 = pane id; the pane's text on stdout
+  if _lc_wt_valid "${1:-}"; then
+    _lc_wt_reachable "$1" || return 1
+    _lc_wtmux capture-pane -p -t "$(_lc_wt_pane "$1")" 2>/dev/null
+  else
+    tmux capture-pane -p -t "$1" 2>/dev/null
+  fi
+}
+# Type TEXT into the pane without submitting it. tmux types it literally (-l). wtmux gets it as ONE
+# argument without -l: praetor proved `send-keys -t P "/clear" Enter` on a real seat, and `-l` is
+# accepted by wtmux 4.0.3 but its effect is unmeasured, so it is not relied on.
+lc_send_text() {                                         # $1 = pane id, $2 = text
+  if _lc_wt_valid "${1:-}"; then
+    _lc_wt_reachable "$1" || return 1
+    _lc_wtmux send-keys -t "$(_lc_wt_pane "$1")" "$2" 2>/dev/null
+  else
+    tmux send-keys -t "$1" -l -- "$2" 2>/dev/null
+  fi
+}
+lc_send_enter() {                                        # $1 = pane id
+  if _lc_wt_valid "${1:-}"; then
+    _lc_wt_reachable "$1" || return 1
+    _lc_wtmux send-keys -t "$(_lc_wt_pane "$1")" Enter 2>/dev/null
+  else
+    tmux send-keys -t "$1" Enter 2>/dev/null
+  fi
+}
 
 # ⛔ THIS GATE RETURNED TRUE FOR EVERY INPUT, INCLUDING GARBAGE — IT HAD NEVER ONCE REFUSED.
 # Found by argus 2026-08-01, measured on Linux tmux 3.4 AND macOS tmux 3.6a. The old body asked
@@ -43,8 +122,10 @@ lc_is_child() { [ -n "${CLAUDE_AGENT_TYPE:-}" ] || [ -n "${CLAUDE_CODE_AGENT:-}"
 # literally, so `%1` cannot match `%11` and a metacharacter in the argument cannot act as a pattern.
 # Portable across BSD and GNU userland.
 lc_pane_alive() {
-  command -v tmux >/dev/null 2>&1 || return 1
   [ -n "${1:-}" ] || return 1
+  # wtmux cannot enumerate; its capture-pane EXIT CODE is the measured liveness answer (0 live, 1 gone).
+  if _lc_wt_valid "$1"; then _lc_wt_reachable "$1" && lc_capture "$1" >/dev/null; return; fi
+  command -v tmux >/dev/null 2>&1 || return 1
   tmux list-panes -a -F '#{pane_id}' 2>/dev/null | grep -Fqx -- "$1"
 }
 
@@ -87,13 +168,22 @@ lc_pane_usable() {
 # ⚠️ NOT part of the fingerprint: $CLAUDE_CODE_SESSION_ID. It ROTATES on every /clear, so validating
 # against it would disarm the pane at exactly the moment the self-clear loop needs it. It is recorded
 # for the audit trail only.
+# wtmux has no session_name/session_created (display-message answers them EMPTY), so its fingerprint is
+# the wtmux SERVER process and that process's start time: a restarted wtmux gets a new pid or, if the pid
+# is reused, a new start time, and either one stops a stale marker validating.
 _lc_sess_fp() {                                          # "<session_name> <session_created>"
+  if _lc_wt_valid "${1:-}"; then
+    local st; _lc_wt_reachable "$1" || return 1
+    st=$(_lc_proc_start "$(_lc_wt_pid "$1")") || return 1
+    [ -n "$st" ] || return 1
+    printf 'wtmux-%s %s\n' "$(_lc_wt_pid "$1")" "$st"; return 0
+  fi
   command -v tmux >/dev/null 2>&1 || return 1
   tmux display-message -p -t "$1" '#{session_name} #{session_created}' 2>/dev/null
 }
 
-lc_marker_write() {                                      # $1 = pane id (default $TMUX_PANE)
-  local pane="${1:-${TMUX_PANE:-}}" fp
+lc_marker_write() {                                      # $1 = pane id (default: this pane)
+  local pane="${1:-$(lc_self_pane 2>/dev/null)}" fp
   [ -n "$pane" ] || return 1
   lc_pane_alive "$pane" || return 1                      # enumerates; display-message alone exits 0 on a dead pane
   fp=$(_lc_sess_fp "$pane") || return 1
@@ -105,7 +195,7 @@ lc_marker_write() {                                      # $1 = pane id (default
 }
 
 lc_marker_armed() {
-  local pane="${1:-${TMUX_PANE:-x}}" f fp want_s want_c
+  local pane="${1:-$(lc_self_pane 2>/dev/null || echo x)}" f fp want_s want_c
   f="$KIJITO_LC_DIR/arm.$pane"
   [ -s "$f" ] || return 1                                # missing OR legacy zero-byte → fail closed
   want_s=$(awk -F= '$1=="session"{sub(/^[^=]*=/,"");print}' "$f" 2>/dev/null)
@@ -118,7 +208,7 @@ lc_marker_armed() {
 }
 
 lc_marker_legacy() {                                     # exists but carries no provenance
-  local f="$KIJITO_LC_DIR/arm.${1:-${TMUX_PANE:-x}}"
+  local f="$KIJITO_LC_DIR/arm.${1:-$(lc_self_pane 2>/dev/null || echo x)}"
   [ -f "$f" ] && [ ! -s "$f" ]
 }
 
@@ -137,7 +227,7 @@ lc_pane_at_menu() {                                      # $1 = pane id; the las
   # ⚠️ capture-pane returns the WHOLE pane height, blank rows included, and a dialog drawn in a fresh
   # pane sits at the TOP — so a bare `tail -20` of a 50-row pane reads twenty blank lines and misses the
   # trust dialog entirely (measured by this row's own test). Trim trailing blank rows first.
-  tmux capture-pane -p -t "$1" 2>/dev/null \
+  lc_capture "$1" \
     | awk '{ l[NR] = $0 } NF { last = NR } END { s = (last > 20) ? last - 19 : 1; for (i = s; i <= last; i++) print l[i] }' \
     | lc_text_is_menu
 }
@@ -164,4 +254,4 @@ lc_qa_token()   { echo "$KIJITO_LC_DIR/qa-pass.${CLAUDE_CODE_SESSION_ID:-nosessi
 # accumulate across the self-clear loop. The pane persists across clears → accumulates correctly.
 # ⚠️ Since 2026-07-29 this counter is TELEMETRY ONLY — nothing gates on it (see self-clear.sh "C2").
 # It stays because the cycle number is useful in the audit log; it is not a limit.
-lc_cycle_file() { echo "$KIJITO_LC_DIR/cycles.${TMUX_PANE:-${CLAUDE_CODE_SESSION_ID:-nosession}}"; }
+lc_cycle_file() { echo "$KIJITO_LC_DIR/cycles.$(lc_self_pane 2>/dev/null || echo "${CLAUDE_CODE_SESSION_ID:-nosession}")"; }

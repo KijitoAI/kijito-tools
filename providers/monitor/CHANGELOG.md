@@ -3,6 +3,41 @@
 All notable changes to kijito-inbox-monitor are documented in this file.
 The format is based on Keep a Changelog, and this project follows Semantic Versioning.
 
+## [0.5.12] - 2026-09-28
+
+### Fixed
+- **New mail is announced at once even when a read cancels it out in the same tick.** If the agent read one
+  held message while one new message arrived within a single poll, the unread count did not move (N -> N), so
+  the fast path skipped the inbox fetch and the new message waited for the `--resync-every` floor (~8 minutes at
+  the defaults). The server now states each persona's newest unread message id on `/api/notify/pending`
+  (`newest_unread_id`, Kijito 14ec0b27), and the fast path fetches when either the count or that id changes.
+  Against an older server that does not send the field, behaviour is unchanged.
+
+## [0.5.11] - 2026-09-27
+
+### Fixed
+- **On Windows a second watcher on the same state file now refuses to start.** The single-writer lock was
+  POSIX-only (`flock`), so on Windows two producers pointed at one state file both ran and each announced
+  every message, and their saves could move the cursor backwards. The lock is now taken through
+  `msvcrt.locking` on byte 0 of the same `.lock` sidecar: the second instance exits with
+  `state-file in use (another watcher holds the lock)`, exactly as on Linux and macOS, and the OS releases
+  the lock when the first process exits or is killed. Verified on a real Windows 11 seat (two instances,
+  one state file: the second refused; after the first was killed, a restart resumed from its saved cursor).
+
+## [0.5.10] - 2026-09-27
+
+### Fixed
+- **On Windows the cursor is now saved.** `StateFile.save()` returned success without writing anything
+  when not on POSIX, so every supervisor restart found no state file and baselined to the newest id:
+  mail that arrived while the producer was down was never announced (reported and verified on a real
+  Windows 11 seat). The write path was already portable (`mkstemp`, `fsync`, `os.replace`), so the
+  early return is simply removed. A restart now resumes from the saved cursor and emits the mail it
+  missed, exactly as on Linux and macOS.
+- **New mail that lands while you read your held mail is announced at once.** The unread-count fast path
+  fetched the inbox only when a persona's count went UP. Reading N held messages while one new message
+  arrived in the same tick moved the count from N to 1, a decrease, so the new message waited for the
+  `--resync-every` backstop (~8 minutes at the defaults). Any change in the count now triggers the fetch.
+
 ## [0.5.9] - 2026-09-26
 
 ### Fixed

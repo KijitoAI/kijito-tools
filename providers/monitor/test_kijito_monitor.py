@@ -4914,6 +4914,96 @@ class MeasuredAlertFloorTest(unittest.TestCase):
         self.assertEqual((t.fsm_state, t.failures, t.down_since), ("UP", 0, None))
         self.assertEqual(em.new_ids, [101])
 
+    def test_a_read_down_that_hides_an_arrival_still_fetches_the_inbox(self):
+        # crucible, 2026-09-27: 2 held, the agent reads both and 1 new message lands in the same tick.
+        # The count goes 2 -> 1 - a DECREASE - and the fast path used to skip the fetch until the
+        # --resync-every floor. Any change must fetch; an unchanged count may still skip.
+        em = self.Recorder()
+        t = self._target(em)
+        t.args.no_fast_path = False
+        t.fast_path, t.last_unread = True, 2
+        fetched = []
+        def fetch(opener, url, headers):
+            fetched.append(url)
+            return BoundedWindowEndToEndTest()._fetch([{"id": 101}], 0)(opener, url, headers)
+        orig, km.fetch = km.fetch, fetch
+        try:
+            t.poll_once(counts_available=True, unread_counts={"argus": 1})
+            self.assertEqual(len(fetched), 1, "a decrease can hide an arrival; it must fetch")
+            self.assertEqual(em.new_ids, [101])
+            t.poll_once(counts_available=True, unread_counts={"argus": 1})
+            self.assertEqual(len(fetched), 1, "an unchanged count still takes the cheap path")
+        finally:
+            km.fetch = orig
+
+    def _poll_with_rows(self, t, rows, fetched):
+        counts = km._parse_unread_rows({"result": rows})
+        t.poll_once(counts_available=True, unread_counts=counts)
+
+    def test_M379_reads_and_an_arrival_that_cancel_in_one_tick_still_fetch(self):
+        # N -> N: the agent reads one held message and one new message lands in the same tick. The count
+        # does not move, so only the server's newest_unread_id (M379) can see the arrival.
+        em = self.Recorder()
+        t = self._target(em)
+        t.args.no_fast_path = False
+        fetched = []
+        def fetch(opener, url, headers):
+            fetched.append(url)
+            return BoundedWindowEndToEndTest()._fetch([{"id": 101}], 0)(opener, url, headers)
+        orig, km.fetch = km.fetch, fetch
+        try:
+            km._parse_unread_rows({"result": [{"persona": "argus", "unread": 1, "newest_unread_id": 100}]})
+            t.fast_path, t.last_unread, t.last_newest = True, 1, km._newest_unread("argus")
+            self._poll_with_rows(t, [{"persona": "argus", "unread": 1, "newest_unread_id": 101}], fetched)
+            self.assertEqual(len(fetched), 1, "same count, new newest id: an arrival - it must fetch")
+            self.assertEqual(em.new_ids, [101])
+            self._poll_with_rows(t, [{"persona": "argus", "unread": 1, "newest_unread_id": 101}], fetched)
+            self.assertEqual(len(fetched), 1, "an unchanged (count, newest id) pair still takes the cheap path")
+        finally:
+            km.fetch = orig
+            km._NEWEST_UNREAD.clear()
+
+    def test_M379_an_older_server_without_the_field_keeps_the_count_check(self):
+        em = self.Recorder()
+        t = self._target(em)
+        t.args.no_fast_path = False
+        fetched = []
+        def fetch(opener, url, headers):
+            fetched.append(url)
+            return BoundedWindowEndToEndTest()._fetch([{"id": 101}], 0)(opener, url, headers)
+        orig, km.fetch = km.fetch, fetch
+        try:
+            t.fast_path, t.last_unread = True, 1
+            self._poll_with_rows(t, [{"persona": "argus", "unread": 1}], fetched)
+            self.assertEqual(len(fetched), 0, "no newest id and an unchanged count: skip, as before M379")
+            self._poll_with_rows(t, [{"persona": "argus", "unread": 2}], fetched)
+            self.assertEqual(len(fetched), 1, "the count check still works on its own")
+        finally:
+            km.fetch = orig
+            km._NEWEST_UNREAD.clear()
+
+    def test_M379_newest_unread_id_is_tri_state_and_rebuilt_every_response(self):
+        try:
+            km._parse_unread_rows({"result": [
+                {"persona": "a", "unread": 2, "newest_unread_id": 7},
+                {"persona": "b", "unread": 0, "newest_unread_id": None},
+                {"persona": "c", "unread": 1},
+                {"persona": "d", "unread": 1, "newest_unread_id": True},
+                {"persona": "e", "unread": 1, "newest_unread_id": -3},
+                {"persona": "f", "unread": 1, "newest_unread_id": "9"},
+            ]})
+            self.assertEqual(km._newest_unread("a"), 7)
+            self.assertIsNone(km._newest_unread("b"), "present and null is a statement: nothing unread")
+            for p in "cdef":
+                self.assertIs(km._newest_unread(p), km._NO_STATEMENT, "absent or malformed is NO statement: " + p)
+            km._parse_unread_rows({"result": [{"persona": "b", "unread": 1, "newest_unread_id": 8}]})
+            self.assertIs(km._newest_unread("a"), km._NO_STATEMENT, "a stale id must not survive a newer response")
+            self.assertEqual(km._newest_unread("b"), 8)
+            km._parse_unread_rows({"oops": 1})
+            self.assertEqual(km._newest_unread("b"), 8, "a response with a bad shape changes nothing")
+        finally:
+            km._NEWEST_UNREAD.clear()
+
     def test_bug19_a_20s_restart_recovering_on_the_count_fast_path_is_silent_too(self):
         # The same restart, but the first healthy tick is the /api/notify/pending fast path (no unread
         # increase, so the full inbox poll is skipped) - the path a long-polling producer usually
@@ -6638,6 +6728,17 @@ class WindowsNativeTest(unittest.TestCase):
         km._makedirs_private(os.path.join(d, "sub"))
         self.assertNotIn("writable by other local users", buf.getvalue())
 
+    def test_the_state_file_is_written_and_read_back_off_posix(self):
+        # praetor, real Windows 11 (2026-09-27): save() returned True WITHOUT writing, so every restart
+        # baselined and mail sent while the producer was down never woke anyone. The cursor must survive.
+        path = os.path.join(self._d.name, "hive.argus.json")
+        sf = km.StateFile(path, "idx")
+        self.assertTrue(sf.save(10691, "UP", 0))
+        self.assertTrue(os.path.exists(path), "save() claimed success without writing the state file")
+        st = km.StateFile(path, "idx").load()
+        self.assertIsNot(st, km.CORRUPT_STATE)
+        self.assertEqual((st["cursor"], st["state"], st["failures"]), (10691, "UP", 0))
+
     def test_the_events_file_sink_writes_and_syncs(self):
         # End to end: before the fix a new events file made sync() return False on every poll (the
         # directory fsync), so the cursor never advanced and mail was re-delivered forever.
@@ -6645,6 +6746,64 @@ class WindowsNativeTest(unittest.TestCase):
         self.addCleanup(sink.close)
         self.assertTrue(sink.write('{"event": "new", "content": "caf\\u00e9 \\u2713"}\n'))
         self.assertTrue(sink.sync())
+
+
+class WindowsSingleWriterLockTest(unittest.TestCase):
+    """On Windows StateFile.lock() used to be a bare return ("run a single instance"), so two producers on
+    one state file both ran and each emitted every message (praetor, 2026-09-27). It now takes an msvcrt
+    byte-range lock on the same .lock sidecar. msvcrt does not exist here, so a fake stands in: it holds
+    at most one lock per sidecar INODE and releases it when the holding fd is closed."""
+
+    class FakeMsvcrt:
+        LK_NBLCK = 2
+
+        def __init__(self):
+            self.held = {}  # inode -> fd
+
+        def locking(self, fd, mode, nbytes):
+            assert mode == self.LK_NBLCK and nbytes == 1, (mode, nbytes)
+            ino = os.fstat(fd).st_ino
+            holder = self.held.get(ino)
+            if holder is not None and holder != fd:
+                try:
+                    os.fstat(holder)          # still open -> still held
+                    raise OSError(36, "Resource deadlock avoided")
+                except OSError as e:
+                    if e.errno == 36:
+                        raise
+            self.held[ino] = fd
+
+    def setUp(self):
+        self._d = tempfile.TemporaryDirectory()
+        self.addCleanup(self._d.cleanup)
+        self._posix, km.IS_POSIX = km.IS_POSIX, False
+        self.addCleanup(setattr, km, "IS_POSIX", self._posix)
+        self._msvcrt, km.msvcrt = km.msvcrt, self.FakeMsvcrt()
+        self.addCleanup(setattr, km, "msvcrt", self._msvcrt)
+
+    def test_a_second_watcher_on_the_same_state_file_is_refused(self):
+        path = os.path.join(self._d.name, "hive.argus.json")
+        a = km.StateFile(path, "idx")
+        a.lock()
+        self.addCleanup(a.unlock)
+        self.assertTrue(os.path.exists(path + ".lock"), "the lock lives on the .lock sidecar")
+        b = km.StateFile(path, "idx")
+        with self.assertRaises(km.FatalConfig):
+            b.lock()
+        self.assertIsNone(b._lockf, "a refused lock must not leak its sidecar fd")
+
+    def test_the_lock_is_released_when_the_holder_lets_go(self):
+        path = os.path.join(self._d.name, "hive.argus.json")
+        a = km.StateFile(path, "idx")
+        a.lock()
+        a.unlock()
+        b = km.StateFile(path, "idx")
+        b.lock()                              # must not raise
+        self.addCleanup(b.unlock)
+
+    def test_without_msvcrt_it_degrades_to_no_lock_rather_than_crashing(self):
+        km.msvcrt = None
+        km.StateFile(os.path.join(self._d.name, "hive.x.json"), "idx").lock()
 
 
 class Utf8StdoutTest(unittest.TestCase):
