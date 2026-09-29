@@ -57,6 +57,22 @@ SHIM
 chmod +x "$BIN/wtmux" "$BIN/powershell.exe"
 cp "$BIN/wtmux" "$NOPS/wtmux"                    # a host with wtmux but no PowerShell
 cp "$BIN/powershell.exe" "$NOWT/powershell.exe"  # a host with PowerShell but no wtmux
+# A PATH THAT CANNOT FIND POWERSHELL, even on a host that ships it: GitHub's ubuntu runners carry
+# /usr/bin/pwsh, so "prepend a shim dir without PowerShell" still found the real one there, it answered 0,
+# and the could-not-measure cases read DOWN (CI, 2026-09-29). Mirror every tool on PATH except PowerShell.
+_nops_sys() {  # $1 = dir to fill
+  local d f n; mkdir -p "$1"
+  local IFS=:
+  for d in $PATH; do
+    [ -d "$d" ] || continue
+    for f in "$d"/*; do
+      n=${f##*/}
+      case "$n" in pwsh|pwsh.exe|pwsh-*|powershell|powershell.exe) continue ;; esac
+      [ -x "$f" ] && [ ! -e "$1/$n" ] && ln -s "$f" "$1/$n"
+    done
+  done
+}
+SYS="$T/sys"; _nops_sys "$SYS"
 echo "1.1" > "$T/panes"; echo "638000000000000001" > "$T/start"; : > "$T/screen"
 
 export KIJITO_LC_DIR="$T/lc" CLAUDE_CODE_SESSION_ID=wtsess
@@ -64,7 +80,7 @@ mkdir -p "$KIJITO_LC_DIR"
 W() {  # run in a wtmux pane: $1 = PATH prefix, rest = command
   local p="$1"; shift
   env -u TMUX -u TMUX_PANE -u KIJITO_AUTOCATCHUP WTMUX=1 WTMUX_PID="${WPID:-8812}" WTMUX_PANE="${WPANE:-1.1}" \
-    PATH="$p:/usr/bin:/bin" KIJITO_LC_LIB="$LIB" "$@"
+    PATH="$p:$SYS" KIJITO_LC_LIB="$LIB" "$@"
 }
 lib() { local p="$1"; shift; W "$p" bash -c '. "$0"; "$@"' "$LIB" "$@"; }
 ID="wtmux-8812-1.1"

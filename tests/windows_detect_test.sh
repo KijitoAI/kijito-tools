@@ -29,6 +29,23 @@ command -v jq >/dev/null 2>&1 || { echo "SKIP: jq not installed — the hook par
 _RUNTMP="$(mktemp -d)"; export TMPDIR="$_RUNTMP"
 trap 'rm -rf "$_RUNTMP"' EXIT INT TERM
 
+# A PATH THAT CANNOT FIND POWERSHELL, even on a host that ships it: GitHub's ubuntu runners carry
+# /usr/bin/pwsh, so "prepend a shim dir without PowerShell" still found the real one there, it answered 0,
+# and the could-not-measure cases read DOWN (CI, 2026-09-29). Mirror every tool on PATH except PowerShell.
+_nops_sys() {  # $1 = dir to fill
+  local d f n; mkdir -p "$1"
+  local IFS=:
+  for d in $PATH; do
+    [ -d "$d" ] || continue
+    for f in "$d"/*; do
+      n=${f##*/}
+      case "$n" in pwsh|pwsh.exe|pwsh-*|powershell|powershell.exe) continue ;; esac
+      [ -x "$f" ] && [ ! -e "$1/$n" ] && ln -s "$f" "$1/$n"
+    done
+  done
+}
+SYS="$_RUNTMP/sys"; _nops_sys "$SYS"
+
 # Two shim dirs: WIN has uname + powershell.exe; WIN_NOPS has uname only (a host where we cannot look).
 WIN="$_RUNTMP/win"; WIN_NOPS="$_RUNTMP/win-nops"; mkdir -p "$WIN" "$WIN_NOPS"
 for d in "$WIN" "$WIN_NOPS"; do
@@ -54,7 +71,7 @@ chmod +x "$WIN/powershell.exe"
 
 lib_call() {  # $1=shimdir, rest = function + args; prints "rc=<n>" (and any stdout)
   local sd="$1"; shift
-  env PATH="$sd:$PATH" bash -c '. "$0"; "$@"; echo "rc=$?"' "$LIB" "$@" 2>/dev/null
+  env PATH="$sd:$SYS" bash -c '. "$0"; "$@"; echo "rc=$?"' "$LIB" "$@" 2>/dev/null
 }
 
 echo "windows detection checks:"
@@ -95,7 +112,7 @@ else red "Windows restart hint wrong: $out"; fi
 # ── the SessionStart hook, on praetor's layout (~/.cache/kijito-inbox-monitor/events.<p>.ndjson) ─────
 run_hook() {  # $1=shimdir $2=HOME $3=project
   printf '{"source":"startup","cwd":"%s"}' "$3" \
-    | env -u TMUX -u TMUX_PANE -u KIJITO_AUTOCATCHUP PATH="$1:$PATH" HOME="$2" CLAUDE_PROJECT_DIR="$3" bash "$HOOK" 2>/dev/null
+    | env -u TMUX -u TMUX_PANE -u KIJITO_AUTOCATCHUP PATH="$1:$SYS" HOME="$2" CLAUDE_PROJECT_DIR="$3" bash "$HOOK" 2>/dev/null
 }
 H="$(mktemp -d)"; mkdir -p "$H/.cache/kijito-inbox-monitor"; : > "$H/.cache/kijito-inbox-monitor/events.praetor.ndjson"
 P="$(mktemp -d)"; echo praetor > "$P/.kijito_persona"
@@ -125,11 +142,11 @@ grep -q "a consumer already tails your stream" <<<"$out" \
   || red "hook missed the armed Windows consumer"
 
 # ── inbox-selftest ──────────────────────────────────────────────────────────────────────────────
-out=$(env PATH="$WIN_NOPS:$PATH" HOME="$H" bash "$SELFTEST" --persona praetor --no-send 2>&1); rc=$?
+out=$(env PATH="$WIN_NOPS:$SYS" HOME="$H" bash "$SELFTEST" --persona praetor --no-send 2>&1); rc=$?
 if [ "$rc" -eq 2 ] && grep -q "COULD NOT MEASURE" <<<"$out" && ! grep -q "FAIL  consumer" <<<"$out"; then
   grn "selftest: consumer unknowable => exit 2 COULD NOT MEASURE, not FAIL"
 else red "selftest without PowerShell gave rc=$rc: $(tail -3 <<<"$out")"; fi
-out=$(env PATH="$WIN:$PATH" FAKE_TAIL=1 HOME="$H" bash "$SELFTEST" --persona praetor --no-send 2>&1); rc=$?
+out=$(env PATH="$WIN:$SYS" FAKE_TAIL=1 HOME="$H" bash "$SELFTEST" --persona praetor --no-send 2>&1); rc=$?
 grep -q "ok    consumer" <<<"$out" && grn "selftest: an armed tail.exe passes the consumer hop" \
   || red "selftest missed the armed Windows consumer (rc=$rc): $(tail -3 <<<"$out")"
 
