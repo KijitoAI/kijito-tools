@@ -44,6 +44,11 @@ if grep -q 'holds a credential: KIJITO_API_TOKEN' <<<"$out"; then grn "a token i
 else red "token present but not named: $(grep -i tighten <<<"$out")"; fi
 if grep -q 'SECRETVALUE' <<<"$out"; then red "the installer printed a credential VALUE"; else grn "the credential's value is never printed"; fi
 
+# ── M383: an installer that could not prove the wake names the one command that does ─────────────
+if grep -q 'kijito-inbox-start.sh --persona <name>' <<<"$out" && grep -q 'installed is not the same as working' <<<"$out"; then
+  grn "no persona yet: the installer ends by naming the start-and-prove command"
+else red "the installer does not name the start-and-prove step: $(grep -iA3 'wake path\|inbox' <<<"$out" | tail -5)"; fi
+
 # ── M385: the operator doctrine is offered, not pushed ───────────────────────────────────────────
 if grep -q 'Next: add the doctrine snippet' <<<"$out"; then red "still instructs a stranger to add the operator doctrine"
 else grn "no instruction to add the operator doctrine"; fi

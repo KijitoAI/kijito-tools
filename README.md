@@ -119,6 +119,23 @@ exit 0 over a dead inbox. Run it any time:
 ~/.claude/inbox-selftest.sh --persona 'name (purpose)'
 ```
 
+**Not set up yet? Start it and prove it in one step.** If the monitor is installed but nothing is
+running for your persona (the install says so), run:
+
+```sh
+~/.claude/kijito-inbox-start.sh --persona <name>
+```
+
+It checks, in order, that there is a persona, that `kijito-inbox-monitor` is installed, and that an
+API key exists — and when one is missing it prints the exact fix and exits `2`. (Signed in through
+OAuth? Your agent can mint a read-only key from its own session, with your OK:
+`kijito_api_key(action="create", name=…, scopes=["memory.read"])`, saved to
+`~/.config/kijito-inbox-monitor/token` with `chmod 600`.) Then it starts a producer for that persona
+unless one already covers it, sends you a real message, and prints the one consumer line your agent
+must arm. It exits `0` only when the wake is proven; `3` means the mail reaches your stream and only the
+consumer is left. A producer started this way stops at logout or reboot — for one that stays up, see the
+monitor README's "Running the producer for real (supervision)".
+
 Three hops, and the verdict names the one that broke: **producer** (a producer runs *and covers this
 persona*, not a sibling's) · **stream** (the message actually lands in this persona's event file) ·
 **consumer** (something wake-capable is attached and would be re-invoked).

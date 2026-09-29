@@ -181,8 +181,13 @@ if [ -x "$DEST/inbox-selftest.sh" ]; then
   if [ "$st" -eq 0 ]; then
     echo "✓ wake path PROVEN end to end (a real message reached your stream and a consumer read it)."
   elif [ "$st" -eq 2 ]; then
-    echo "⚠️  The wake path could NOT BE TESTED (see above) - that is not the same as working."
-    echo "    Re-run it once a persona marker and token are in place:  $DEST/inbox-selftest.sh"
+    # ⛔ NAME THE LAST STEP, NOT JUST THE GAP (row M383). The stranger cold run stopped here with
+    # "COULD NOT MEASURE: no persona" and a monitor that was installed but never started.
+    echo "⚠️  The inbox is NOT set up yet - installed is not the same as working (see above)."
+    echo "    To start the inbox monitor for your persona and prove it with a real message, run:"
+    echo "      $DEST/kijito-inbox-start.sh --persona <name>"
+    echo "    It names exactly what is missing (persona, the monitor, an API key), and it is not done"
+    echo "    until a message you send yourself wakes your agent."
   elif "$DEST/inbox-selftest.sh" --no-send ${SELFTEST_PERSONA:+--persona "$SELFTEST_PERSONA"} \
          >/dev/null 2>&1; then
     # --no-send passing means producer+stream are fine and only the consumer hop is missing: the
