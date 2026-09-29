@@ -1,6 +1,12 @@
 # Kijito Inbox Monitor: Design & Implementation Spec
 
-**Updated:** 2026-09-26 (rev 10: §7.1 the dead-man edge needs a MEASURED span, not only a failure count -
+**Updated:** 2026-09-28 (rev 12: §9 the fast path also keys on the server's `newest_unread_id` (Kijito M379), so
+reads and arrivals that cancel within one tick (N -> N) are seen at once; a server without the field keeps the count
+check.)
+Rev 11 (2026-09-27: §7.3 the single-writer lock also holds on Windows - `msvcrt.locking` on byte 0
+of the same `.lock` sidecar, non-blocking; a second watcher on one state file exits "state-file in use", as on POSIX.
+Verified on a real Windows 11 seat.)
+Rev 10 (2026-09-26: §7.1 the dead-man edge needs a MEASURED span, not only a failure count -
 `--alert-floor-seconds`, default `(alert_after - 1) * poll_seconds`; `seconds` on the `alert` is now that
 measurement and `floor_seconds` names the floor; a failed poll's `Retry-After` paces the next retry. Before
 this, the count-only edge fired ~3-7 s into any short server restart, and `seconds` read a nominal 90.)
@@ -31,8 +37,8 @@ A standalone, single zero-dependency Python-stdlib script (urllib, json, signal,
 no pip installs) that polls the Kijito inbox and emits one event per new message into whatever harness is
 running, as NDJSON on stdout and/or exec-a-command-per-event. It is the client-side liveness watcher: it
 keeps a running agent's inbox live by waking it between tool calls. It is not a server, and not a
-notification service. POSIX target (Linux/macOS); Windows runs interval-only (no SIGUSR1 seam, no flock,
-per §10/§7.3). On Windows the private-file guard checks only "regular file" (there is no POSIX owner or
+notification service. POSIX target (Linux/macOS); Windows runs interval-only (no SIGUSR1 seam, per §10) and takes the
+single-writer lock through `msvcrt` instead of `flock` (§7.3). On Windows the private-file guard checks only "regular file" (there is no POSIX owner or
 mode; access is the profile's inherited ACL), a directory fsync is skipped (Windows cannot open a directory
 to fsync it; NTFS journals the metadata), and stdout is written as UTF-8 whatever the console code page.
 
@@ -645,7 +651,11 @@ read-state-neutral (DONE-WHEN #5 holds after self-test).
 - **Single-writer lock:** on startup, acquire an exclusive `fcntl.flock` on the state-file (LOCK_EX|LOCK_NB); if it's
   held, exit non-zero ("state-file in use"), which prevents two watchers tearing the cursor backwards. Hold the lock fd
   open for the whole process lifetime. flock is advisory and auto-released by the OS on process exit
-  (normal/SIGTERM/SIGKILL/crash), so there is no stale lockfile to clean (unlike a pidfile).
+  (normal/SIGTERM/SIGKILL/crash), so there is no stale lockfile to clean (unlike a pidfile). The lock is taken on a
+  dedicated `<state-file>.lock` sidecar, never the state-file itself (every save replaces the state-file's inode).
+  On Windows (no `fcntl`) the same guarantee comes from `msvcrt.locking(fd, LK_NBLCK, 1)` on byte 0 of that sidecar:
+  a held lock is the same "state-file in use" exit, and the OS releases it when the handle closes or the process
+  dies (rev 11; before it, Windows skipped the lock and two producers on one state file both announced every message).
 - **Write:** after each poll, write atomically: `mkstemp` in the same dir, then write, `fsync`, `os.replace`;
   best-effort remove of stale temps.
 - **Resume validity:** valid iff it parses as the schema (integer-or-null `cursor`, `state ∈ {UP,DOWN}`, integer
@@ -720,10 +730,17 @@ read-state-neutral (DONE-WHEN #5 holds after self-test).
 - **Baseline:** the inbox-list poll (§5) is always the floor and the source of truth. The max-id cursor decides
   what to emit, so the fast-path can never cause a missed or duplicate emit.
 - **Fast-path (cheap O(1) pre-check):** `GET /api/notify/pending` (SLASH path; the hyphen `/api/notify-pending`
-  404s), read-only, never marks read. Response `{"result":[{"persona","unread","unread_urgent"},...]}`; `unread` is
+  404s), read-only, never marks read. Response `{"result":[{"persona","unread","unread_urgent","newest_unread_id"},...]}`; `unread` is
   all read=false for that persona (a persona with 0 unread is absent, treat as 0). The watcher probes it once on
   arm; if available it consumes `unread` for its persona and does the full inbox-list fetch only when `unread`
-  increases, saving the full-list diff on quiet polls. It auto-falls-back to baseline if the endpoint is absent or
+  CHANGES (either direction), saving the full-list diff on quiet polls. An increase alone is not enough: reading
+  N held messages while one new one arrives in the same tick moves the count N -> 1, a decrease that hides an
+  arrival (seen live 2026-09-27; it waited for the floor). A read-down therefore costs one extra fetch. Reads and
+  arrivals that cancel exactly within one tick (N -> N) leave the count unchanged, so the trigger is the PAIR
+  (`unread`, `newest_unread_id`): the server's max unread message id moves whenever a message arrives (rev 12; Kijito
+  M379, 14ec0b27). Present and null means nothing is unread; absent or malformed is NO STATEMENT, and the table is
+  rebuilt from every good response so a stale id never survives. A server before M379 never sends the field, and the
+  trigger is then the count alone, with N -> N caught by the floor. It auto-falls-back to baseline if the endpoint is absent or
   non-2xx (a server without the field simply runs baseline).
 - **Safety floor (`--resync-every`, default 10):** the watcher never skips more than N consecutive polls; it
   forces a full inbox poll regardless. So a stale / wrong / unsupported count can at worst add latency, never blind
@@ -850,8 +867,8 @@ recipe.)
 ### 14.2 One signal fetch per tick, fanned out in-process
 The §9 fast-path generalizes cleanly to the whole account: one `GET /api/notify/pending` per tick returns the per-persona
 `{persona, unread, unread_urgent}` map; the watcher fans it out in-process to each persona's wake decision, and does not
-issue one request per watched persona. A persona's full inbox-list poll (§5) still fires only on arm, on its `unread`
-increase, on its `--resync-every` floor, or on fast-path fallback. The `--resync-every` no-blindness floor (§9)
+issue one request per watched persona. A persona's full inbox-list poll (§5) still fires only on arm, on a change in its `unread`
+(either direction), on its `--resync-every` floor, or on fast-path fallback. The `--resync-every` no-blindness floor (§9)
 applies per persona.
 
 ### 14.3 Owned, self-rotating EVENT sinks (the consume-your-own fix)
