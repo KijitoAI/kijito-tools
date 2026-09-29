@@ -350,6 +350,7 @@ fi
 # Armed auto-send (detached so it never blocks startup or pollutes the additionalContext above).
 # The pane is tmux's or (native Windows) wtmux's; lc_self_pane answers for both.
 _pane=""; command -v lc_self_pane >/dev/null 2>&1 && _pane=$(lc_self_pane 2>/dev/null)
+case "$_pane" in wtmux-*|'') ;; *) [ -n "${TMUX:-}" ] || _pane="" ;; esac   # a tmux pane also needs $TMUX, as before
 if [ -n "$_pane" ] && lc_is_armed "$_pane"; then
   lc_log HOOK "src=$src autosend=ARMED pane=$_pane"
   _autosend="$_kjt_dir/session-autosend.sh"

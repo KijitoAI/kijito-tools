@@ -79,6 +79,14 @@ got=$(env TMUX=/tmp/x,1,0 TMUX_PANE=%7 WTMUX_PID=8812 WTMUX_PANE=1.1 bash -c '. 
 got=$(env -u TMUX -u TMUX_PANE -u WTMUX_PID -u WTMUX_PANE bash -c '. "$0"; lc_self_pane; echo "rc=$?"' "$LIB")
 [ "$got" = "rc=1" ] && grn "outside any multiplexer: no pane (rc 1)" || red "no-mux: '$got'"
 
+# The CI regression of 2026-09-29: $TMUX_PANE WITHOUT $TMUX. The pane is still named (arm-session,
+# claude-armed, the log and the cycle file always keyed on $TMUX_PANE alone), but self-clear and the hook
+# also require $TMUX for a tmux pane and must keep refusing. A run from inside a real tmux hid this.
+got=$(env -u TMUX -u WTMUX_PID -u WTMUX_PANE TMUX_PANE=%7 bash -c '. "$0"; lc_self_pane' "$LIB")
+[ "$got" = "%7" ] && grn "TMUX_PANE alone still names the tmux pane (the pre-wtmux contract)" || red "TMUX_PANE alone: '$got'"
+out=$(env -u TMUX -u WTMUX_PID -u WTMUX_PANE -u KIJITO_AUTOCATCHUP TMUX_PANE=%7 KIJITO_LC_LIB="$LIB" bash "$SD/self-clear.sh" 2>&1); rc=$?
+[ $rc = 4 ] && grn "self-clear still refuses a tmux pane id without \$TMUX (4)" || red "TMUX_PANE-only self-clear: rc=$rc $out"
+
 # ── 2. liveness = capture-pane's exit code ──────────────────────────────────────────────────────
 lib "$BIN" lc_pane_alive "$ID" && grn "live wtmux pane is alive" || red "live pane read dead"
 lib "$BIN" lc_pane_alive "wtmux-8812-3.1" && red "missing pane read ALIVE" || grn "missing pane (capture-pane exit 1) is dead"

@@ -34,8 +34,11 @@ lc_is_child() { [ -n "${CLAUDE_AGENT_TYPE:-}" ] || [ -n "${CLAUDE_CODE_AGENT:-}"
 # pane and 1 for a missing one, and `send-keys -t PANE ...` delivers. Those two verbs are all we use.
 # Every wtmux call needs MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' under Git Bash, or MSYS rewrites
 # "/clear" into "C:/Program Files/Git/clear" before wtmux ever sees it.
+# ⚠️ tmux is keyed on $TMUX_PANE ALONE, exactly as arm-session / claude-armed / the log / the cycle file
+# always were. self-clear.sh and the SessionStart hook ALSO require $TMUX for a tmux pane and check it
+# themselves; folding that into this helper silently changed what every other caller accepted.
 lc_self_pane() {                                         # prints THIS process's pane id; 1 = in none
-  if [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ]; then printf '%s\n' "$TMUX_PANE"; return 0; fi
+  if [ -n "${TMUX_PANE:-}" ]; then printf '%s\n' "$TMUX_PANE"; return 0; fi
   if [ -n "${WTMUX_PANE:-}" ] && [ -n "${WTMUX_PID:-}" ]; then
     _lc_wt_valid "wtmux-$WTMUX_PID-$WTMUX_PANE" || return 1
     printf 'wtmux-%s-%s\n' "$WTMUX_PID" "$WTMUX_PANE"; return 0

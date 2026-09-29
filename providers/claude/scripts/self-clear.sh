@@ -21,6 +21,7 @@ lc_is_child && refuse "subagent marker set — would clear the PARENT pane" 6
 # The pane is tmux's ($TMUX_PANE) or wtmux's on native Windows ($WTMUX_PID + $WTMUX_PANE); lifecycle-lib
 # speaks both, and everything below uses the id it returns.
 PANE=$(lc_self_pane) || refuse "not in tmux or wtmux (TMUX/TMUX_PANE and WTMUX_PID/WTMUX_PANE unset)" 4
+case "$PANE" in wtmux-*) ;; *) [ -n "${TMUX:-}" ] || refuse "not in tmux (TMUX unset)" 4 ;; esac
 lc_pane_alive "$PANE" || refuse "target pane $PANE no longer exists" 4
 lc_is_armed "$PANE" || refuse "not an armed pane — self-clear only runs in autonomous sessions (launch via ~/.claude/claude-armed.sh, or ~/.claude/arm-session.sh on); plain 'claude' is human-managed" 3
 # (no pane_current_command gate — unreliable label; send-keys reaches the TTY regardless)
