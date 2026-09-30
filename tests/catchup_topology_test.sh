@@ -221,6 +221,15 @@ check_hook() {
   if grep -q "UP for 'ghost'" <<<"$out"; then
     grn "$label: live producer for this persona → by-content route still reports UP"
   else red "$label: live producer for this persona → by-content route no longer reports UP"; bad=1; fi
+  # A producer for a persona whose name merely STARTS with ours is not ours: "--persona ghostly" must not
+  # satisfy "--persona ghost" (the old inline grep -F matched it as a substring).
+  out="$(printf '{"source":"startup","cwd":"%s"}' "$proj2" \
+        | env -u TMUX -u TMUX_PANE -u KIJITO_AUTOCATCHUP PATH="$SHIMDIR:$PATH" HOME="$ghost_home" CLAUDE_PROJECT_DIR="$proj2" \
+          KIJITOMON_BIN=/bin/false FAKE_PRODUCER=1 FAKE_PRODUCER_PERSONA=ghostly FAKE_ARMED=0 \
+          bash "$hook" 2>/dev/null)"
+  if ! grep -q "UP for 'ghost'" <<<"$out" && grep -qE "STALE|NOT running for 'ghost'" <<<"$out"; then
+    grn "$label: a producer for 'ghostly' does not count as covering 'ghost' (whole-argument match)"
+  else red "$label: a producer for 'ghostly' was taken as covering 'ghost'"; bad=1; fi
   rm -rf "$ghost_home" "$proj2"
 
   # ---- P: PERSONA-NAME PARITY (row M290) ----------------------------------------------------

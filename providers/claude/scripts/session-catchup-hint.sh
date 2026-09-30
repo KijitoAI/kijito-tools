@@ -136,7 +136,11 @@ PYSCAN
       # matching the path alone would have been a new false-negative to replace the false positive.
       if [ -n "${_found:-}" ]; then
         _live=""
-        if command -v pgrep >/dev/null 2>&1; then
+        # ONE rule, shared with kijito-inbox-start.sh (river 10985), and it matches --persona as a WHOLE
+        # argument: the inline grep -F below also matched "--persona riverbank" for persona "river".
+        if command -v kijito_producer_covers >/dev/null 2>&1; then
+          kijito_producer_covers "$_persona" "$_found" && _live=1
+        elif command -v pgrep >/dev/null 2>&1; then
           # ⛔ A PROCESS THAT MERELY MENTIONS THE PRODUCER IS NOT THE PRODUCER (assay observation, 2026-09-21:
           # their verification SHELL matched this three times, because its command line contained both the
           # product name and `--persona <p>` — and it then reported UP for a persona with no producer, which

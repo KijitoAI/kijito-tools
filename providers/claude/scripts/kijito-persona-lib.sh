@@ -165,6 +165,33 @@ kijito_restart_hint() {
   esac
 }
 
+# kijito_producer_covers <persona> [stream-path] -> 0 a RUNNING producer covers this persona, 1 none does,
+# 2 COULD NOT MEASURE. Evidence comes only from a live process's own argv - any one of: the resolved stream
+# path verbatim (systemd's --events-file), `--persona <p>` as a whole argument (a per-persona unit), or
+# `--all-personas` (one producer for every persona; launchd passes a TEMPLATE, not the path).
+# ⛔ A STREAM FILE IS NOT A PRODUCER. kijito-inbox-start.sh used "written in the last 10 min" as proof, so a
+# producer that had just died blocked its own restart for 10 minutes (river 10985, M312 cold rerun); the
+# hook learned the same rule the hard way (assay cert F1). ⛔ And a process that merely MENTIONS the
+# producer (a grep, a checker shell) is not the producer: only a python process or the console script.
+kijito_producer_covers() {
+  local p=${1:-} ev=${2:-} line n
+  [ -n "$p" ] || return 1
+  if kijito_host_is_windows; then
+    n=$(_kijito_win_count "\$_.CommandLine -match 'kijito_inbox_monitor\.py|kijito-inbox-monitor\.exe|bin[\\/]kijito-inbox-monitor' -and @('tail.exe','grep.exe','bash.exe','sh.exe','powershell.exe','pwsh.exe') -notcontains \$_.Name -and (\$_.CommandLine -like '*--persona $p*' -or \$_.CommandLine -like '*--all-personas*')") || return 2
+    [ "$n" -gt 0 ] && return 0
+    return 1
+  fi
+  command -v pgrep >/dev/null 2>&1 || return 2
+  while IFS= read -r line; do
+    case "$line" in *[Pp]ython*|*/kijito-inbox-monitor\ *|*/kijito-inbox-monitor) ;; *) continue ;; esac
+    case "$line" in *" grep "*|*session-catchup-hint*|*kijito-inbox-start*) continue ;; esac
+    # whole-argument match: "--persona river" must not match "--persona riverbank"
+    case "$line " in *" --persona $p "*|*" --persona=$p "*|*" --all-personas "*) return 0 ;; esac
+    [ -n "$ev" ] && case "$line " in *" $ev "*) return 0 ;; esac
+  done < <(pgrep -af "kijito[-_]inbox[-_]monitor" 2>/dev/null)
+  return 1
+}
+
 # kijito_supervisor_for <persona> -> prints task | systemd | launchd | manual: the supervisor that is
 # ACTUALLY present for the inbox producer on this host.
 # ⚠️ WHY (river 10985, M312 cold rerun): the hook guessed the supervisor from which stream PATH existed,

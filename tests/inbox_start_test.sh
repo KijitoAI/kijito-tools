@@ -84,6 +84,16 @@ n=$(pgrep -fc "$BIN/kijito-inbox-monitor .*--persona tester" 2>/dev/null || echo
 grep -q 'already covers tester' <<<"$out" && [ "$n" = 1 ] \
   && grn "a second run leaves the running producer alone (still one)" || red "second run: n=$n $out"
 
+# A stream written seconds ago is NOT a producer: the old check trusted a 10-minute mtime window, so a
+# producer that had just died blocked its own restart for 10 minutes (river 10985, M312 cold rerun).
+pkill -f "$BIN/kijito-inbox-monitor .*--persona tester" 2>/dev/null; sleep 0.5
+touch "$EV"
+out=$(run); rc=${out##*rc=}
+n=$(pgrep -fc "$BIN/kijito-inbox-monitor .*--persona tester" 2>/dev/null || echo 0)
+if ! grep -q 'already covers tester' <<<"$out" && grep -q 'producer armed for tester' <<<"$out" && [ "$n" = 1 ]; then
+  grn "a fresh stream with NO producer process is restarted at once (mtime is not a producer)"
+else red "dead producer + fresh stream: n=$n $out"; fi
+
 out=$(run FAKE_ST=all); rc=${out##*rc=}
 [ "$rc" = 0 ] && grep -q '✓ PROVEN' <<<"$out" && grn "a proven wake is the ONLY exit 0" || red "all-green: rc=$rc $out"
 out=$(run FAKE_ST=stream); rc=${out##*rc=}
