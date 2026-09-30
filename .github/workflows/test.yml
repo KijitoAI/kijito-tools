@@ -99,6 +99,7 @@ jobs:
         run: |
           bash tests/install_stranger_path_test.sh
           bash tests/inbox_start_test.sh
+          bash tests/no_operator_endpoints_test.sh
 
       - name: codex skills deploy
         run: |
