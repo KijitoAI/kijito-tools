@@ -114,7 +114,10 @@ verdict() {   # $1=producer_ok $2=stream_ok $3=consumer_ok (each 1/0) -> prints,
 }
 
 restart_hint() {
-  if command -v kijito_host_is_windows >/dev/null 2>&1 && kijito_host_is_windows; then
+  # Name the supervisor that is actually installed (river 10985: this printed launchctl on Linux).
+  if command -v kijito_supervisor_for >/dev/null 2>&1; then
+    kijito_restart_hint "$(kijito_supervisor_for "${PERSONA:-}")" "${PERSONA:-<persona>}"
+  elif command -v kijito_host_is_windows >/dev/null 2>&1 && kijito_host_is_windows; then
     kijito_restart_hint task "${PERSONA:-<persona>}"
   elif [ -d "$HOME/.kijito-monitor" ] || command -v systemctl >/dev/null 2>&1; then
     printf 'systemctl --user enable --now kijito-inbox-monitor@%s' "${PERSONA:-<persona>}"

@@ -159,8 +159,33 @@ kijito_restart_hint() {
     # places I want monitor start to be manual, these are gaming comps after all." A Scheduled Task is
     # the opt-in autostart, never the default suggestion.
     task)    printf 'start it by hand from a normal (non-sandboxed) shell: kijito-inbox-monitor --persona %s  (or your supervisor script); if you opted into autostart, run its Scheduled Task instead: schtasks /Run /TN "<task name>"' "${2:-<persona>}" ;;
+    # No supervisor on this host: the one-command start (it starts a producer and proves it with a message).
+    manual)  printf '~/.claude/kijito-inbox-start.sh --persona %s  (starts a producer by hand; it stops at logout/reboot - see the monitor README for supervision)' "${2:-<persona>}" ;;
     *)       printf 'systemctl --user enable --now kijito-inbox-monitor@%s' "${2:-<persona>}" ;;
   esac
+}
+
+# kijito_supervisor_for <persona> -> prints task | systemd | launchd | manual: the supervisor that is
+# ACTUALLY present for the inbox producer on this host.
+# ⚠️ WHY (river 10985, M312 cold rerun): the hook guessed the supervisor from which stream PATH existed,
+# so a producer started by hand on a box with no systemd was reported "UP (systemd)" and offered a
+# systemctl restart line that could not work; the self-test offered launchctl on Linux. The question is
+# not "which layout is this file in" but "what would restart it here", and only the supervisors can say.
+kijito_supervisor_for() {
+  local p=${1:-}
+  if kijito_host_is_windows; then echo task; return 0; fi
+  # systemd: a kijito-inbox-monitor USER unit (per-persona instance or the template) is installed. A box
+  # with no systemd, or no user bus (containers), answers nothing here and falls through.
+  if command -v systemctl >/dev/null 2>&1 \
+     && [ -n "$(systemctl --user list-unit-files 'kijito-inbox-monitor*' --no-legend 2>/dev/null)" ]; then
+    echo systemd; return 0
+  fi
+  if [ "$(uname -s 2>/dev/null)" = Darwin ] \
+     && { [ -f "$HOME/Library/LaunchAgents/com.kijito.inbox-monitor.plist" ] \
+          || launchctl list com.kijito.inbox-monitor >/dev/null 2>&1; }; then
+    echo launchd; return 0
+  fi
+  echo manual
 }
 
 # kijito_stream_consumed <stream-path> -> 0 if a wake-capable consumer (`tail -n 0 -F …`) reads it,

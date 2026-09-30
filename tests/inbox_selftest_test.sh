@@ -94,6 +94,20 @@ else
 fi
 rm -rf "$H" "$SH"
 
+# 7. the restart line names the supervisor that is INSTALLED. On a Linux box with no kijito unit (and a
+#    systemctl that knows none) it must be the one-command start, never launchctl or systemctl
+#    (river 10985: this printed launchctl on Linux).
+H="$(mktemp -d)"; SH="$(mktemp -d)"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$SH/systemctl"; chmod +x "$SH/systemctl"   # knows no units
+out="$(HOME="$H" PATH="$SH:$PATH" "$SELFTEST" --persona nobody-here --timeout 3 2>&1)"; rc=$?
+if printf '%s' "$out" | grep -q "Run: ~/.claude/kijito-inbox-start.sh --persona nobody-here" \
+   && ! printf '%s' "$out" | grep -qE "Run: (launchctl|systemctl)"; then
+  grn "no supervisor installed => the restart line is kijito-inbox-start.sh (no launchctl/systemctl)"
+else
+  red "restart line on a supervisor-less Linux box: $(printf '%s' "$out" | grep 'Run:')"
+fi
+rm -rf "$H" "$SH"
+
 echo
 echo "passed: $pass   failed: $fail"
 [ "$fail" -eq 0 ] || exit 1

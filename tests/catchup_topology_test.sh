@@ -82,6 +82,17 @@ esac
 SHIM
 chmod 0755 "$SHIMDIR/pgrep"
 
+cat > "$SHIMDIR/systemctl" <<'SHIM'
+#!/usr/bin/env bash
+# Fake systemctl: a kijito-inbox-monitor USER unit is installed only when FAKE_SYSTEMD_UNIT=1. Without it
+# this answers like a box with no user units (river 10985: the hook must not say "systemd" there).
+case "$*" in
+  *list-unit-files*kijito-inbox-monitor*) [ "${FAKE_SYSTEMD_UNIT:-0}" = 1 ] && echo "kijito-inbox-monitor@.service indirect enabled"; exit 0 ;;
+esac
+exit 1
+SHIM
+chmod 0755 "$SHIMDIR/systemctl"
+
 cat > "$SHIMDIR/ps" <<'SHIM'
 #!/usr/bin/env bash
 # Fake ps for the consumer probe: `ps -o comm= -p N` and `ps -o etime= -p N`. 4241 is the wrapper
@@ -157,10 +168,22 @@ check_hook() {
 
   # ---- C: no producer at all, Linux seat → systemd restart hint ----
   h="$(make_home linux river no)"
-  out="$(FAKE_PRODUCER=0 FAKE_ARMED=0 run_hook "$hook" "$h" "$proj")"
+  out="$(FAKE_SYSTEMD_UNIT=1 FAKE_PRODUCER=0 FAKE_ARMED=0 run_hook "$hook" "$h" "$proj")"
   if grep -q "producer: DOWN" <<<"$out" && grep -q "systemctl --user enable --now kijito-inbox-monitor@river" <<<"$out"; then
-    grn "$label: no producer on linux → DOWN with a systemd restart hint"
-  else red "$label: no producer on linux → missing DOWN or systemd hint"; bad=1; fi
+    grn "$label: no producer, systemd unit installed → DOWN with a systemd restart hint"
+  else red "$label: no producer, systemd unit installed → missing DOWN or systemd hint"; bad=1; fi
+  # ---- C2: the same seat with NO supervisor installed (river 10985: "UP (systemd)" on a box without it) ----
+  out="$(FAKE_SYSTEMD_UNIT=0 FAKE_PRODUCER=0 FAKE_ARMED=0 run_hook "$hook" "$h" "$proj")"
+  if grep -q "producer: DOWN" <<<"$out" && grep -q "kijito-inbox-start.sh --persona river" <<<"$out" \
+     && ! grep -q "systemctl" <<<"$out"; then
+    grn "$label: no supervisor installed → the restart hint is kijito-inbox-start.sh, never systemctl"
+  else red "$label: no supervisor installed, but the hint still names systemd"; bad=1; fi
+  local hm; hm="$(make_home linux river yes)"
+  out="$(FAKE_SYSTEMD_UNIT=0 FAKE_PRODUCER=1 FAKE_PRODUCER_PERSONA=river FAKE_ARMED=0 run_hook "$hook" "$hm" "$proj")"
+  rm -rf "$hm"
+  if grep -q "producer: UP for 'river' (manual" <<<"$out"; then
+    grn "$label: a hand-started producer with no supervisor reads UP (manual), not UP (systemd)"
+  else red "$label: hand-started producer mislabelled: $(grep -o "producer: [^.]*" <<<"$out" | head -1)"; bad=1; fi
   rm -rf "$h"
 
   # ---- S: A STALE STREAM FILE IS NOT A RUNNING PRODUCER (assay cert F1) ----------------------

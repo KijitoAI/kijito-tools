@@ -201,6 +201,9 @@ else _events="$_lnx_events"; _sup="systemd"; fi
 # NATIVE WINDOWS (Git Bash): the stream may sit in the macOS-shaped path, but nothing there is launchd.
 # The supervisor is whatever the user registered - in practice a Scheduled Task (praetor, 2026-09-27).
 if command -v kijito_host_is_windows >/dev/null 2>&1 && kijito_host_is_windows; then _sup="task"; fi
+# The layout above chose the FILE; it must not also choose the SUPERVISOR. Ask what is actually installed
+# (river 10985: "producer UP (systemd)" was printed on a box with no systemd at all).
+if command -v kijito_supervisor_for >/dev/null 2>&1; then _sup=$(kijito_supervisor_for "${_persona:-}"); fi
 _hint() {
   if command -v kijito_restart_hint >/dev/null 2>&1; then kijito_restart_hint "$_sup" "${1:-<persona>}"
   elif [ "$_sup" = launchd ]; then printf 'launchctl kickstart -k gui/$(id -u)/com.kijito.inbox-monitor'
