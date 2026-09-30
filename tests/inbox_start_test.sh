@@ -40,6 +40,7 @@ case "${FAKE_ST:-consumer}" in
   all)      echo "  ok    stream: the message reached x after ~1s"; echo "  ok    consumer: armed"; exit 0 ;;
   consumer) echo "  ok    stream: the message reached x after ~1s"; echo "  FAIL  consumer: nothing reads x"; exit 1 ;;
   stream)   echo "  FAIL  stream: nothing new arrived in x within 20s"; exit 1 ;;
+  cantsend) echo "  ????  stream: COULD NOT MEASURE - the key refused to SEND the test message (HTTP 403)"; exit 2 ;;
 esac
 SHIM
 chmod +x "$BIN/kijito-inbox-monitor" "$BIN/selftest"
@@ -59,9 +60,10 @@ out=$(ARGS="--persona tester" run PATH="/usr/bin:/bin"); rc=${out##*rc=}
   && grn "no monitor installed: exit 2 with the install line" || red "no monitor: rc=$rc $out"
 
 out=$(ARGS="--persona tester" run); rc=${out##*rc=}
-[ "$rc" = 2 ] && grep -q 'kijito_api_key(action="create"' <<<"$out" && grep -q 'scopes=\["memory.read"\]' <<<"$out" \
-  && grep -q 'chmod 600' <<<"$out" \
-  && grn "no token: exit 2 with the least-privilege mint recipe" || red "no token: rc=$rc $out"
+# The mint must carry memory.write: the self-test SENDS one message, a hive write (river 10985 / Kijito M339).
+[ "$rc" = 2 ] && grep -q 'kijito_api_key(action="create"' <<<"$out" \
+  && grep -q 'scopes=\["memory.read","memory.write"\]' <<<"$out" && grep -q 'chmod 600' <<<"$out" \
+  && grn "no token: exit 2 with a mint recipe the self-test can actually use (read + write)" || red "no token: rc=$rc $out"
 
 mkdir -p "$H/.config/kijito-inbox-monitor"; printf 'kjt_SECRET_DO_NOT_PRINT' > "$H/.config/kijito-inbox-monitor/token"
 chmod 600 "$H/.config/kijito-inbox-monitor/token"
@@ -87,6 +89,11 @@ out=$(run FAKE_ST=all); rc=${out##*rc=}
 out=$(run FAKE_ST=stream); rc=${out##*rc=}
 [ "$rc" = 1 ] && grep -q 'did NOT reach your stream' <<<"$out" && ! grep -q 'Not done until' <<<"$out" \
   && grn "a message that never reached the stream is a FAILURE (1), not 'consumer left'" || red "stream fail: rc=$rc $out"
+# A self-test that could not RUN its test (a read-only key cannot send) is "something missing" (2), never
+# "the monitor is not working" (1) - that false verdict hit a working monitor in river's M312 rerun (10985).
+out=$(run FAKE_ST=cantsend); rc=${out##*rc=}
+[ "$rc" = 2 ] && grep -q 'NOT PROVEN YET' <<<"$out" && ! grep -q 'did NOT reach your stream' <<<"$out" \
+  && grn "a test that could not be sent is exit 2 (what is missing), not 'not working'" || red "cantsend: rc=$rc $out"
 
 echo
 echo "passed: $pass   failed: $fail"

@@ -71,8 +71,11 @@ if [ -z "$TOKEN_FILE" ] || [ ! -s "$TOKEN_FILE" ]; then
 COULD NOT RUN: no Kijito API key for the monitor. If your agent signed in through OAuth (/mcp), there is
 no key on disk yet - the agent can mint one from its own session, with your OK:
   1. kijito_api_key(action="create", name="inbox monitor on $(hostname 2>/dev/null || echo this-host)",
-                    scopes=["memory.read"], persona="$PERSONA")
-     (it creates a durable, revocable read-only key; the secret is shown ONCE)
+                    scopes=["memory.read","memory.write"], persona="$PERSONA")
+     (a durable, revocable key; the secret is shown ONCE. The monitor itself only READS mail - memory.write
+      is there so this script can send you ONE real test message, which is a hive write. If you prefer a
+      read-only key, use scopes=["memory.read"]: the monitor works, and this script will then ask you to
+      send the test message from your agent instead.)
   2. save it to ~/.config/kijito-inbox-monitor/token and chmod 600 it - never into a memory or a message
   3. run this again
 EOF
@@ -129,6 +132,13 @@ echo
 if [ "$st" = 0 ]; then
   echo "✓ PROVEN: a real message reached your stream and woke a consumer."
   exit 0
+fi
+# The self-test could not EXERCISE the path (exit 2: e.g. a read-only key cannot send the test message).
+# That is "something is missing, and the fix is printed above" - NOT "the monitor is not working", which
+# is what this said until river's M312 cold rerun (10985) caught it on a monitor that was working.
+if [ "$st" = 2 ]; then
+  echo "? NOT PROVEN YET: the self-test could not run its test (see above for exactly what is missing)."
+  exit 2
 fi
 # Only a CONSUMER-only failure is the expected state here; a message that never reached the stream is not.
 if ! printf '%s\n' "$out" | grep -q '^  ok    stream:'; then

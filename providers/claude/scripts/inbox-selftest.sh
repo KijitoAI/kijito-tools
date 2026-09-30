@@ -245,14 +245,33 @@ if [ "$producer_ok" = 1 ]; then
     stamp="kijito-inbox-selftest $(date -u +%FT%TZ) $$"
     # Send to SELF. A self-addressed message is the only test message that cannot bother anyone else,
     # and it exercises exactly the path a real sender uses.
-    if ! curl -fsS -m 20 -A "$UA" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-         -X POST "$KIJITO_BASE/api/send" \
+    code=$(curl -sS -o /dev/null -w '%{http_code}' -m 20 -A "$UA" -H "Authorization: Bearer $TOKEN" \
+         -H 'Content-Type: application/json' -X POST "$KIJITO_BASE/api/send" \
          -d "{\"to\":\"$PERSONA\",\"persona\":\"$PERSONA\",\"content\":\"$stamp — automated install self-test; safe to ignore and to delete.\"}" \
-         >/dev/null 2>&1; then
-      printf '  ????  stream: COULD NOT MEASURE - the test message could not be SENT (API unreachable or token rejected)\n'
-      printf '%s\n' "COULD NOT MEASURE: the wake path was not exercised. This is not a pass."
-      exit 2
-    fi
+         2>/dev/null) || code=000
+    case "$code" in
+      2??) : ;;
+      401|403)
+        # ⚠️ A READ-ONLY KEY IS NOT A BROKEN MONITOR (river 10985, M312 cold rerun). The monitor needs only
+        # memory.read, but SENDING the test message is a hive write, which needs memory.write (Kijito M339).
+        # Reporting this as "not working" sent a stranger hunting for a fault that did not exist.
+        printf '  ????  stream: COULD NOT MEASURE - the key refused to SEND the test message (HTTP %s)\n' "$code"
+        cat <<EOF
+
+COULD NOT MEASURE: the key the monitor uses is fine for WATCHING mail (memory.read), but it cannot SEND
+the self-test message: sending is a hive write, which needs memory.write. The monitor may be working.
+Prove the wake one of two ways:
+  - send yourself one message from your agent: kijito_hive_send(persona="$PERSONA", to="$PERSONA",
+    content="inbox test") and check that it wakes your agent; or
+  - give the monitor a key that can also send - kijito_api_key(action="create", name="inbox monitor",
+    scopes=["memory.read","memory.write"], persona="$PERSONA") - save it (chmod 600) and re-run this.
+EOF
+        exit 2 ;;
+      *)
+        printf '  ????  stream: COULD NOT MEASURE - the test message could not be SENT (HTTP %s: API unreachable or rejected)\n' "$code"
+        printf '%s\n' "COULD NOT MEASURE: the wake path was not exercised. This is not a pass."
+        exit 2 ;;
+    esac
     printf '  ..    stream: test message sent; waiting up to %ss for it to appear in the stream\n' "$TIMEOUT"
     waited=0
     while [ "$waited" -lt "$TIMEOUT" ]; do
