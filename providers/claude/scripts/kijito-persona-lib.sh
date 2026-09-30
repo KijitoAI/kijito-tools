@@ -186,3 +186,46 @@ kijito_stream_consumed() {
   done
   return 1
 }
+
+# _kijito_etime_secs <[[dd-]hh:]mm:ss> -> seconds. `ps -o etime=` is the one age column Linux and
+# macOS both have (macOS ps has no `etimes`).
+_kijito_etime_secs() {
+  local t=${1//[[:space:]]/} d=0 h=0 m=0 s=0
+  case "$t" in *-*) d=${t%%-*}; t=${t#*-} ;; esac
+  IFS=: read -r a b c <<<"$t"
+  if [ -n "${c:-}" ]; then h=$a; m=$b; s=$c; else m=$a; s=${b:-0}; fi
+  echo $(( 10#$d*86400 + 10#$h*3600 + 10#$m*60 + 10#$s ))
+}
+
+# kijito_stream_consumers <stream-path> -> prints one "<pid> <age-seconds>" line per wake-capable
+# consumer (same anchor as kijito_stream_consumed: only a real `tail` counts). Returns 0 if any, 1 if
+# none, 2 COULD NOT MEASURE.
+# ⚠️ WHY THE AGE: a consumer's EXISTENCE does not prove it can wake anyone. The Claude Code Monitor
+# tool caps a watch at 30 min on many sessions, and on Windows/Git Bash an expired Monitor LEAKS its
+# tail (crucible measured 65 live orphans on one seat, [35702]) — so "a tail exists" read as "armed"
+# forever. Callers compare the age with that cap; they cannot know ownership, so they report, not kill.
+kijito_stream_consumers() {
+  local s=${1:-} p b psh out e found=1
+  [ -n "$s" ] || return 1
+  b=$(basename "$s")
+  if kijito_host_is_windows; then
+    psh=$(command -v powershell.exe 2>/dev/null || command -v powershell 2>/dev/null \
+          || command -v pwsh 2>/dev/null) || return 2
+    out=$("$psh" -NoProfile -NonInteractive -Command \
+      "Get-CimInstance Win32_Process | Where-Object { \$_.Name -eq 'tail.exe' -and \$_.CommandLine -match '-n\s+0\s+-F' -and \$_.CommandLine -like '*$b*' } | ForEach-Object { '{0} {1}' -f \$_.ProcessId, [int]((Get-Date) - \$_.CreationDate).TotalSeconds }" \
+      2>/dev/null | tr -d '\r') || return 2
+    while read -r p e; do
+      case "$p" in ''|*[!0-9]*) continue ;; esac
+      case "$e" in ''|*[!0-9]*) continue ;; esac
+      echo "$p $e"; found=0
+    done <<<"$out"
+    return $found
+  fi
+  command -v pgrep >/dev/null 2>&1 || return 2
+  for p in $(pgrep -f "tail -n 0 -F.*$b" 2>/dev/null); do
+    [ "$(ps -o comm= -p "$p" 2>/dev/null)" = tail ] || continue
+    e=$(ps -o etime= -p "$p" 2>/dev/null) || continue
+    echo "$p $(_kijito_etime_secs "$e")"; found=0
+  done
+  return $found
+}

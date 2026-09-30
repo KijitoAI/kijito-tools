@@ -63,6 +63,8 @@ cat > "$WIN/powershell.exe" <<'SHIM'
 printf '%s\n' "$*" >> "${PS_LOG:-/dev/null}"
 [ -n "${FAKE_PS_GARBAGE:-}" ] && { echo "Get-CimInstance : Access denied"; exit 1; }
 case "$*" in
+  # The LIST query (kijito_stream_consumers) asks for "<pid> <age-seconds>" per tail.exe.
+  *"-eq 'tail.exe'"*ForEach-Object*) [ "${FAKE_TAIL:-0}" -gt 0 ] && echo "9001 ${FAKE_TAIL_AGE:-300}" ;;
   *"-eq 'tail.exe'"*) echo "${FAKE_TAIL:-0}" ;;
   *)          echo "${FAKE_PROD:-0}" ;;
 esac
@@ -140,6 +142,14 @@ out=$(FAKE_PROD=1 FAKE_TAIL=1 run_hook "$WIN" "$H" "$P")
 grep -q "a consumer already tails your stream" <<<"$out" \
   && grn "hook: an armed tail.exe is recognised (no second consumer suggested)" \
   || red "hook missed the armed Windows consumer"
+grep -q "9001 (up 5 min)" <<<"$out" && ! grep -q "LEAKED ORPHANS" <<<"$out" \
+  && grn "hook: the Windows consumer is listed with its age; a 5-min tail is not an orphan" \
+  || red "hook's Windows consumer line lacks pid/age or called a live tail an orphan"
+# Windows does not kill a tail when its Monitor expires (crucible [35702]): an old one must be flagged.
+out=$(FAKE_PROD=1 FAKE_TAIL=1 FAKE_TAIL_AGE=7200 run_hook "$WIN" "$H" "$P")
+grep -q "LEAKED ORPHANS" <<<"$out" && grep -q "9001 (up 120 min)" <<<"$out" \
+  && grn "hook: a 2-hour-old tail.exe is flagged as a possible leaked orphan" \
+  || red "hook reported a 2-hour-old Windows tail as a plain live consumer"
 
 # ── inbox-selftest ──────────────────────────────────────────────────────────────────────────────
 out=$(env PATH="$WIN_NOPS:$SYS" HOME="$H" bash "$SELFTEST" --persona praetor --no-send 2>&1); rc=$?

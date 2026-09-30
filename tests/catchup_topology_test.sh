@@ -60,7 +60,9 @@ cat > "$SHIMDIR/pgrep" <<'SHIM'
 # cannot be made to reproduce on demand.
 pat="$*"
 case "$pat" in
-  *"tail -n 0 -F"*) [ "${FAKE_ARMED:-0}" = 1 ] && { echo 4242; exit 0; }; exit 1 ;;
+  # 4241 stands in for the harness's `bash -c … eval` WRAPPER, whose argv carries the same pipeline;
+  # only 4242 is the real tail (see the ps shim below).
+  *"tail -n 0 -F"*) [ "${FAKE_ARMED:-0}" = 1 ] && { printf '4241\n4242\n'; exit 0; }; exit 1 ;;
   *)
     [ "${FAKE_PRODUCER:-0}" = 1 ] || exit 1
     # ⛔ THE -af FORM MUST CARRY AN ARGV, NOT JUST A PID (assay cert F1). The hook now asks a running
@@ -79,6 +81,23 @@ case "$pat" in
 esac
 SHIM
 chmod 0755 "$SHIMDIR/pgrep"
+
+cat > "$SHIMDIR/ps" <<'SHIM'
+#!/usr/bin/env bash
+# Fake ps for the consumer probe: `ps -o comm= -p N` and `ps -o etime= -p N`. 4241 is the wrapper
+# shell, 4242 the tail; FAKE_ARMED_AGE is the tail's etime (default 05:00 = a live Monitor's age).
+# Anything else goes to the real ps.
+if [ "${1:-}" = -o ] && [ "${3:-}" = -p ]; then
+  case "$2:$4" in
+    comm=:4241) echo bash ;; comm=:4242) echo tail ;;
+    etime=:4241|etime=:4242) echo "${FAKE_ARMED_AGE:-05:00}" ;;
+    *) exit 1 ;;
+  esac
+  exit 0
+fi
+exec /bin/ps "$@"
+SHIM
+chmod 0755 "$SHIMDIR/ps"
 trap 'rm -rf "$SHIMDIR"' EXIT
 
 # Run the hook with a synthetic HOME + project. Echoes its combined output.
@@ -237,6 +256,19 @@ check_hook() {
   if grep -q "do NOT blindly add another" <<<"$out"; then
     grn "$label: linux seat → existing consumer detected (no duplicate-arm advice)"
   else red "$label: linux seat → duplicate-consumer detection did not fire"; bad=1; fi
+  # The harness's wrapper shell carries the same argv; counting it made one Monitor read as several.
+  if grep -q "4242 (up 5 min)" <<<"$out" && ! grep -q "4241" <<<"$out"; then
+    grn "$label: consumer list names only the real tail, with its age (wrapper shell excluded)"
+  else red "$label: consumer list counted the wrapper shell or lost the age"; bad=1; fi
+  if ! grep -q "LEAKED ORPHANS" <<<"$out"; then
+    grn "$label: a 5-min-old tail is not called an orphan"
+  else red "$label: a live-aged tail was called an orphan"; bad=1; fi
+
+  # ---- F: only tails older than the 30-min Monitor cap → say they may be leaked orphans [35702] ----
+  out="$(FAKE_PRODUCER=1 FAKE_ARMED=1 FAKE_ARMED_AGE=1-02:03:04 run_hook "$hook" "$h" "$proj")"
+  if grep -q "LEAKED ORPHANS" <<<"$out" && grep -q "4242 (up 1563 min)" <<<"$out"; then
+    grn "$label: tails older than 30 min → orphan warning, with the age"
+  else red "$label: tails older than 30 min were reported as a plain live consumer"; bad=1; fi
   rm -rf "$h" "$proj"
 
   return $bad

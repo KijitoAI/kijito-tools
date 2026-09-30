@@ -294,7 +294,22 @@ if [ -n "$_safe" ]; then
   # basename is a literal filename; escape the regex metacharacter it can contain (.) so a dot
   # cannot match an arbitrary character and over-report.
   _evpat=$(printf '%s' "$_evbase" | sed 's/\./\\./g')
-  if command -v pgrep >/dev/null 2>&1 && ! { command -v kijito_host_is_windows >/dev/null 2>&1 && kijito_host_is_windows; }; then
+  # ⚠️ COUNT ONLY REAL `tail` PROCESSES, AND SAY HOW OLD THEY ARE. A bare `pgrep -f` here also matched
+  # the harness's `bash -c … eval` wrappers (one Monitor printed as 3 pids), and it counted tails left
+  # behind by EXPIRED Monitors (Windows leaks them: 65 on one seat, [35702]) as "armed" forever.
+  _stale_only=""
+  if command -v kijito_stream_consumers >/dev/null 2>&1; then
+    _clist=$(kijito_stream_consumers "$_events"); _crc=$?
+    case $_crc in
+      0) _stale_only=1
+         while read -r _cp _ca; do
+           [ -n "$_cp" ] || continue
+           _armed="$_armed$_cp (up $((_ca / 60)) min) "
+           [ "$_ca" -le 1800 ] && _stale_only=""
+         done <<<"$_clist" ;;
+      2) _armed_unknown=1 ;;
+    esac
+  elif command -v pgrep >/dev/null 2>&1 && ! { command -v kijito_host_is_windows >/dev/null 2>&1 && kijito_host_is_windows; }; then
     _armed=$(pgrep -f "tail -n 0 -F.*${_evpat}" 2>/dev/null | tr '\n' ' ')
   elif command -v kijito_stream_consumed >/dev/null 2>&1; then
     # No pgrep (native Windows): ask the shared probe. It cannot list pids there, only whether one exists.
@@ -318,7 +333,11 @@ task list:
   • You have NO inbox Monitor (brand-new session; the tail is a sibling's or a leaked orphan that will
     NOT wake YOU) → arm exactly one for yourself:
       Monitor(command="tail -n 0 -F $_events | grep --line-buffered -E '\"event\": ?\"(new|alert|recovered|state_corrupt|baseline_skipped|seed_ahead|replay_capped|persona_added|still_unread)\"'", persistent=true)
-Dedupe with TaskStop (agent-scoped), NOT \`pkill -f …events…\` (that can kill a sibling's or your own live consumer). $_prod
+Dedupe with TaskStop (agent-scoped), NOT \`pkill -f …events…\` (that can kill a sibling's or your own live consumer).${_stale_only:+
+⚠️ EVERY tail listed is older than 30 min. A Monitor whose arming result read "expires in 30m" cannot own
+any of them — on such a session they are LEAKED ORPHANS that wake nobody (Windows/Git Bash does not kill
+a tail when its Monitor expires). Only a Monitor whose result read "persistent" can outlive 30 min. If
+none of yours did, arm one fresh and stop the orphans BY PID (kill <pid>), never by pattern.} $_prod
 EOF
 elif [ -n "$_safe" ]; then
 cat <<EOF
