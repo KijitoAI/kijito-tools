@@ -103,7 +103,7 @@ trap 'rm -rf "$SHIMDIR"' EXIT
 # Run the hook with a synthetic HOME + project. Echoes its combined output.
 # $1=hook  $2=HOME  $3=project dir  (FAKE_PRODUCER / FAKE_ARMED come from the caller's env)
 run_hook() {
-  printf '{"source":"startup","cwd":"%s"}' "$3" \
+  printf '{"source":"%s","cwd":"%s"}' "${HOOK_SRC:-startup}" "$3" \
     | env -u TMUX -u TMUX_PANE -u KIJITO_AUTOCATCHUP PATH="$SHIMDIR:$PATH" HOME="$2" CLAUDE_PROJECT_DIR="$3" bash "$1" 2>/dev/null
 }
 
@@ -269,6 +269,14 @@ check_hook() {
   if grep -q "LEAKED ORPHANS" <<<"$out" && grep -q "4242 (up 1563 min)" <<<"$out"; then
     grn "$label: tails older than 30 min → orphan warning, with the age"
   else red "$label: tails older than 30 min were reported as a plain live consumer"; bad=1; fi
+  if ! grep -q "YOUR OWN pre-reset Monitor" <<<"$out"; then
+    grn "$label: on a fresh startup the old tails are not suggested to be your own"
+  else red "$label: a fresh startup was told an old tail may be its own pre-reset Monitor"; bad=1; fi
+  # After /clear the agent cannot see its own arming result: an old tail may be its persistent Monitor.
+  out="$(HOOK_SRC=clear FAKE_PRODUCER=1 FAKE_ARMED=1 FAKE_ARMED_AGE=1-02:03:04 run_hook "$hook" "$h" "$proj")"
+  if grep -q "YOUR OWN pre-reset Monitor" <<<"$out" && grep -q "LEAKED ORPHANS" <<<"$out"; then
+    grn "$label: after /clear, a >30-min tail is flagged AND named as possibly your own pre-clear Monitor"
+  else red "$label: after /clear the old-tail warning lacks the may-be-your-own caveat"; bad=1; fi
   rm -rf "$h" "$proj"
 
   return $bad

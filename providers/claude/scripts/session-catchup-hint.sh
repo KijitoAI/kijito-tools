@@ -320,6 +320,10 @@ if [ -n "$_safe" ]; then
   else _armed_unknown=1; fi
 fi
 
+# After /clear or compaction the agent cannot see its own earlier arming result, so a >30-min tail may be
+# its OWN persistent Monitor (river's review of 0.2.11). Say so rather than calling every old tail an orphan.
+_own_note=""
+case "$src" in clear|compact) _own_note=" — and this session was just reset, so one of them may be YOUR OWN pre-reset Monitor, whose result line you can no longer see" ;; esac
 if [ -n "$_safe" ] && [ -n "$_armed" ]; then
 cat <<EOF
 
@@ -336,8 +340,9 @@ task list:
 Dedupe with TaskStop (agent-scoped), NOT \`pkill -f …events…\` (that can kill a sibling's or your own live consumer).${_stale_only:+
 ⚠️ EVERY tail listed is older than 30 min. A Monitor whose arming result read "expires in 30m" cannot own
 any of them — on such a session they are LEAKED ORPHANS that wake nobody (Windows/Git Bash does not kill
-a tail when its Monitor expires). Only a Monitor whose result read "persistent" can outlive 30 min. If
-none of yours did, arm one fresh and stop the orphans BY PID (kill <pid>), never by pattern.} $_prod
+a tail when its Monitor expires). Only a Monitor whose result read "persistent" can outlive 30 min${_own_note}.
+If you cannot confirm one of yours read "persistent", the safe move is the same either way: stop these BY
+PID (kill <pid>), never by pattern, and arm one fresh — you end with exactly one consumer you KNOW wakes you.} $_prod
 EOF
 elif [ -n "$_safe" ]; then
 cat <<EOF
