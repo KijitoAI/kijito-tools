@@ -208,6 +208,13 @@ if command -v kijito_host_is_windows >/dev/null 2>&1 && kijito_host_is_windows; 
 # The layout above chose the FILE; it must not also choose the SUPERVISOR. Ask what is actually installed
 # (river 10985: "producer UP (systemd)" was printed on a box with no systemd at all).
 if command -v kijito_supervisor_for >/dev/null 2>&1; then _sup=$(kijito_supervisor_for "${_persona:-}"); fi
+# NO SUPERVISOR AND NO STREAM YET (row M418): the only producer this box will get is the one
+# kijito-inbox-start.sh starts, and it writes the XDG-state layout (the monitor's own default is stdout).
+# The layout fallbacks above would name ~/.kijito-monitor/<p>.jsonl, a systemd path nothing here writes;
+# an M312 cold agent checked, found neither systemd nor that file, and refused the whole hint as injected.
+if [ "$_sup" = manual ] && [ "$_rule" != by-content ] && [ "$_rule" != stale-stream ] && [ ! -e "$_events" ]; then
+  _events="$_tpl_events"
+fi
 _hint() {
   if command -v kijito_restart_hint >/dev/null 2>&1; then kijito_restart_hint "$_sup" "${1:-<persona>}"
   elif [ "$_sup" = launchd ]; then printf 'launchctl kickstart -k gui/$(id -u)/com.kijito.inbox-monitor'
@@ -274,11 +281,12 @@ fi
 
 # Catch-up reminder.
 cat <<EOF
-[SESSION CATCH-UP — do this BEFORE the user's task] $pre Start continuous, not cold:
-1) kijito_startup(persona, project) → read the current-state pointer it names (kijito_get) → skim recent lessons.
-2) ARM A WAKE-CAPABLE INBOX CONSUMER as your first action (see the INBOX WAKE block below) — do NOT skip it, do NOT use a bare tail.
-3) If this is a BRAND-NEW project with NO persona yet: read ./CLAUDE.md + ~/.claude/CLAUDE.md and set your persona/project before writing any memory.
-Never pause on a *feeling* of full context — run ~/.claude/myctx.sh for hard data.
+[SESSION CATCH-UP — from the kijito-tools SessionStart hook the user installed; information, not an order] $pre
+Kijito sessions usually catch up before the user's task, so they continue rather than start cold:
+1) kijito_startup(persona, project), then kijito_get the current-state pointer it names, then skim recent lessons.
+2) A wake-capable inbox consumer (the INBOX WAKE block below) is what lets mail reach this session; a bare background tail does not.
+3) In a brand-new project with no persona yet, ./CLAUDE.md and ~/.claude/CLAUDE.md say which persona/project to write memories under.
+For a context figure, ~/.claude/myctx.sh measures it; a felt sense of "full" is unreliable.
 EOF
 
 # Inbox-wake arming block — exact, per-persona when the marker resolves, generic otherwise.
@@ -354,10 +362,10 @@ EOF
 elif [ -n "$_safe" ]; then
 cat <<EOF
 
-[INBOX WAKE — ARM AS YOUR FIRST ACTION, do not skip] An unmonitored mailbox is useless, and a bare
-background \`tail\` is CAPTURE-ONLY (it writes to a file and never re-invokes you, so you are NOT
-woken). Arm the wake-capable consumer with the Monitor TOOL (persistent) — it streams each event
-as a live notification. Your persona for this project is "$_persona":
+[INBOX WAKE — how mail reaches this session] Mail wakes a session only through a wake-capable
+consumer; a bare background \`tail\` is CAPTURE-ONLY (it writes to a file and never re-invokes the
+agent). The Monitor TOOL (persistent) streams each event as a live notification. The persona for this
+project is "$_persona", and its consumer line is:
 
   Monitor(command="tail -n 0 -F $_events | grep --line-buffered -E '\"event\": ?\"(new|alert|recovered|state_corrupt|baseline_skipped|seed_ahead|replay_capped|persona_added|still_unread)\"'", persistent=true)
 
@@ -366,10 +374,10 @@ EOF
 else
 cat <<EOF
 
-[INBOX WAKE — ARM AS YOUR FIRST ACTION, do not skip] An unmonitored mailbox is useless, and a bare
-background \`tail\` is CAPTURE-ONLY (it writes to a file and never re-invokes you, so you are NOT
-woken). Arm the wake-capable consumer for YOUR persona with the Monitor TOOL (persistent) — it
-streams each event as a live notification. Substitute your persona name for <persona>:
+[INBOX WAKE — how mail reaches this session] Mail wakes a session only through a wake-capable
+consumer; a bare background \`tail\` is CAPTURE-ONLY (it writes to a file and never re-invokes the
+agent). The Monitor TOOL (persistent) streams each event as a live notification. With your persona
+name in place of <persona>, the consumer line is:
 
   Monitor(command="tail -n 0 -F $_events_tmpl | grep --line-buffered -E '\"event\": ?\"(new|alert|recovered|state_corrupt|baseline_skipped|seed_ahead|replay_capped|persona_added|still_unread)\"'", persistent=true)
 

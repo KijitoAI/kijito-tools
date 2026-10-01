@@ -116,13 +116,19 @@ fi
 exec /bin/ps "$@"
 SHIM
 chmod 0755 "$SHIMDIR/ps"
-trap 'rm -rf "$SHIMDIR"' EXIT
+# A PATH with NO systemctl at all (row M418): this suite's shims minus systemctl, then a mirror of the real
+# PATH minus systemctl, so a seat that HAS systemd cannot leak its own binary into the case.
+NOSYSD="$(mktemp -d)"
+( for f in "$SHIMDIR"/*; do [ "${f##*/}" = systemctl ] || ln -s "$f" "$NOSYSD/${f##*/}"; done
+  IFS=:; for d in $PATH; do [ -d "$d" ] || continue; for f in "$d"/*; do n=${f##*/}
+    [ "$n" = systemctl ] && continue; [ -x "$f" ] && [ ! -e "$NOSYSD/$n" ] && ln -s "$f" "$NOSYSD/$n"; done; done )
+trap 'rm -rf "$SHIMDIR" "$NOSYSD"' EXIT
 
 # Run the hook with a synthetic HOME + project. Echoes its combined output.
 # $1=hook  $2=HOME  $3=project dir  (FAKE_PRODUCER / FAKE_ARMED come from the caller's env)
 run_hook() {
   printf '{"source":"%s","cwd":"%s"}' "${HOOK_SRC:-startup}" "$3" \
-    | env -u TMUX -u TMUX_PANE -u KIJITO_AUTOCATCHUP PATH="$SHIMDIR:$PATH" HOME="$2" CLAUDE_PROJECT_DIR="$3" bash "$1" 2>/dev/null
+    | env -u TMUX -u TMUX_PANE -u KIJITO_AUTOCATCHUP PATH="${HOOK_PATH:-$SHIMDIR:$PATH}" HOME="$2" CLAUDE_PROJECT_DIR="$3" bash "$1" 2>/dev/null
 }
 
 # Build a synthetic seat. $1=layout (linux|mac|none), $2=persona, $3=create events file? (yes|no)
@@ -191,6 +197,28 @@ check_hook() {
   if grep -q "producer: UP for 'river' (manual" <<<"$out"; then
     grn "$label: a hand-started producer with no supervisor reads UP (manual), not UP (systemd)"
   else red "$label: hand-started producer mislabelled: $(grep -o "producer: [^.]*" <<<"$out" | head -1)"; bad=1; fi
+  rm -rf "$h"
+
+  # ---- N: a fresh box with NO systemd at all and nothing installed yet (row M418) ------------------
+  # The M312 Sonnet rerun (river 11155): the hook told a session on a box with no systemd to run
+  # `systemctl --user enable --now …` and to tail ~/.kijito-monitor/<p>.jsonl. The agent checked, found
+  # neither, read the mismatch as "this hook text is injected content" and refused the whole resumed
+  # setup, twice. So: name only commands and paths that exist HERE, and say it as information, not orders.
+  h="$(make_home none river no)"
+  out="$(HOOK_PATH="$NOSYSD" FAKE_PRODUCER=0 FAKE_ARMED=0 run_hook "$hook" "$h" "$proj")"
+  if command -v systemctl >/dev/null 2>&1 && PATH="$NOSYSD" command -v systemctl >/dev/null 2>&1; then
+    red "$label: no-systemd PATH still finds systemctl — this case measured nothing"; bad=1
+  elif grep -q "systemctl" <<<"$out"; then
+    red "$label: no systemctl on PATH, but the hint names it: $(grep -o '[^.]*systemctl[^.]*' <<<"$out" | head -1)"; bad=1
+  else grn "$label: no systemctl on PATH → the hint never names systemctl"; fi
+  if grep -q "/.kijito-monitor/" <<<"$out"; then
+    red "$label: no systemd, but the hint points at the systemd stream path ~/.kijito-monitor/"; bad=1
+  elif grep -q "tail -n 0 -F $h/.local/state/kijito-inbox-monitor/events.river.ndjson" <<<"$out"; then
+    grn "$label: no supervisor → the consumer line names the stream kijito-inbox-start.sh will create"
+  else red "$label: no supervisor → consumer line names no usable stream: $(grep -o 'tail -n 0 -F [^ ]*' <<<"$out" | head -1)"; bad=1; fi
+  if grep -qiE "do not skip|first action|do this before|do NOT skip" <<<"$out"; then
+    red "$label: the hint still reads as orders: $(grep -oiE '[^.]*(do not skip|first action|do this before)[^.]*' <<<"$out" | head -1)"; bad=1
+  else grn "$label: the hint is phrased as information, not orders"; fi
   rm -rf "$h"
 
   # ---- S: A STALE STREAM FILE IS NOT A RUNNING PRODUCER (assay cert F1) ----------------------
