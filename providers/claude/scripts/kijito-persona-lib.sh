@@ -182,13 +182,26 @@ kijito_producer_covers() {
     return 1
   fi
   command -v pgrep >/dev/null 2>&1 || return 2
+  # ⚠️ NOT `pgrep -af`: macOS pgrep has no -a (usage `pgrep [-Lfilnoqvx]`), so it printed nothing and
+  # every Mac answered "not covered" - inbox-start then started a DUPLICATE producer on each run. Take the
+  # pids from `pgrep -f` and read each argv with `ps -o command=`, which both platforms support.
+  local pid
   while IFS= read -r line; do
     case "$line" in *[Pp]ython*|*/kijito-inbox-monitor\ *|*/kijito-inbox-monitor) ;; *) continue ;; esac
     case "$line" in *" grep "*|*session-catchup-hint*|*kijito-inbox-start*) continue ;; esac
     # whole-argument match: "--persona river" must not match "--persona riverbank"
     case "$line " in *" --persona $p "*|*" --persona=$p "*|*" --all-personas "*) return 0 ;; esac
     [ -n "$ev" ] && case "$line " in *" $ev "*) return 0 ;; esac
-  done < <(pgrep -af "kijito[-_]inbox[-_]monitor" 2>/dev/null)
+    # A producer started with NO --persona watches every persona IN ITS ACCOUNT (the launchd job passes
+    # only --events-file-template). Its argv cannot say which account, so it covers THIS persona only when
+    # this persona's stream lives where it writes: the stream's directory is in its argv. Without that
+    # constraint a seat's fleet producer "covered" any name at all, and inbox-start skipped starting one.
+    if [ -n "$ev" ]; then
+      case "$line " in *" --persona "*|*" --persona="*) ;; *" $(dirname "$ev")/"*) return 0 ;; esac
+    fi
+  done < <(for pid in $(pgrep -f "kijito[-_]inbox[-_]monitor" 2>/dev/null); do
+             line=$(ps -o command= -p "$pid" 2>/dev/null) && [ -n "$line" ] && printf '%s %s\n' "$pid" "$line"
+           done)
   return 1
 }
 

@@ -99,6 +99,7 @@ rm -rf "$H" "$SH"
 #    (river 10985: this printed launchctl on Linux).
 H="$(mktemp -d)"; SH="$(mktemp -d)"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$SH/systemctl"; chmod +x "$SH/systemctl"   # knows no units
+printf '#!/usr/bin/env bash\nexit 1\n' > "$SH/launchctl"; chmod +x "$SH/launchctl"   # no launchd job (a Mac runner has a real one)
 out="$(HOME="$H" PATH="$SH:$PATH" "$SELFTEST" --persona nobody-here --timeout 3 2>&1)"; rc=$?
 if printf '%s' "$out" | grep -q "Run: ~/.claude/kijito-inbox-start.sh --persona nobody-here" \
    && ! printf '%s' "$out" | grep -qE "Run: (launchctl|systemctl)"; then

@@ -50,6 +50,10 @@ run() {  # env overrides as args, then runs the helper from the project dir; pri
       KIJITO_SELFTEST="$BIN/selftest" "$@" bash "$START" ${ARGS:-} 2>&1; echo "rc=$?" )
 }
 
+# How many fake producers run for "tester". Not `pgrep -c`: macOS pgrep has no -c (it prints usage and
+# exits 2), so the count read 0 there and this test failed on every Mac.
+_nprod() { pgrep -f "$BIN/kijito-inbox-monitor .*--persona tester" 2>/dev/null | wc -l | tr -d ' '; }
+
 echo "kijito-inbox-start checks:"
 out=$(run); rc=${out##*rc=}
 [ "$rc" = 2 ] && grep -q 'COULD NOT RUN: no persona' <<<"$out" && grep -q 'kijito-inbox-start.sh --persona <name>' <<<"$out" \
@@ -76,11 +80,11 @@ else red "start: rc=$rc $out"; fi
 grep -q "tail -n 0 -F $EV" <<<"$out" && grep -q 'Not done until' <<<"$out" \
   && grn "stream proven, consumer left: exit 3 (never 0) and the exact consumer line" || red "consumer step text: $out"
 grep -q 'kjt_SECRET' <<<"$out" && red "a token VALUE was printed" || grn "the token value is never printed"
-n=$(pgrep -fc "$BIN/kijito-inbox-monitor .*--persona tester" 2>/dev/null || echo 0)
+n=$(_nprod)
 [ "$n" = 1 ] && grn "exactly one producer is running for the persona" || red "producers for tester: $n"
 
 out=$(run); rc=${out##*rc=}
-n=$(pgrep -fc "$BIN/kijito-inbox-monitor .*--persona tester" 2>/dev/null || echo 0)
+n=$(_nprod)
 grep -q 'already covers tester' <<<"$out" && [ "$n" = 1 ] \
   && grn "a second run leaves the running producer alone (still one)" || red "second run: n=$n $out"
 
@@ -89,7 +93,7 @@ grep -q 'already covers tester' <<<"$out" && [ "$n" = 1 ] \
 pkill -f "$BIN/kijito-inbox-monitor .*--persona tester" 2>/dev/null; sleep 0.5
 touch "$EV"
 out=$(run); rc=${out##*rc=}
-n=$(pgrep -fc "$BIN/kijito-inbox-monitor .*--persona tester" 2>/dev/null || echo 0)
+n=$(_nprod)
 if ! grep -q 'already covers tester' <<<"$out" && grep -q 'producer armed for tester' <<<"$out" && [ "$n" = 1 ]; then
   grn "a fresh stream with NO producer process is restarted at once (mtime is not a producer)"
 else red "dead producer + fresh stream: n=$n $out"; fi

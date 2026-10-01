@@ -92,6 +92,10 @@ esac
 exit 1
 SHIM
 chmod 0755 "$SHIMDIR/systemctl"
+# Fake launchctl: the kijito job is loaded only when FAKE_LAUNCHD=1. Without this a test run ON A MAC sees
+# the seat's real launchd job and reports "launchd" where the fixture means "no supervisor".
+printf '#!/usr/bin/env bash\n[ "${FAKE_LAUNCHD:-0}" = 1 ] && exit 0; exit 1\n' > "$SHIMDIR/launchctl"
+chmod 0755 "$SHIMDIR/launchctl"
 
 cat > "$SHIMDIR/ps" <<'SHIM'
 #!/usr/bin/env bash
@@ -101,6 +105,9 @@ cat > "$SHIMDIR/ps" <<'SHIM'
 if [ "${1:-}" = -o ] && [ "${3:-}" = -p ]; then
   case "$2:$4" in
     comm=:4241) echo bash ;; comm=:4242) echo tail ;;
+    # 1111 is the fake PRODUCER the pgrep shim names: its argv carries the persona it covers.
+    command=:1111) [ "${FAKE_PRODUCER:-0}" = 1 ] || exit 1
+                   echo "/usr/bin/python3 /home/u/.local/bin/kijito-inbox-monitor --persona ${FAKE_PRODUCER_PERSONA:-someone-else} --heartbeat 900" ;;
     etime=:4241|etime=:4242) echo "${FAKE_ARMED_AGE:-05:00}" ;;
     *) exit 1 ;;
   esac
