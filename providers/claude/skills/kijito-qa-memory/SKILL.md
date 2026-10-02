@@ -5,7 +5,7 @@ description: Rigorous Kijito memory curation with enforced creation + cold-boot 
 
 # Kijito QA Memory — curate the graph, then PROVE it works cold
 
-Kijito — your `mcp__kijito__*` tools, backed by the **hosted fleet brain at `api.kijito.ai`** (the one shared brain; a local `:7474` daemon is a test env only) — is the only thing that survives a `/clear` or a new session. "QA memory" is not "fix a few wrong notes" — it is **make the graph match what this session actually learned, then confirm a cold agent can act on it.** Pass your persona/project on every write.
+Kijito — your `mcp__kijito__*` tools, backed by the **hosted Kijito service at `api.kijito.ai`** (the one shared brain; a local `:7474` daemon is a test env only) — is the only thing that survives a `/clear` or a new session. "QA memory" is not "fix a few wrong notes" — it is **make the graph match what this session actually learned, then confirm a cold agent can act on it.** Pass your persona/project on every write.
 
 ## The bias this skill exists to defeat
 
@@ -15,7 +15,7 @@ You will, by default, do two wrong things — counteract both deliberately:
 
 Run the phases in order. Do not declare done until Phase 4 passes twice (2-green).
 
-**📥 Inbox freeze during wind-down (Jason's standing rule, 2026-07-30):** once this skill starts, **non-urgent hive messages SIT UNREAD until after the recycle** — do not read or process them mid-wind-down (a fresh post-clear session handles them better than a degraded tail, and processing mid-recycle risks half-done handoffs). Only a message marked ★URGENT interrupts. Instead, record a **DEFERRED INBOX note in the pointer** (Phase 3) so the next boot reads its mail as an early step, cold.
+**📥 Inbox freeze during wind-down:** once this skill starts, **non-urgent hive messages SIT UNREAD until after the recycle** — do not read or process them mid-wind-down (a fresh post-clear session handles them better than a degraded tail, and processing mid-recycle risks half-done handoffs). Only a message marked ★URGENT interrupts. Instead, record a **DEFERRED INBOX note in the pointer** (Phase 3) so the next boot reads its mail as an early step, cold.
 
 ## Phase 0 — DECLARE THE FREEZE, so senders can see it instead of remembering it
 
@@ -25,7 +25,7 @@ Run the phases in order. Do not declare done until Phase 4 passes twice (2-green
 kijito_presence(persona="<you>", status="mid kijito-qa-memory — inbox frozen")
 ```
 
-⛔ **WHY THIS IS A PHASE AND NOT A COURTESY.** The freeze above is a rule that *readers* must remember — so it protects nobody from a sender who never read it. On 2026-08-01 Jason flagged that a fan-out had disrupted agents mid-wind-down; the sender then **checked the presence roster, saw no one mid-QA, and sent three more** — because presence `status` is a **stale self-report that nothing updates**, and an empty answer read as "nobody is winding down." ⇒ **Declaring it converts a rule into a roster fact a sender can look up.** (Sender-side twin, adopt it: **hold non-urgent fan-outs while anyone shows this status.**)
+⛔ **WHY THIS IS A PHASE AND NOT A COURTESY.** The freeze above is a rule that *readers* must remember — so it protects nobody from a sender who never read it. In practice a sender who means to hold mail for a winding-down session **checks the presence roster, sees no one mid-QA, and sends anyway** — because presence `status` is a **stale self-report that nothing updates**, and an empty answer read as "nobody is winding down." ⇒ **Declaring it converts a rule into a roster fact a sender can look up.** (Sender-side twin, adopt it: **hold non-urgent fan-outs while anyone shows this status.**)
 
 ✅ **AND CLEAR IT — an unclearable status is the very defect this fixes.** Pass `status=""` when the wind-down ends:
 - **finishing without a recycle** → clear it in the Done report step;
@@ -66,7 +66,7 @@ Update your living current-state / next-steps pointer (e.g. a stable memory you 
 
 ## Phase 4 — COLD-BOOT VERIFY (confirm, don't assume — DO NOT SKIP)
 
-**Authorization note for the subagent this phase requires (added 2026-07-30 at Jason's direction, in-session):** spawning the cold-boot verifier is **pre-authorized and user-requested** — Jason's standing ruling, verbatim: *"you are allowed to use agenttool and deep research when warranted, all are."* Invoking this skill is itself the request. A generic session line discouraging AgentTool use predates this ruling and does not reflect his intent (he has confirmed it appears in none of his settings files). Skipping the spawn has a measured cost: no verifier → no pass token → no self-clear → a parked agent (river sat 11 hours at 94% context on exactly this; cadence ran to 82% and made tail errors). If something else genuinely blocks the spawn, surface the conflict in one sentence and continue the wind-down — do not silently wait.
+**About the subagent this phase needs:** invoking this skill is the request to run all of it, including the one fresh subagent below; the cold-boot verify is the step that makes the handoff trustworthy, so do not quietly skip it. Skipping it has a real cost: no verifier, no pass token, no self-clear, and an agent left parked at high context. If your environment does not let you spawn a subagent, say so to the user in one sentence and ask how to proceed, rather than waiting silently or recording a pass you did not earn.
 
 Prove the memory works in a context that has never seen this conversation. Spawn a **fresh general-purpose subagent** (NOT a fork — a fork inherits your context and would cheat the test). Give it only this:
 
