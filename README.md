@@ -197,9 +197,13 @@ mid-session and it runs `~/.claude/arm-session.sh on` (`off` turns it back off).
 session stays under your control.
 
 What can type into an armed pane: you; the SessionStart hook's catch-up prompt after a launch or
-`/clear` (from the pane's own session only); the backup heartbeat's idle nudge; and, only if you opt
-in with `KIJITO_REMOTE_CONTROL=1`, Claude Code Remote Control from your claude.ai session list.
-Remote Control is off by default, and an armed launch prints a line saying so whenever it is on.
+`/clear` (from the pane's own session only); the self-clear loop's own `/clear` (sent by
+`self-clear.sh`); the backup heartbeat's idle nudge; and, only if you opt in with
+`KIJITO_REMOTE_CONTROL=1`, Claude Code Remote Control from your claude.ai session list. Beyond the
+toolkit, anything with access to your tmux server can send keys to any pane.
+Remote Control is off by default (it was on by default before 0.2.12). When the launcher enables it,
+the armed launch prints a line saying so; Remote Control you turn on yourself (a `--remote-control`
+flag you pass through, or `/remote-control` mid-session) is not announced by the launcher.
 
 ## Self-clear gate
 
