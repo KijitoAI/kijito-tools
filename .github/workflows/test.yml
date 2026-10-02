@@ -112,6 +112,7 @@ jobs:
           bash tests/lc_test.sh
           bash tests/wtmux_lifecycle_test.sh
           bash tests/autosend_owner_test.sh
+          bash tests/remote_control_optin_test.sh
       - name: heartbeat, inbox self-test and status-line suites (rows M290 M304 M309 M291)
         run: |
           bash tests/heartbeat_nonce_test.sh

@@ -51,19 +51,21 @@ if [ -z "${KIJITO_API_TOKEN:-}" ] && [ -r "${KIJITO_API_TOKEN_FILE:-$HOME/.claud
   export KIJITO_API_TOKEN="$(cat "${KIJITO_API_TOKEN_FILE:-$HOME/.claude/.kijito_api_token}" 2>/dev/null)"
 fi
 
-# Remote Control for armed/autonomous panes: it lets you check an unattended session from a phone,
-# which is the normal reason to arm one. RC is a per-PROCESS feature — it survives /clear but NOT a
-# fresh launch, and an agent cannot self-invoke a slash command, so it has to be set here at start.
-#
-# Both knobs are opt-OUT-able because this ships to other people's machines:
-#   KIJITO_REMOTE_CONTROL=0   → don't enable remote control at all
+# Remote Control lets you check an unattended session from a phone. RC is a per-PROCESS feature — it
+# survives /clear but NOT a fresh launch, and an agent cannot self-invoke a slash command, so it has to be
+# set here at start.
+# ⛔ OPT-IN (row M441). It used to be ON by default, and nothing in setup said so; in the M312 Sonnet cold
+# run an answer the human never gave reached the armed pane. Remote Control is one more thing that can
+# type into this pane, so it is on only when you ask, and the launch says so when it is:
+#   KIJITO_REMOTE_CONTROL=1   → enable remote control (anything else, or unset: off)
 #   KIJITO_RC_PREFIX=<name>   → session-name prefix; makes the pane easy to spot in the session list.
 # The prefix defaults to this project's persona (the `.kijito_persona` marker, same file the
-# SessionStart hook reads), so an armed river pane is named "river-*" and an argus one "argus-*"
-# without anyone hardcoding a name. No marker → no prefix, rather than someone else's persona.
+# SessionStart hook reads), so an armed pane is named "<persona>-*" without anyone hardcoding a name.
+# No marker → no prefix, rather than someone else's persona.
 rc_args=()
-if [ "${KIJITO_REMOTE_CONTROL:-1}" != "0" ]; then
+if [ "${KIJITO_REMOTE_CONTROL:-0}" = "1" ]; then
   rc_args+=(--remote-control)
+  echo "claude-armed: Remote Control is ON (KIJITO_REMOTE_CONTROL=1): your claude.ai sessions list can read and type into this pane. Unset it to launch without." >&2
   rc_prefix="${KIJITO_RC_PREFIX:-}"
   if [ -z "$rc_prefix" ]; then
     for d in "${CLAUDE_PROJECT_DIR:-}" "$PWD"; do
