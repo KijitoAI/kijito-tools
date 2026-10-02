@@ -196,6 +196,11 @@ To arm a pane, launch it with `~/.claude/claude-armed.sh`, or tell the agent to 
 mid-session and it runs `~/.claude/arm-session.sh on` (`off` turns it back off). A plain `claude`
 session stays under your control.
 
+What can type into an armed pane: you; the SessionStart hook's catch-up prompt after a launch or
+`/clear` (from the pane's own session only); the backup heartbeat's idle nudge; and, only if you opt
+in with `KIJITO_REMOTE_CONTROL=1`, Claude Code Remote Control from your claude.ai session list.
+Remote Control is off by default, and an armed launch prints a line saying so whenever it is on.
+
 ## Self-clear gate
 
 A pane clears itself only after both steps:
