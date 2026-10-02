@@ -247,6 +247,42 @@ lc_heartbeat_running() {                                 # $1 = pane id
 lc_env_armed()    { [ "${KIJITO_AUTOCATCHUP:-0}" = "1" ]; }
 lc_is_armed()     { lc_marker_armed "${1:-}" || lc_env_armed; }
 
+# ── M437: ONLY THE PANE'S OWN CLAUDE MAY AUTOSEND ────────────────────────────────────────────────
+# lc_hook_owns_pane <pane> -> 0 the Claude Code process that ran this hook is the pane's own interactive
+# session, 1 it is NOT (headless `-p`/`--print`, or a claude with no controlling tty - a child of some tool
+# shell), 2 COULD NOT MEASURE (wtmux pane, no ps, no claude ancestor found, tmux silent): callers keep
+# their old behaviour on 2, so this can only ever REMOVE a send, never block the loop on a host it cannot read.
+# ⚠️ WHY (river, 2026-10-02): headless `claude -p` sessions run by a subagent in an ARMED pane inherited
+# TMUX_PANE, so each one's SessionStart hook autosent the catch-up prompt into the live conversation.
+# ⛔ NOT BY SESSION ID: /clear rotates CLAUDE_CODE_SESSION_ID (above), and the post-/clear session is the one
+# that MUST autosend. What survives /clear is the terminal: the pane's claude holds #{pane_tty}; a claude
+# started from a Bash-tool shell has no controlling tty at all (measured: those shells show tty "?").
+lc_hook_owns_pane() {
+  local pane=${1:-} p=${KIJITO_LC_HOOK_PID:-$PPID} i=0 found="" comm args tty ptty
+  case "$pane" in ''|wtmux-*) return 2 ;; esac
+  command -v ps >/dev/null 2>&1 && command -v tmux >/dev/null 2>&1 || return 2
+  while [ "$i" -lt 16 ]; do
+    case "$p" in ''|*[!0-9]*) return 2 ;; esac
+    [ "$p" -gt 1 ] || break
+    comm=$(ps -o comm= -p "$p" 2>/dev/null) || break
+    args=$(ps -o args= -p "$p" 2>/dev/null)
+    # The claude binary (comm), or a script/node entry point named claude in its argv. ".claude/" (the
+    # config dir the hook itself lives in) is not a match: claude must END a path component.
+    if [ "${comm##*/}" = claude ] || printf '%s\n' "$args" | grep -Eq '(^|[ /])claude( |$)|claude-code/cli'; then
+      found=1; break
+    fi
+    p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' '); i=$((i + 1))
+  done
+  [ -n "$found" ] || return 2
+  case " $args " in *" -p "*|*" --print "*|*" --print="*) return 1 ;; esac
+  tty=$(ps -o tty= -p "$p" 2>/dev/null | tr -d ' ')
+  case "$tty" in ''|'?'|'??'|-) return 1 ;; esac            # Linux "?", macOS "??": no controlling tty
+  ptty=$(tmux display-message -p -t "$pane" '#{pane_tty}' 2>/dev/null)
+  [ -n "$ptty" ] || return 2
+  [ "/dev/${tty#/dev/}" = "$ptty" ] && return 0
+  return 1
+}
+
 # qa-token is SESSION-keyed (correct: each post-/clear session must earn its OWN fresh QA pass).
 lc_qa_token()   { echo "$KIJITO_LC_DIR/qa-pass.${CLAUDE_CODE_SESSION_ID:-nosession}"; }
 # The cycle counter is PANE-keyed: /clear ROTATES CLAUDE_CODE_SESSION_ID (verified live: 1c5947c1→

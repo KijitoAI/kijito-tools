@@ -390,7 +390,13 @@ fi
 # The pane is tmux's or (native Windows) wtmux's; lc_self_pane answers for both.
 _pane=""; command -v lc_self_pane >/dev/null 2>&1 && _pane=$(lc_self_pane 2>/dev/null)
 case "$_pane" in wtmux-*|'') ;; *) [ -n "${TMUX:-}" ] || _pane="" ;; esac   # a tmux pane also needs $TMUX, as before
-if [ -n "$_pane" ] && lc_is_armed "$_pane"; then
+# M437: an armed pane is not enough - the claude that ran this hook must be the pane's OWN interactive
+# session. A headless `claude -p` started inside the pane inherits TMUX_PANE and used to autosend the
+# catch-up prompt into the live conversation (river, 2026-10-02). 2 = could not tell: behave as before.
+_own=0; command -v lc_hook_owns_pane >/dev/null 2>&1 && { lc_hook_owns_pane "$_pane"; _own=$?; }
+if [ -n "$_pane" ] && [ "$_own" = 1 ] && lc_is_armed "$_pane"; then
+  lc_log HOOK "src=$src autosend=SKIPPED pane=$_pane reason=not-pane-owner (headless -p/--print, or a claude without the pane's tty)"
+elif [ -n "$_pane" ] && lc_is_armed "$_pane"; then
   lc_log HOOK "src=$src autosend=ARMED pane=$_pane"
   _autosend="$_kjt_dir/session-autosend.sh"
   [ -f "$_autosend" ] || _autosend="$HOME/.claude/session-autosend.sh"
