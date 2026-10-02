@@ -41,6 +41,15 @@ else red "opt-in did not enable Remote Control with the prefix: $(tr '\n' ' ' < 
 if grep -qi 'remote control is ON' <<<"$err"; then grn "an opted-in launch says Remote Control is on, on stderr"
 else red "an opted-in launch is silent about Remote Control: ${err:-<nothing>}"; fi
 
+# Fail CLOSED on anything but exactly "1" (river's 0.2.12 review, LOW-2): an empty value and a "truthy"
+# word must both keep it off, with no ON line - a mutant "anything but 0 = on" passed the first version.
+for v in "" true yes; do
+  err=$(launch KIJITO_REMOTE_CONTROL="$v")
+  if grep -qx -- '--remote-control' "$T/argv" || grep -qi 'remote control is ON' <<<"$err"; then
+    red "KIJITO_REMOTE_CONTROL='$v' turned Remote Control on (only exactly 1 opts in)"
+  else grn "KIJITO_REMOTE_CONTROL='$v' keeps it off, with no ON line"; fi
+done
+
 err=$(launch KIJITO_REMOTE_CONTROL=0)
 if grep -qx -- '--remote-control' "$T/argv"; then red "KIJITO_REMOTE_CONTROL=0 still enables it"
 else grn "KIJITO_REMOTE_CONTROL=0 keeps it off (the old opt-out still works)"; fi
