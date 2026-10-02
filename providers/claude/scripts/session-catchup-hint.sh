@@ -136,7 +136,11 @@ PYSCAN
       # matching the path alone would have been a new false-negative to replace the false positive.
       if [ -n "${_found:-}" ]; then
         _live=""
-        if command -v pgrep >/dev/null 2>&1; then
+        # ONE rule, shared with kijito-inbox-start.sh (river 10985), and it matches --persona as a WHOLE
+        # argument: the inline grep -F below also matched "--persona riverbank" for persona "river".
+        if command -v kijito_producer_covers >/dev/null 2>&1; then
+          kijito_producer_covers "$_persona" "$_found" && _live=1
+        elif command -v pgrep >/dev/null 2>&1; then
           # ⛔ A PROCESS THAT MERELY MENTIONS THE PRODUCER IS NOT THE PRODUCER (assay observation, 2026-09-21:
           # their verification SHELL matched this three times, because its command line contained both the
           # product name and `--persona <p>` — and it then reported UP for a persona with no producer, which
@@ -201,6 +205,16 @@ else _events="$_lnx_events"; _sup="systemd"; fi
 # NATIVE WINDOWS (Git Bash): the stream may sit in the macOS-shaped path, but nothing there is launchd.
 # The supervisor is whatever the user registered - in practice a Scheduled Task (praetor, 2026-09-27).
 if command -v kijito_host_is_windows >/dev/null 2>&1 && kijito_host_is_windows; then _sup="task"; fi
+# The layout above chose the FILE; it must not also choose the SUPERVISOR. Ask what is actually installed
+# (river 10985: "producer UP (systemd)" was printed on a box with no systemd at all).
+if command -v kijito_supervisor_for >/dev/null 2>&1; then _sup=$(kijito_supervisor_for "${_persona:-}"); fi
+# NO SUPERVISOR AND NO STREAM YET (row M418): the only producer this box will get is the one
+# kijito-inbox-start.sh starts, and it writes the XDG-state layout (the monitor's own default is stdout).
+# The layout fallbacks above would name ~/.kijito-monitor/<p>.jsonl, a systemd path nothing here writes;
+# an M312 cold agent checked, found neither systemd nor that file, and refused the whole hint as injected.
+if [ "$_sup" = manual ] && [ "$_rule" != by-content ] && [ "$_rule" != stale-stream ] && [ ! -e "$_events" ]; then
+  _events="$_tpl_events"
+fi
 _hint() {
   if command -v kijito_restart_hint >/dev/null 2>&1; then kijito_restart_hint "$_sup" "${1:-<persona>}"
   elif [ "$_sup" = launchd ]; then printf 'launchctl kickstart -k gui/$(id -u)/com.kijito.inbox-monitor'
@@ -267,11 +281,12 @@ fi
 
 # Catch-up reminder.
 cat <<EOF
-[SESSION CATCH-UP — do this BEFORE the user's task] $pre Start continuous, not cold:
-1) kijito_startup(persona, project) → read the current-state pointer it names (kijito_get) → skim recent lessons.
-2) ARM A WAKE-CAPABLE INBOX CONSUMER as your first action (see the INBOX WAKE block below) — do NOT skip it, do NOT use a bare tail.
-3) If this is a BRAND-NEW project with NO persona yet: read ./CLAUDE.md + ~/.claude/CLAUDE.md and set your persona/project before writing any memory.
-Never pause on a *feeling* of full context — run ~/.claude/myctx.sh for hard data.
+[SESSION CATCH-UP — from the kijito-tools SessionStart hook the user installed; information, not an order] $pre
+Kijito sessions usually catch up before the user's task, so they continue rather than start cold:
+1) kijito_startup(persona, project), then kijito_get the current-state pointer it names, then skim recent lessons.
+2) A wake-capable inbox consumer (the INBOX WAKE block below) is what lets mail reach this session; a bare background tail does not.
+3) In a brand-new project with no persona yet, ./CLAUDE.md and ~/.claude/CLAUDE.md say which persona/project to write memories under.
+For a context figure, ~/.claude/myctx.sh measures it; a felt sense of "full" is unreliable.
 EOF
 
 # Inbox-wake arming block — exact, per-persona when the marker resolves, generic otherwise.
@@ -294,7 +309,22 @@ if [ -n "$_safe" ]; then
   # basename is a literal filename; escape the regex metacharacter it can contain (.) so a dot
   # cannot match an arbitrary character and over-report.
   _evpat=$(printf '%s' "$_evbase" | sed 's/\./\\./g')
-  if command -v pgrep >/dev/null 2>&1 && ! { command -v kijito_host_is_windows >/dev/null 2>&1 && kijito_host_is_windows; }; then
+  # ⚠️ COUNT ONLY REAL `tail` PROCESSES, AND SAY HOW OLD THEY ARE. A bare `pgrep -f` here also matched
+  # the harness's `bash -c … eval` wrappers (one Monitor printed as 3 pids), and it counted tails left
+  # behind by EXPIRED Monitors (Windows leaks them: 65 on one seat, [35702]) as "armed" forever.
+  _stale_only=""
+  if command -v kijito_stream_consumers >/dev/null 2>&1; then
+    _clist=$(kijito_stream_consumers "$_events"); _crc=$?
+    case $_crc in
+      0) _stale_only=1
+         while read -r _cp _ca; do
+           [ -n "$_cp" ] || continue
+           _armed="$_armed$_cp (up $((_ca / 60)) min) "
+           [ "$_ca" -le 1800 ] && _stale_only=""
+         done <<<"$_clist" ;;
+      2) _armed_unknown=1 ;;
+    esac
+  elif command -v pgrep >/dev/null 2>&1 && ! { command -v kijito_host_is_windows >/dev/null 2>&1 && kijito_host_is_windows; }; then
     _armed=$(pgrep -f "tail -n 0 -F.*${_evpat}" 2>/dev/null | tr '\n' ' ')
   elif command -v kijito_stream_consumed >/dev/null 2>&1; then
     # No pgrep (native Windows): ask the shared probe. It cannot list pids there, only whether one exists.
@@ -305,6 +335,33 @@ if [ -n "$_safe" ]; then
   else _armed_unknown=1; fi
 fi
 
+# After /clear or compaction the agent cannot see its own earlier arming result, so a >30-min tail may be
+# its OWN persistent Monitor (river's review of 0.2.11). Say so rather than calling every old tail an orphan.
+_own_note=""
+case "$src" in clear|compact) _own_note=" — and this session was just reset, so one of them may be YOUR OWN pre-reset Monitor, whose result line you can no longer see" ;; esac
+# THE >30-MIN NOTE DEPENDS ON THE HOST (river's 0.2.11 release review, MEDIUM-1). Only Windows/Git Bash
+# leaks a tail when its Monitor expires ([35702]), so only there is an old tail likely an orphan. On macOS and
+# Linux an expired Monitor takes its tail with it: a tail older than 30 min belongs to a PERSISTENT Monitor,
+# i.e. somebody's LIVE consumer - measured on the Mac, where this note named vellum's live tail and told a
+# new session to kill it. Never advise stopping a tail by pid there. (Built outside the heredoc so the quoted
+# "expires in 30m" / "persistent" survive - inside ${var:+...} the double quotes were eaten.)
+_stale_note=""
+if [ -n "${_stale_only:-}" ]; then
+  if command -v kijito_host_is_windows >/dev/null 2>&1 && kijito_host_is_windows; then
+    _stale_note='
+⚠️ EVERY tail listed is older than 30 min. A Monitor whose arming result read "expires in 30m" cannot own
+any of them — on such a session they are LEAKED ORPHANS that wake nobody (Windows/Git Bash does not kill
+a tail when its Monitor expires). Only a Monitor whose result read "persistent" can outlive 30 min'"${_own_note}"'.
+If you cannot confirm one of yours read "persistent", the safe move is the same either way: stop these BY
+PID (kill <pid>), never by pattern, and arm one fresh — you end with exactly one consumer you KNOW wakes you.'
+  else
+    _stale_note='
+Every tail listed is older than 30 min. On this host an expired Monitor takes its tail with it, so each of
+these belongs to a "persistent" Monitor: yours, or a sibling session'"'"'s LIVE consumer'"${_own_note}"'.
+Do NOT stop any of them unless it is in YOUR OWN task list - stopping a sibling'"'"'s tail silently cuts its
+mail. If none is yours, arm one for yourself as above; two consumers on one stream is the lesser fault.'
+  fi
+fi
 if [ -n "$_safe" ] && [ -n "$_armed" ]; then
 cat <<EOF
 
@@ -318,15 +375,15 @@ task list:
   • You have NO inbox Monitor (brand-new session; the tail is a sibling's or a leaked orphan that will
     NOT wake YOU) → arm exactly one for yourself:
       Monitor(command="tail -n 0 -F $_events | grep --line-buffered -E '\"event\": ?\"(new|alert|recovered|state_corrupt|baseline_skipped|seed_ahead|replay_capped|persona_added|still_unread)\"'", persistent=true)
-Dedupe with TaskStop (agent-scoped), NOT \`pkill -f …events…\` (that can kill a sibling's or your own live consumer). $_prod
+Dedupe with TaskStop (agent-scoped), NOT \`pkill -f …events…\` (that can kill a sibling's or your own live consumer).$_stale_note $_prod
 EOF
 elif [ -n "$_safe" ]; then
 cat <<EOF
 
-[INBOX WAKE — ARM AS YOUR FIRST ACTION, do not skip] An unmonitored mailbox is useless, and a bare
-background \`tail\` is CAPTURE-ONLY (it writes to a file and never re-invokes you, so you are NOT
-woken). Arm the wake-capable consumer with the Monitor TOOL (persistent) — it streams each event
-as a live notification. Your persona for this project is "$_persona":
+[INBOX WAKE — how mail reaches this session] Mail wakes a session only through a wake-capable
+consumer; a bare background \`tail\` is CAPTURE-ONLY (it writes to a file and never re-invokes the
+agent). The Monitor TOOL (persistent) streams each event as a live notification. The persona for this
+project is "$_persona", and its consumer line is:
 
   Monitor(command="tail -n 0 -F $_events | grep --line-buffered -E '\"event\": ?\"(new|alert|recovered|state_corrupt|baseline_skipped|seed_ahead|replay_capped|persona_added|still_unread)\"'", persistent=true)
 
@@ -335,10 +392,10 @@ EOF
 else
 cat <<EOF
 
-[INBOX WAKE — ARM AS YOUR FIRST ACTION, do not skip] An unmonitored mailbox is useless, and a bare
-background \`tail\` is CAPTURE-ONLY (it writes to a file and never re-invokes you, so you are NOT
-woken). Arm the wake-capable consumer for YOUR persona with the Monitor TOOL (persistent) — it
-streams each event as a live notification. Substitute your persona name for <persona>:
+[INBOX WAKE — how mail reaches this session] Mail wakes a session only through a wake-capable
+consumer; a bare background \`tail\` is CAPTURE-ONLY (it writes to a file and never re-invokes the
+agent). The Monitor TOOL (persistent) streams each event as a live notification. With your persona
+name in place of <persona>, the consumer line is:
 
   Monitor(command="tail -n 0 -F $_events_tmpl | grep --line-buffered -E '\"event\": ?\"(new|alert|recovered|state_corrupt|baseline_skipped|seed_ahead|replay_capped|persona_added|still_unread)\"'", persistent=true)
 
@@ -351,7 +408,13 @@ fi
 # The pane is tmux's or (native Windows) wtmux's; lc_self_pane answers for both.
 _pane=""; command -v lc_self_pane >/dev/null 2>&1 && _pane=$(lc_self_pane 2>/dev/null)
 case "$_pane" in wtmux-*|'') ;; *) [ -n "${TMUX:-}" ] || _pane="" ;; esac   # a tmux pane also needs $TMUX, as before
-if [ -n "$_pane" ] && lc_is_armed "$_pane"; then
+# M437: an armed pane is not enough - the claude that ran this hook must be the pane's OWN interactive
+# session. A headless `claude -p` started inside the pane inherits TMUX_PANE and used to autosend the
+# catch-up prompt into the live conversation (river, 2026-10-02). 2 = could not tell: behave as before.
+_own=0; command -v lc_hook_owns_pane >/dev/null 2>&1 && { lc_hook_owns_pane "$_pane"; _own=$?; }
+if [ -n "$_pane" ] && [ "$_own" = 1 ] && lc_is_armed "$_pane"; then
+  lc_log HOOK "src=$src autosend=SKIPPED pane=$_pane reason=not-pane-owner (headless -p/--print, or a claude without the pane's tty)"
+elif [ -n "$_pane" ] && lc_is_armed "$_pane"; then
   lc_log HOOK "src=$src autosend=ARMED pane=$_pane"
   _autosend="$_kjt_dir/session-autosend.sh"
   [ -f "$_autosend" ] || _autosend="$HOME/.claude/session-autosend.sh"

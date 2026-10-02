@@ -70,6 +70,45 @@ else
 fi
 rm -rf "$H"
 
+# 6. a READ-ONLY key cannot send the test message (a hive write needs memory.write, Kijito M339). That
+#    is COULD NOT MEASURE (2) with both ways to finish - never "not working" (river 10985, M312 rerun).
+H="$(mktemp -d)"; SH="$(mktemp -d)"
+mkdir -p "$H/.kijito-monitor"
+printf '{"event": "armed", "persona": "rotester", "cursor": 1}\n' > "$H/.kijito-monitor/rotester.jsonl"
+printf 'kjt_readonly' > "$H/.claude_token"; chmod 600 "$H/.claude_token"
+cat > "$SH/curl" <<'SHIM'
+#!/usr/bin/env bash
+# the send is refused for scope; -w '%{http_code}' prints the code, as real curl does without -f
+printf '403'; exit 0
+SHIM
+chmod +x "$SH/curl"
+out="$(HOME="$H" KIJITOMON_TOKEN_FILE="$H/.claude_token" KIJITOMON_BIN="$(type -P false)" PATH="$SH:$PATH" \
+        "$SELFTEST" --persona rotester --timeout 3 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q "cannot SEND" \
+   && printf '%s' "$out" | grep -q 'kijito_hive_send(persona="rotester", to="rotester"' \
+   && printf '%s' "$out" | grep -q 'scopes=\["memory.read","memory.write"\]' \
+   && ! printf '%s' "$out" | grep -q "VERDICT: NOT WORKING"; then
+  grn "read-only key => exit 2 naming memory.write and both ways to prove the wake (not NOT WORKING)"
+else
+  red "read-only key gave rc=$rc: $out"
+fi
+rm -rf "$H" "$SH"
+
+# 7. the restart line names the supervisor that is INSTALLED. On a Linux box with no kijito unit (and a
+#    systemctl that knows none) it must be the one-command start, never launchctl or systemctl
+#    (river 10985: this printed launchctl on Linux).
+H="$(mktemp -d)"; SH="$(mktemp -d)"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$SH/systemctl"; chmod +x "$SH/systemctl"   # knows no units
+printf '#!/usr/bin/env bash\nexit 1\n' > "$SH/launchctl"; chmod +x "$SH/launchctl"   # no launchd job (a Mac runner has a real one)
+out="$(HOME="$H" PATH="$SH:$PATH" "$SELFTEST" --persona nobody-here --timeout 3 2>&1)"; rc=$?
+if printf '%s' "$out" | grep -q "Run: ~/.claude/kijito-inbox-start.sh --persona nobody-here" \
+   && ! printf '%s' "$out" | grep -qE "Run: (launchctl|systemctl)"; then
+  grn "no supervisor installed => the restart line is kijito-inbox-start.sh (no launchctl/systemctl)"
+else
+  red "restart line on a supervisor-less Linux box: $(printf '%s' "$out" | grep 'Run:')"
+fi
+rm -rf "$H" "$SH"
+
 echo
 echo "passed: $pass   failed: $fail"
 [ "$fail" -eq 0 ] || exit 1

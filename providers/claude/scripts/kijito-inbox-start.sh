@@ -71,8 +71,11 @@ if [ -z "$TOKEN_FILE" ] || [ ! -s "$TOKEN_FILE" ]; then
 COULD NOT RUN: no Kijito API key for the monitor. If your agent signed in through OAuth (/mcp), there is
 no key on disk yet - the agent can mint one from its own session, with your OK:
   1. kijito_api_key(action="create", name="inbox monitor on $(hostname 2>/dev/null || echo this-host)",
-                    scopes=["memory.read"], persona="$PERSONA")
-     (it creates a durable, revocable read-only key; the secret is shown ONCE)
+                    scopes=["memory.read","memory.write"], persona="$PERSONA")
+     (a durable, revocable key; the secret is shown ONCE. The monitor itself only READS mail - memory.write
+      is there so this script can send you ONE real test message, which is a hive write. If you prefer a
+      read-only key, use scopes=["memory.read"]: the monitor works, and this script will then ask you to
+      send the test message from your agent instead.)
   2. save it to ~/.config/kijito-inbox-monitor/token and chmod 600 it - never into a memory or a message
   3. run this again
 EOF
@@ -82,14 +85,20 @@ fi
 echo "kijito inbox start [persona=$PERSONA]"
 # ── 4. a producer for this persona ─────────────────────────────────────────────────────────────────
 EVENTS=$(kijito_stream_for_persona "$PERSONA" 2>/dev/null || true)
-# Is a producer ALREADY covering THIS persona? "Some producer runs on this host" is not the question (on a
-# multi-persona seat it answers for somebody else). Either a process was started for this persona, or its
-# stream was written in the last 10 minutes (a producer that watches several personas carries no --persona
-# for each, but it heartbeats).
+# Is a RUNNING producer already covering THIS persona? "Some producer runs on this host" is not the question
+# (on a multi-persona seat it answers for somebody else), and "its stream was written recently" is not
+# either: that let a producer which had just died block its own restart for 10 minutes (river 10985).
+# Ask the process table (kijito_producer_covers). Only where it cannot be read at all (2) fall back to
+# the stream's age, and say so.
 _covered() {
-  if command -v pgrep >/dev/null 2>&1 \
-     && pgrep -f "kijito[-_]inbox[-_]monitor(\.py)? .*--persona[ =]$PERSONA( |\$)" >/dev/null 2>&1; then return 0; fi
-  [ -n "$EVENTS" ] && [ -n "$(find "$EVENTS" -mmin -10 2>/dev/null)" ]
+  local rc=0
+  kijito_producer_covers "$PERSONA" "$EVENTS" || rc=$?
+  [ "$rc" = 0 ] && return 0
+  if [ "$rc" = 2 ] && [ -n "$EVENTS" ] && [ -n "$(find "$EVENTS" -mmin -10 2>/dev/null)" ]; then
+    echo "  ??    could not list processes on this host; the stream was written in the last 10 min, so assuming a producer covers $PERSONA"
+    return 0
+  fi
+  return 1
 }
 if _covered; then
   echo "  ok    a producer already covers $PERSONA${EVENTS:+ (stream: $EVENTS)} - leaving it alone"
@@ -129,6 +138,13 @@ echo
 if [ "$st" = 0 ]; then
   echo "✓ PROVEN: a real message reached your stream and woke a consumer."
   exit 0
+fi
+# The self-test could not EXERCISE the path (exit 2: e.g. a read-only key cannot send the test message).
+# That is "something is missing, and the fix is printed above" - NOT "the monitor is not working", which
+# is what this said until river's M312 cold rerun (10985) caught it on a monitor that was working.
+if [ "$st" = 2 ]; then
+  echo "? NOT PROVEN YET: the self-test could not run its test (see above for exactly what is missing)."
+  exit 2
 fi
 # Only a CONSUMER-only failure is the expected state here; a message that never reached the stream is not.
 if ! printf '%s\n' "$out" | grep -q '^  ok    stream:'; then

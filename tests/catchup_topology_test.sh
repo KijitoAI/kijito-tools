@@ -60,7 +60,9 @@ cat > "$SHIMDIR/pgrep" <<'SHIM'
 # cannot be made to reproduce on demand.
 pat="$*"
 case "$pat" in
-  *"tail -n 0 -F"*) [ "${FAKE_ARMED:-0}" = 1 ] && { echo 4242; exit 0; }; exit 1 ;;
+  # 4241 stands in for the harness's `bash -c … eval` WRAPPER, whose argv carries the same pipeline;
+  # only 4242 is the real tail (see the ps shim below).
+  *"tail -n 0 -F"*) [ "${FAKE_ARMED:-0}" = 1 ] && { printf '4241\n4242\n'; exit 0; }; exit 1 ;;
   *)
     [ "${FAKE_PRODUCER:-0}" = 1 ] || exit 1
     # ⛔ THE -af FORM MUST CARRY AN ARGV, NOT JUST A PID (assay cert F1). The hook now asks a running
@@ -79,13 +81,54 @@ case "$pat" in
 esac
 SHIM
 chmod 0755 "$SHIMDIR/pgrep"
-trap 'rm -rf "$SHIMDIR"' EXIT
+
+cat > "$SHIMDIR/systemctl" <<'SHIM'
+#!/usr/bin/env bash
+# Fake systemctl: a kijito-inbox-monitor USER unit is installed only when FAKE_SYSTEMD_UNIT=1. Without it
+# this answers like a box with no user units (river 10985: the hook must not say "systemd" there).
+case "$*" in
+  *list-unit-files*kijito-inbox-monitor*) [ "${FAKE_SYSTEMD_UNIT:-0}" = 1 ] && echo "kijito-inbox-monitor@.service indirect enabled"; exit 0 ;;
+esac
+exit 1
+SHIM
+chmod 0755 "$SHIMDIR/systemctl"
+# Fake launchctl: the kijito job is loaded only when FAKE_LAUNCHD=1. Without this a test run ON A MAC sees
+# the seat's real launchd job and reports "launchd" where the fixture means "no supervisor".
+printf '#!/usr/bin/env bash\n[ "${FAKE_LAUNCHD:-0}" = 1 ] && exit 0; exit 1\n' > "$SHIMDIR/launchctl"
+chmod 0755 "$SHIMDIR/launchctl"
+
+cat > "$SHIMDIR/ps" <<'SHIM'
+#!/usr/bin/env bash
+# Fake ps for the consumer probe: `ps -o comm= -p N` and `ps -o etime= -p N`. 4241 is the wrapper
+# shell, 4242 the tail; FAKE_ARMED_AGE is the tail's etime (default 05:00 = a live Monitor's age).
+# Anything else goes to the real ps.
+if [ "${1:-}" = -o ] && [ "${3:-}" = -p ]; then
+  case "$2:$4" in
+    comm=:4241) echo bash ;; comm=:4242) echo tail ;;
+    # 1111 is the fake PRODUCER the pgrep shim names: its argv carries the persona it covers.
+    command=:1111) [ "${FAKE_PRODUCER:-0}" = 1 ] || exit 1
+                   echo "/usr/bin/python3 /home/u/.local/bin/kijito-inbox-monitor --persona ${FAKE_PRODUCER_PERSONA:-someone-else} --heartbeat 900" ;;
+    etime=:4241|etime=:4242) echo "${FAKE_ARMED_AGE:-05:00}" ;;
+    *) exit 1 ;;
+  esac
+  exit 0
+fi
+exec /bin/ps "$@"
+SHIM
+chmod 0755 "$SHIMDIR/ps"
+# A PATH with NO systemctl at all (row M418): this suite's shims minus systemctl, then a mirror of the real
+# PATH minus systemctl, so a seat that HAS systemd cannot leak its own binary into the case.
+NOSYSD="$(mktemp -d)"
+( for f in "$SHIMDIR"/*; do [ "${f##*/}" = systemctl ] || ln -s "$f" "$NOSYSD/${f##*/}"; done
+  IFS=:; for d in $PATH; do [ -d "$d" ] || continue; for f in "$d"/*; do n=${f##*/}
+    [ "$n" = systemctl ] && continue; [ -x "$f" ] && [ ! -e "$NOSYSD/$n" ] && ln -s "$f" "$NOSYSD/$n"; done; done )
+trap 'rm -rf "$SHIMDIR" "$NOSYSD"' EXIT
 
 # Run the hook with a synthetic HOME + project. Echoes its combined output.
 # $1=hook  $2=HOME  $3=project dir  (FAKE_PRODUCER / FAKE_ARMED come from the caller's env)
 run_hook() {
-  printf '{"source":"startup","cwd":"%s"}' "$3" \
-    | env -u TMUX -u TMUX_PANE -u KIJITO_AUTOCATCHUP PATH="$SHIMDIR:$PATH" HOME="$2" CLAUDE_PROJECT_DIR="$3" bash "$1" 2>/dev/null
+  printf '{"source":"%s","cwd":"%s"}' "${HOOK_SRC:-startup}" "$3" \
+    | env -u TMUX -u TMUX_PANE -u KIJITO_AUTOCATCHUP PATH="${HOOK_PATH:-$SHIMDIR:$PATH}" HOME="$2" CLAUDE_PROJECT_DIR="$3" bash "$1" 2>/dev/null
 }
 
 # Build a synthetic seat. $1=layout (linux|mac|none), $2=persona, $3=create events file? (yes|no)
@@ -138,10 +181,44 @@ check_hook() {
 
   # ---- C: no producer at all, Linux seat → systemd restart hint ----
   h="$(make_home linux river no)"
-  out="$(FAKE_PRODUCER=0 FAKE_ARMED=0 run_hook "$hook" "$h" "$proj")"
+  out="$(FAKE_SYSTEMD_UNIT=1 FAKE_PRODUCER=0 FAKE_ARMED=0 run_hook "$hook" "$h" "$proj")"
   if grep -q "producer: DOWN" <<<"$out" && grep -q "systemctl --user enable --now kijito-inbox-monitor@river" <<<"$out"; then
-    grn "$label: no producer on linux → DOWN with a systemd restart hint"
-  else red "$label: no producer on linux → missing DOWN or systemd hint"; bad=1; fi
+    grn "$label: no producer, systemd unit installed → DOWN with a systemd restart hint"
+  else red "$label: no producer, systemd unit installed → missing DOWN or systemd hint"; bad=1; fi
+  # ---- C2: the same seat with NO supervisor installed (river 10985: "UP (systemd)" on a box without it) ----
+  out="$(FAKE_SYSTEMD_UNIT=0 FAKE_PRODUCER=0 FAKE_ARMED=0 run_hook "$hook" "$h" "$proj")"
+  if grep -q "producer: DOWN" <<<"$out" && grep -q "kijito-inbox-start.sh --persona river" <<<"$out" \
+     && ! grep -q "systemctl" <<<"$out"; then
+    grn "$label: no supervisor installed → the restart hint is kijito-inbox-start.sh, never systemctl"
+  else red "$label: no supervisor installed, but the hint still names systemd"; bad=1; fi
+  local hm; hm="$(make_home linux river yes)"
+  out="$(FAKE_SYSTEMD_UNIT=0 FAKE_PRODUCER=1 FAKE_PRODUCER_PERSONA=river FAKE_ARMED=0 run_hook "$hook" "$hm" "$proj")"
+  rm -rf "$hm"
+  if grep -q "producer: UP for 'river' (manual" <<<"$out"; then
+    grn "$label: a hand-started producer with no supervisor reads UP (manual), not UP (systemd)"
+  else red "$label: hand-started producer mislabelled: $(grep -o "producer: [^.]*" <<<"$out" | head -1)"; bad=1; fi
+  rm -rf "$h"
+
+  # ---- N: a fresh box with NO systemd at all and nothing installed yet (row M418) ------------------
+  # The M312 Sonnet rerun (river 11155): the hook told a session on a box with no systemd to run
+  # `systemctl --user enable --now …` and to tail ~/.kijito-monitor/<p>.jsonl. The agent checked, found
+  # neither, read the mismatch as "this hook text is injected content" and refused the whole resumed
+  # setup, twice. So: name only commands and paths that exist HERE, and say it as information, not orders.
+  h="$(make_home none river no)"
+  out="$(HOOK_PATH="$NOSYSD" FAKE_PRODUCER=0 FAKE_ARMED=0 run_hook "$hook" "$h" "$proj")"
+  if command -v systemctl >/dev/null 2>&1 && PATH="$NOSYSD" command -v systemctl >/dev/null 2>&1; then
+    red "$label: no-systemd PATH still finds systemctl — this case measured nothing"; bad=1
+  elif grep -q "systemctl" <<<"$out"; then
+    red "$label: no systemctl on PATH, but the hint names it: $(grep -o '[^.]*systemctl[^.]*' <<<"$out" | head -1)"; bad=1
+  else grn "$label: no systemctl on PATH → the hint never names systemctl"; fi
+  if grep -q "/.kijito-monitor/" <<<"$out"; then
+    red "$label: no systemd, but the hint points at the systemd stream path ~/.kijito-monitor/"; bad=1
+  elif grep -q "tail -n 0 -F $h/.local/state/kijito-inbox-monitor/events.river.ndjson" <<<"$out"; then
+    grn "$label: no supervisor → the consumer line names the stream kijito-inbox-start.sh will create"
+  else red "$label: no supervisor → consumer line names no usable stream: $(grep -o 'tail -n 0 -F [^ ]*' <<<"$out" | head -1)"; bad=1; fi
+  if grep -qiE "do not skip|first action|do this before|do NOT skip" <<<"$out"; then
+    red "$label: the hint still reads as orders: $(grep -oiE '[^.]*(do not skip|first action|do this before)[^.]*' <<<"$out" | head -1)"; bad=1
+  else grn "$label: the hint is phrased as information, not orders"; fi
   rm -rf "$h"
 
   # ---- S: A STALE STREAM FILE IS NOT A RUNNING PRODUCER (assay cert F1) ----------------------
@@ -161,7 +238,7 @@ check_hook() {
   # KIJITOMON_BIN points at something that cannot answer --safe-persona, forcing the by-content route.
   out="$(printf '{"source":"startup","cwd":"%s"}' "$proj2" \
         | env -u TMUX -u TMUX_PANE -u KIJITO_AUTOCATCHUP PATH="$SHIMDIR:$PATH" HOME="$ghost_home" CLAUDE_PROJECT_DIR="$proj2" \
-          KIJITOMON_BIN=/bin/false FAKE_PRODUCER=1 FAKE_ARMED=0 \
+          KIJITOMON_BIN="$(type -P false)" FAKE_PRODUCER=1 FAKE_ARMED=0 \
           bash "$hook" 2>/dev/null)"
   if grep -q "UP for 'ghost'" <<<"$out"; then
     red "$label: stale stream → reported UP with no producer writing it (F1 regression)"; bad=1
@@ -174,11 +251,20 @@ check_hook() {
   # same fixture, but the running producer's argv names THIS persona.
   out="$(printf '{"source":"startup","cwd":"%s"}' "$proj2" \
         | env -u TMUX -u TMUX_PANE -u KIJITO_AUTOCATCHUP PATH="$SHIMDIR:$PATH" HOME="$ghost_home" CLAUDE_PROJECT_DIR="$proj2" \
-          KIJITOMON_BIN=/bin/false FAKE_PRODUCER=1 FAKE_PRODUCER_PERSONA=ghost FAKE_ARMED=0 \
+          KIJITOMON_BIN="$(type -P false)" FAKE_PRODUCER=1 FAKE_PRODUCER_PERSONA=ghost FAKE_ARMED=0 \
           bash "$hook" 2>/dev/null)"
   if grep -q "UP for 'ghost'" <<<"$out"; then
     grn "$label: live producer for this persona → by-content route still reports UP"
   else red "$label: live producer for this persona → by-content route no longer reports UP"; bad=1; fi
+  # A producer for a persona whose name merely STARTS with ours is not ours: "--persona ghostly" must not
+  # satisfy "--persona ghost" (the old inline grep -F matched it as a substring).
+  out="$(printf '{"source":"startup","cwd":"%s"}' "$proj2" \
+        | env -u TMUX -u TMUX_PANE -u KIJITO_AUTOCATCHUP PATH="$SHIMDIR:$PATH" HOME="$ghost_home" CLAUDE_PROJECT_DIR="$proj2" \
+          KIJITOMON_BIN="$(type -P false)" FAKE_PRODUCER=1 FAKE_PRODUCER_PERSONA=ghostly FAKE_ARMED=0 \
+          bash "$hook" 2>/dev/null)"
+  if ! grep -q "UP for 'ghost'" <<<"$out" && grep -qE "STALE|NOT running for 'ghost'" <<<"$out"; then
+    grn "$label: a producer for 'ghostly' does not count as covering 'ghost' (whole-argument match)"
+  else red "$label: a producer for 'ghostly' was taken as covering 'ghost'"; bad=1; fi
   rm -rf "$ghost_home" "$proj2"
 
   # ---- P: PERSONA-NAME PARITY (row M290) ----------------------------------------------------
@@ -237,6 +323,31 @@ check_hook() {
   if grep -q "do NOT blindly add another" <<<"$out"; then
     grn "$label: linux seat → existing consumer detected (no duplicate-arm advice)"
   else red "$label: linux seat → duplicate-consumer detection did not fire"; bad=1; fi
+  # The harness's wrapper shell carries the same argv; counting it made one Monitor read as several.
+  if grep -q "4242 (up 5 min)" <<<"$out" && ! grep -q "4241" <<<"$out"; then
+    grn "$label: consumer list names only the real tail, with its age (wrapper shell excluded)"
+  else red "$label: consumer list counted the wrapper shell or lost the age"; bad=1; fi
+  if ! grep -q "LEAKED ORPHANS" <<<"$out"; then
+    grn "$label: a 5-min-old tail is not called an orphan"
+  else red "$label: a live-aged tail was called an orphan"; bad=1; fi
+
+  # ---- F: only tails older than the 30-min Monitor cap → say they may be leaked orphans [35702] ----
+  out="$(FAKE_PRODUCER=1 FAKE_ARMED=1 FAKE_ARMED_AGE=1-02:03:04 run_hook "$hook" "$h" "$proj")"
+  # ⛔ NOT AN ORPHAN ON LINUX/macOS (river's 0.2.11 review, MEDIUM-1): only Windows leaks a tail when its
+  # Monitor expires, so here a >30-min tail is a persistent Monitor - possibly a sibling's LIVE consumer -
+  # and the hook must never advise killing it. (The Windows wording is pinned in windows_detect_test.sh.)
+  if grep -q "4242 (up 1563 min)" <<<"$out" && grep -q 'belongs to a "persistent" Monitor' <<<"$out" \
+     && ! grep -q "LEAKED ORPHANS" <<<"$out" && ! grep -q "kill <pid>" <<<"$out"; then
+    grn "$label: tails older than 30 min on POSIX → named as persistent Monitors (with the age), never 'kill by pid'"
+  else red "$label: a >30-min POSIX tail is called an orphan or a kill is advised: $(grep -iE 'orphan|kill|persistent' <<<"$out" | head -2)"; bad=1; fi
+  if ! grep -q "YOUR OWN pre-reset Monitor" <<<"$out"; then
+    grn "$label: on a fresh startup the old tails are not suggested to be your own"
+  else red "$label: a fresh startup was told an old tail may be its own pre-reset Monitor"; bad=1; fi
+  # After /clear the agent cannot see its own arming result: an old tail may be its persistent Monitor.
+  out="$(HOOK_SRC=clear FAKE_PRODUCER=1 FAKE_ARMED=1 FAKE_ARMED_AGE=1-02:03:04 run_hook "$hook" "$h" "$proj")"
+  if grep -q "YOUR OWN pre-reset Monitor" <<<"$out" && grep -q 'belongs to a "persistent" Monitor' <<<"$out"; then
+    grn "$label: after /clear, a >30-min tail is flagged AND named as possibly your own pre-clear Monitor"
+  else red "$label: after /clear the old-tail warning lacks the may-be-your-own caveat"; bad=1; fi
   rm -rf "$h" "$proj"
 
   return $bad

@@ -247,6 +247,62 @@ lc_heartbeat_running() {                                 # $1 = pane id
 lc_env_armed()    { [ "${KIJITO_AUTOCATCHUP:-0}" = "1" ]; }
 lc_is_armed()     { lc_marker_armed "${1:-}" || lc_env_armed; }
 
+# ── M437: ONLY THE PANE'S OWN CLAUDE MAY AUTOSEND ────────────────────────────────────────────────
+# lc_hook_owns_pane <pane> -> 0 the Claude Code process that ran this hook is the pane's own interactive
+# session, 1 it is NOT (headless `-p`/`--print`, or a claude with no controlling tty - a child of some tool
+# shell), 2 COULD NOT MEASURE (wtmux pane, no ps, no claude ancestor found, tmux silent, a real tty that is not
+# the pane's): callers keep their old behaviour on 2, so this can only ever REMOVE a send, never block the
+# loop on a host it cannot read.
+# ⚠️ WHY (river, 2026-10-02): headless `claude -p` sessions run by a subagent in an ARMED pane inherited
+# TMUX_PANE, so each one's SessionStart hook autosent the catch-up prompt into the live conversation.
+# ⛔ NOT BY SESSION ID: /clear rotates CLAUDE_CODE_SESSION_ID (above), and the post-/clear session is the one
+# that MUST autosend. What survives /clear is the terminal: the pane's claude holds #{pane_tty}; a claude
+# started from a Bash-tool shell has no controlling tty at all (measured: those shells show tty "?").
+lc_hook_owns_pane() {
+  local pane=${1:-} p=$PPID i=0 found="" comm tty ptty tok
+  local -a argv=()
+  case "$pane" in ''|wtmux-*) return 2 ;; esac
+  command -v ps >/dev/null 2>&1 && command -v tmux >/dev/null 2>&1 || return 2
+  while [ "$i" -lt 16 ]; do
+    case "$p" in ''|*[!0-9]*) return 2 ;; esac
+    [ "$p" -gt 1 ] || break
+    comm=$(ps -o comm= -p "$p" 2>/dev/null) || break
+    _lc_argv "$p"
+    # The claude PROGRAM: its own name, or the script/entry point an interpreter runs (node .../cli.js, a
+    # wrapper script named claude). Never "claude" merely appearing in a command string: a Bash-tool shell
+    # whose -c text mentions claude is not one (river's review, LOW-4).
+    if [ "${comm##*/}" = claude ] || [ "${argv[0]##*/}" = claude ]; then found=1; break; fi
+    case "${argv[0]##*/}" in
+      node|bun|bash|sh|zsh|python|python3)
+        case "${argv[1]:-}" in */claude|claude|*claude-code/cli*) found=1; break ;; esac ;;
+    esac
+    p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' '); i=$((i + 1))
+  done
+  [ -n "$found" ] || return 2
+  # -p / --print as WHOLE argv tokens: a prompt that merely contains " -p " is one token, not the flag.
+  for tok in "${argv[@]}"; do case "$tok" in -p|--print|--print=*) return 1 ;; esac; done
+  tty=$(ps -o tty= -p "$p" 2>/dev/null | tr -d ' ')
+  case "$tty" in ''|'?'|'??'|-) return 1 ;; esac            # Linux "?", macOS "??": no controlling tty
+  ptty=$(tmux display-message -p -t "$pane" '#{pane_tty}' 2>/dev/null)
+  [ -n "$ptty" ] || return 2
+  [ "/dev/${tty#/dev/}" = "$ptty" ] && return 0
+  # A REAL tty that is not the pane's (claude under screen/script inside tmux): not one of M437's signals, so
+  # "could not tell" - behave as before rather than silently stall an armed owner's loop (river, LOW-4).
+  return 2
+}
+# _lc_argv <pid> -> sets the array argv to that process's arguments: exact tokens from /proc (Linux), else
+# the ps command line split on whitespace (macOS; a quoted argument with spaces splits, which only matters
+# for a prompt that contains a bare -p - the residual edge, recorded in the review).
+_lc_argv() {
+  argv=()
+  if [ -r "/proc/$1/cmdline" ]; then
+    local a
+    while IFS= read -r -d '' a; do argv+=("$a"); done < "/proc/$1/cmdline"
+    [ "${#argv[@]}" -gt 0 ] && return 0
+  fi
+  read -r -a argv <<<"$(ps -o args= -p "$1" 2>/dev/null)"
+}
+
 # qa-token is SESSION-keyed (correct: each post-/clear session must earn its OWN fresh QA pass).
 lc_qa_token()   { echo "$KIJITO_LC_DIR/qa-pass.${CLAUDE_CODE_SESSION_ID:-nosession}"; }
 # The cycle counter is PANE-keyed: /clear ROTATES CLAUDE_CODE_SESSION_ID (verified live: 1c5947c1→

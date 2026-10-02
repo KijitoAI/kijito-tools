@@ -99,6 +99,7 @@ jobs:
         run: |
           bash tests/install_stranger_path_test.sh
           bash tests/inbox_start_test.sh
+          bash tests/no_operator_endpoints_test.sh
 
       - name: codex skills deploy
         run: |
@@ -110,6 +111,7 @@ jobs:
         run: |
           bash tests/lc_test.sh
           bash tests/wtmux_lifecycle_test.sh
+          bash tests/autosend_owner_test.sh
       - name: heartbeat, inbox self-test and status-line suites (rows M290 M304 M309 M291)
         run: |
           bash tests/heartbeat_nonce_test.sh
