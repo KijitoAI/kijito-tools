@@ -212,6 +212,11 @@ loop, because a count measures uptime, not runaway. If a runaway ever needs catc
 (consecutive cycles landing no commits and no memories) rather than the count.
 
 It then runs `/clear`. The SessionStart hook catches the new session up and it resumes from the note.
+Only the pane's own interactive Claude Code session sends that first prompt. A headless `claude -p` /
+`--print`, or any claude without the pane's terminal (for example one a subagent starts from a tool shell),
+inherits the pane's `TMUX_PANE` but does not send. The lifecycle log records it as
+`autosend=SKIPPED reason=not-pane-owner`. When the hook cannot tell (no `ps`, a wtmux pane, or a claude
+under its own pty such as `screen`), it sends as before.
 To stop all autonomous sending and clearing, create the file `~/.claude/.lifecycle/STOP`.
 
 ## Running without Kijito

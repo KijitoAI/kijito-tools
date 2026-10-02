@@ -124,6 +124,10 @@ kijito_host_is_windows() {
 
 # _kijito_win_count <Where-Object filter> -> prints how many native Windows processes match; returns 2
 # (and prints nothing) when PowerShell is absent or its answer is not a number.
+# ⛔ THE FILTER IS CODE: never interpolate a caller-supplied value into it (river's 0.2.11 review, MEDIUM-2:
+# a persona from a cloned repo's .kijito_persona reached `-like '*--persona $p*'`, so `x' -or (iwr …|iex)
+# -or 'y` ran inside Where-Object). Pass the value in $KIJITO_PS_ARG and read it as $env:KIJITO_PS_ARG -
+# PowerShell then treats it as data, and [regex]::Escape / .Contains keep it literal.
 _kijito_win_count() {
   local psh n
   psh=$(command -v powershell.exe 2>/dev/null || command -v powershell 2>/dev/null \
@@ -177,7 +181,8 @@ kijito_producer_covers() {
   local p=${1:-} ev=${2:-} line n
   [ -n "$p" ] || return 1
   if kijito_host_is_windows; then
-    n=$(_kijito_win_count "\$_.CommandLine -match 'kijito_inbox_monitor\.py|kijito-inbox-monitor\.exe|bin[\\/]kijito-inbox-monitor' -and @('tail.exe','grep.exe','bash.exe','sh.exe','powershell.exe','pwsh.exe') -notcontains \$_.Name -and (\$_.CommandLine -like '*--persona $p*' -or \$_.CommandLine -like '*--all-personas*')") || return 2
+    # --persona as a WHOLE argument (LOW-3: '*--persona river*' also matched 'riverbank'), optionally quoted.
+    n=$(KIJITO_PS_ARG="$p" _kijito_win_count "\$_.CommandLine -match 'kijito_inbox_monitor\.py|kijito-inbox-monitor\.exe|bin[\\/]kijito-inbox-monitor' -and @('tail.exe','grep.exe','bash.exe','sh.exe','powershell.exe','pwsh.exe') -notcontains \$_.Name -and (\$_.CommandLine -match ('--persona[\s=]+\"?' + [regex]::Escape(\$env:KIJITO_PS_ARG) + '\"?(\s|\$)') -or \$_.CommandLine -like '*--all-personas*')") || return 2
     [ "$n" -gt 0 ] && return 0
     return 1
   fi
@@ -241,7 +246,7 @@ kijito_stream_consumed() {
   if kijito_host_is_windows; then
     # Only tail.exe counts (the same anchor as below); its command line must carry the follow flags and
     # this stream's basename. A basename is a literal, so match it with -like, never as a regex.
-    n=$(_kijito_win_count "\$_.Name -eq 'tail.exe' -and \$_.CommandLine -match '-n\s+0\s+-F' -and \$_.CommandLine -like '*$b*'") || return 2
+    n=$(KIJITO_PS_ARG="$b" _kijito_win_count "\$_.Name -eq 'tail.exe' -and \$_.CommandLine -match '-n\s+0\s+-F' -and \$_.CommandLine.Contains(\$env:KIJITO_PS_ARG)") || return 2
     [ "$n" -gt 0 ] && return 0
     return 1
   fi
@@ -276,8 +281,8 @@ kijito_stream_consumers() {
   if kijito_host_is_windows; then
     psh=$(command -v powershell.exe 2>/dev/null || command -v powershell 2>/dev/null \
           || command -v pwsh 2>/dev/null) || return 2
-    out=$("$psh" -NoProfile -NonInteractive -Command \
-      "Get-CimInstance Win32_Process | Where-Object { \$_.Name -eq 'tail.exe' -and \$_.CommandLine -match '-n\s+0\s+-F' -and \$_.CommandLine -like '*$b*' } | ForEach-Object { '{0} {1}' -f \$_.ProcessId, [int]((Get-Date) - \$_.CreationDate).TotalSeconds }" \
+    out=$(KIJITO_PS_ARG="$b" "$psh" -NoProfile -NonInteractive -Command \
+      "Get-CimInstance Win32_Process | Where-Object { \$_.Name -eq 'tail.exe' -and \$_.CommandLine -match '-n\s+0\s+-F' -and \$_.CommandLine.Contains(\$env:KIJITO_PS_ARG) } | ForEach-Object { '{0} {1}' -f \$_.ProcessId, [int]((Get-Date) - \$_.CreationDate).TotalSeconds }" \
       2>/dev/null | tr -d '\r') || return 2
     while read -r p e; do
       case "$p" in ''|*[!0-9]*) continue ;; esac

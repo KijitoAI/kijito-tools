@@ -82,7 +82,7 @@ cat > "$SH/curl" <<'SHIM'
 printf '403'; exit 0
 SHIM
 chmod +x "$SH/curl"
-out="$(HOME="$H" KIJITOMON_TOKEN_FILE="$H/.claude_token" KIJITOMON_BIN=/bin/false PATH="$SH:$PATH" \
+out="$(HOME="$H" KIJITOMON_TOKEN_FILE="$H/.claude_token" KIJITOMON_BIN="$(type -P false)" PATH="$SH:$PATH" \
         "$SELFTEST" --persona rotester --timeout 3 2>&1)"; rc=$?
 if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q "cannot SEND" \
    && printf '%s' "$out" | grep -q 'kijito_hive_send(persona="rotester", to="rotester"' \

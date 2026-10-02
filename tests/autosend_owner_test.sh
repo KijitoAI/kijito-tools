@@ -50,6 +50,12 @@ echo "--- print-long"       >> "$T/lc/lifecycle.log"; bash "$T/claude" --print "
 if [ -n "$_setsid" ]; then
   echo "--- no-tty"         >> "$T/lc/lifecycle.log"; setsid -w bash "$T/claude" --model opus < /dev/null
 fi
+if [ -r /proc/self/cmdline ]; then
+  echo "--- prompt-with-p" >> "$T/lc/lifecycle.log"; bash "$T/claude" --model opus "explain git log -p output"
+fi
+if script --version 2>/dev/null | grep -q util-linux; then
+  echo "--- own-pty"        >> "$T/lc/lifecycle.log"; script -qec "bash '$T/claude' --model opus" /dev/null > /dev/null
+fi
 echo done > "$T/done"
 sleep 30
 EOF
@@ -78,6 +84,18 @@ if [ -n "$_setsid" ]; then
   elif grep -q "autosend=SKIPPED.*not-pane-owner" <<<"$v"; then grn "a claude with no controlling tty (a tool-shell child, no -p) is skipped"
   else red "no-tty: unexpected hook verdict: ${v:-<no HOOK line>}"; fi
 else echo "  skip  no setsid on this host - the no-tty case is covered on Linux CI"; fi
+
+# River's 0.2.11 review, LOW-4: neither edge may suppress a real owner.
+if [ -r /proc/self/cmdline ]; then
+  v=$(verdict prompt-with-p)
+  if grep -q "autosend=ARMED" <<<"$v"; then grn "a prompt that merely CONTAINS ' -p ' is not the -p flag (whole argv tokens)"
+  else red "a prompt containing ' -p ' suppressed the owner: ${v:-<no HOOK line>}"; fi
+fi
+if script --version 2>/dev/null | grep -q util-linux; then
+  v=$(verdict own-pty)
+  if grep -q "autosend=ARMED" <<<"$v"; then grn "a claude under its own pty (screen/script in tmux) is 'could not tell' - old behaviour, not a silent stall"
+  else red "a claude under its own pty was suppressed: ${v:-<no HOOK line>}"; fi
+fi
 
 echo
 echo "passed: $pass   failed: $fail"

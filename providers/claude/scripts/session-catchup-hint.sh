@@ -339,6 +339,29 @@ fi
 # its OWN persistent Monitor (river's review of 0.2.11). Say so rather than calling every old tail an orphan.
 _own_note=""
 case "$src" in clear|compact) _own_note=" — and this session was just reset, so one of them may be YOUR OWN pre-reset Monitor, whose result line you can no longer see" ;; esac
+# THE >30-MIN NOTE DEPENDS ON THE HOST (river's 0.2.11 release review, MEDIUM-1). Only Windows/Git Bash
+# leaks a tail when its Monitor expires ([35702]), so only there is an old tail likely an orphan. On macOS and
+# Linux an expired Monitor takes its tail with it: a tail older than 30 min belongs to a PERSISTENT Monitor,
+# i.e. somebody's LIVE consumer - measured on the Mac, where this note named vellum's live tail and told a
+# new session to kill it. Never advise stopping a tail by pid there. (Built outside the heredoc so the quoted
+# "expires in 30m" / "persistent" survive - inside ${var:+...} the double quotes were eaten.)
+_stale_note=""
+if [ -n "${_stale_only:-}" ]; then
+  if command -v kijito_host_is_windows >/dev/null 2>&1 && kijito_host_is_windows; then
+    _stale_note='
+⚠️ EVERY tail listed is older than 30 min. A Monitor whose arming result read "expires in 30m" cannot own
+any of them — on such a session they are LEAKED ORPHANS that wake nobody (Windows/Git Bash does not kill
+a tail when its Monitor expires). Only a Monitor whose result read "persistent" can outlive 30 min'"${_own_note}"'.
+If you cannot confirm one of yours read "persistent", the safe move is the same either way: stop these BY
+PID (kill <pid>), never by pattern, and arm one fresh — you end with exactly one consumer you KNOW wakes you.'
+  else
+    _stale_note='
+Every tail listed is older than 30 min. On this host an expired Monitor takes its tail with it, so each of
+these belongs to a "persistent" Monitor: yours, or a sibling session'"'"'s LIVE consumer'"${_own_note}"'.
+Do NOT stop any of them unless it is in YOUR OWN task list - stopping a sibling'"'"'s tail silently cuts its
+mail. If none is yours, arm one for yourself as above; two consumers on one stream is the lesser fault.'
+  fi
+fi
 if [ -n "$_safe" ] && [ -n "$_armed" ]; then
 cat <<EOF
 
@@ -352,12 +375,7 @@ task list:
   • You have NO inbox Monitor (brand-new session; the tail is a sibling's or a leaked orphan that will
     NOT wake YOU) → arm exactly one for yourself:
       Monitor(command="tail -n 0 -F $_events | grep --line-buffered -E '\"event\": ?\"(new|alert|recovered|state_corrupt|baseline_skipped|seed_ahead|replay_capped|persona_added|still_unread)\"'", persistent=true)
-Dedupe with TaskStop (agent-scoped), NOT \`pkill -f …events…\` (that can kill a sibling's or your own live consumer).${_stale_only:+
-⚠️ EVERY tail listed is older than 30 min. A Monitor whose arming result read "expires in 30m" cannot own
-any of them — on such a session they are LEAKED ORPHANS that wake nobody (Windows/Git Bash does not kill
-a tail when its Monitor expires). Only a Monitor whose result read "persistent" can outlive 30 min${_own_note}.
-If you cannot confirm one of yours read "persistent", the safe move is the same either way: stop these BY
-PID (kill <pid>), never by pattern, and arm one fresh — you end with exactly one consumer you KNOW wakes you.} $_prod
+Dedupe with TaskStop (agent-scoped), NOT \`pkill -f …events…\` (that can kill a sibling's or your own live consumer).$_stale_note $_prod
 EOF
 elif [ -n "$_safe" ]; then
 cat <<EOF
