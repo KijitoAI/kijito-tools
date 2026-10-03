@@ -13,7 +13,7 @@ order. A compaction handoff is not valid until Phase 4 passes twice.
 Enumerate every durable decision, finding, state change, user preference,
 failure mode, reusable command, and gate result learned since the last QA pass.
 For each candidate, recall before writing and create one atomic memory only when
-it is missing. Pass `persona="codex"` and `project="Codex"` on every write.
+it is missing. Pass your `persona` and `project` (from your project instructions) on every write.
 Use honest basis, confidence, and importance.
 
 Ask both questions explicitly, and answer both before leaving this phase:
@@ -60,7 +60,7 @@ dream again after the pointer is preloaded.
 
 Update the stable current-state pointer in place. Open with:
 
-`RESUME NOW [CODEX_CURRENT_STATE_POINTER_V1]: <one exact next action>`
+`RESUME NOW [<PERSONA>_CURRENT_STATE_POINTER_V1]: <one exact next action>`
 
 Include the single active task, done versus remaining work, current adversarial
 gate count, exact next steps, DONE-WHEN, and linked anchor IDs. If the work is
@@ -83,9 +83,9 @@ Spawn a fresh context-free agent with no conversation fork. Give it only:
 
 > Run this exact pointer-digest command immediately before reading Kijito:
 > `<EXACT HOOK-EMITTED POINTER-DIGEST COMMAND>`. Record its pointer ID and
-> lowercase digest. Then connect to Kijito as persona `codex`, project `Codex`.
+> lowercase digest. Then connect to Kijito as persona `<persona>`, project `<project>`.
 > Call `kijito_startup`, then call
-> `kijito_recall(query="CODEX_CURRENT_STATE_POINTER_V1 RESUME NOW", scope="project", project="Codex", full=true)`.
+> `kijito_recall(query="<PERSONA>_CURRENT_STATE_POINTER_V1 RESUME NOW", scope="project", project="<project>", full=true)`.
 > Require one unambiguous top current-state result whose ID equals the pointer
 > ID embedded in the supplied digest command; otherwise fail immediately.
 > Scan every returned live memory and fail if any body other than the selected
