@@ -1,8 +1,9 @@
 # The upstream release providers/monitor is a byte-exact copy of (row M314).
 # Written by scripts/import-monitor.sh; verified by tests/vendored_monitor_test.sh. Never hand-edit.
 repo=KijitoAI/kijito-inbox-monitor
-sha=271c7ba57e6fc2f185ac51dc3b605bf17c72988b
+sha=3c46322f28c6c774b3f9b427f480e69af8051e5a
 tree=b07bd2421158565e2e232f621cb3aafe27fb76ce
+tag=v0.5.14
 file=100644 8d88ccb0fd09b9144505f985b4f882db278fac1f .github/workflows/publish-npm.yml
 file=100644 19ce3471a2cffa689be9d261049c1e74e3e7a25e .github/workflows/publish-pypi.yml
 file=100644 4534290a5dd36d18d07a782b784b6b0ad5ee38fc .gitignore
