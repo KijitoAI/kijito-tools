@@ -189,5 +189,58 @@ printf '%s\n' '# TWO CALLERS, TWO CONTRACTS, ONE VERDICT FUNCTION (river 11625, 
 if [ -z "$(sscan "$T")" ]; then grn "control: allowed - test data and a persona provenance tag"
 else red "control: wrongly flagged:"; printf '        %s\n' "$(sscan "$T")"; fi
 
+# ── M459, whole payload: everything `npm pack` publishes names no operator and claims no authority ─────────
+# river 11641: gate_M459 scans the PUBLISHED tarball, and failed on 0.2.13 because a codex test script shipped the
+# operator's name while the code-file scan above excluded test files. So this section reads the file list from
+# `npm pack --dry-run --json` - the exact set a user downloads - with NO path exclusions. The only lines allowed
+# are attribution, each matched by file AND exact content, so a name added anywhere else still fails.
+ALLOWED_ATTRIBUTION=$(cat <<'ALLOW'
+LICENSE|   Copyright 2026 Arcada Labs
+NOTICE|Copyright 2026 Arcada Labs
+NOTICE|This product includes software developed by Arcada Labs (https://kijito.ai).
+README.md|Apache 2.0. Copyright 2026 Arcada Labs. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+providers/monitor/NOTICE|Copyright 2026 Arcada Labs
+providers/monitor/NOTICE|This product includes software developed at Arcada Labs.
+providers/monitor/README.md|Apache License 2.0. See [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE). Copyright 2026 Arcada Labs.
+providers/monitor/pyproject.toml|authors = [{ name = "Arcada Labs", email = "jason@arcadalabs.com" }]
+providers/monitor/test_kijito_monitor.py|    ALLOWED = {("pyproject.toml", 'authors = [{ name = "Arcada Labs", email = "' + "ja" + 'son@arcadalabs.com" }]')}
+ALLOW
+)
+pscan() {  # $1 = root, $2 = file listing the payload paths (one per line); prints offending file:line matches
+  (cd "$1" && tr '\n' '\0' < "$2" | xargs -0 -r grep -nHI "" 2>/dev/null \
+     | perl -CSD -pe 's/[\x{2010}-\x{2015}]/-/g; s/[\x{00A0}\x{202F}\x{2007}]/ /g' | grep -iE "$SPAT" \
+     | while IFS= read -r hit; do
+         f=${hit%%:*}; rest=${hit#*:}; text=${rest#*:}
+         grep -qxF -- "$f|$text" <<<"$ALLOWED_ATTRIBUTION" || printf '%s\n' "$hit"
+       done)
+}
+echo "the whole npm payload names no operator and claims no authority (M459, payload):"
+if ! command -v npm >/dev/null 2>&1; then red "npm is not installed - the payload scan cannot run, and a scan that cannot run is not a pass"
+else
+  PL="$T/payload.txt"
+  (cd "$REPO" && npm pack --dry-run --json 2>/dev/null) \
+    | python3 -c 'import json,sys; [print(f["path"]) for f in json.load(sys.stdin)[0]["files"]]' > "$PL" 2>/dev/null
+  n=$(grep -c . "$PL" 2>/dev/null || echo 0)
+  if [ "$n" -lt 50 ]; then red "npm pack listed only $n files - the payload listing failed, so nothing was scanned"
+  else
+    hits=$(pscan "$REPO" "$PL")
+    if [ -z "$hits" ]; then grn "all $n published files: no operator name or authority claim outside the attribution lines"
+    else red "operator-specific text in the published payload:"; printf '        %s\n' "$hits" | cut -c1-200; fi
+  fi
+  # Controls: a planted name anywhere in the payload is caught; an attribution line is allowed only where it belongs.
+  mkdir -p "$T/pl/providers/codex/test"
+  printf '%s\n' 'must_contain "$plan" "If Jason'"'"'s installed build exposes no such independently"' > "$T/pl/providers/codex/test/x.sh"
+  printf '%s\n' 'Copyright 2026 Arcada Labs' > "$T/pl/NOTICE"
+  printf '%s\n' 'Copyright 2026 Arcada Labs' > "$T/pl/install.sh"
+  printf '%s\n' providers/codex/test/x.sh NOTICE install.sh > "$T/pl.txt"
+  got=$(pscan "$T/pl" "$T/pl.txt")
+  if grep -q '^providers/codex/test/x.sh:' <<<"$got"; then grn "control: a name in a shipped test script is caught"
+  else red "control: MISSED a name in a shipped test script"; fi
+  if grep -q '^NOTICE:' <<<"$got"; then red "control: an allowed attribution line was flagged"
+  else grn "control: the NOTICE attribution line is allowed"; fi
+  if grep -q '^install.sh:' <<<"$got"; then grn "control: the same attribution text in another file is still caught"
+  else red "control: attribution text was allowed outside its own file"; fi
+fi
+
 echo; echo "passed: $pass   failed: $fail"
 [ "$fail" -eq 0 ]
