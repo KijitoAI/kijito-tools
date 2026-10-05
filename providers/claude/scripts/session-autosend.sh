@@ -80,8 +80,8 @@ else
   # the text visible at the bottom — a plain shell echoing input, a narrow pane, an unusual theme —
   # produces a false negative on a delivery that actually worked.
   # ⇒ Say what was observed, never more. Claiming "the loop is NOT running" when the loop may be
-  # perfectly fine is exactly the wrong-diagnosis-costs-more failure argus and I have both been
-  # chasing tonight; a confident wrong log entry sends the next reader hunting the wrong thing.
+  # perfectly fine is exactly the wrong-diagnosis-costs-more failure this log exists to
+  # avoid; a confident wrong log entry sends the next reader hunting the wrong thing.
   lc_log AUTOSEND_UNCONFIRMED "sent 3 Enters; prompt tail still visible at the bottom of the pane — delivery NOT confirmed (it may still have worked; check the pane before acting)"
 fi
 exit 0

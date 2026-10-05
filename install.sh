@@ -19,7 +19,7 @@
 # `pipx run kijito-tools` both land here with no arguments, and they have been installing the
 # Claude toolkit since 0.1.0. Changing the default would silently retarget every existing user.
 #
-# ⚠️ ROLLOUT SAFETY — WHY --from-main EXISTS (two independent wrongs, measured 2026-08-08 by assay):
+# ⚠️ ROLLOUT SAFETY — WHY --from-main EXISTS (two independent wrongs, measured 2026-08-08 in review):
 #   (1) the installer COPIES files into ~/.claude — a deployed hook/skill is a COPY, not a symlink,
 #       so it NEVER tracks the repo after install; and
 #   (2) the install reads the CURRENT WORKING TREE, whose bytes follow whatever branch is checked

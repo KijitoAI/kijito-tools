@@ -4,7 +4,7 @@
 # "newest file" guessing), then reads the API's own token ledger (== /context).
 #
 # ⛔ THIS SCRIPT USED TO PRINT A CONFIDENT `0.0%` WHEN IT COULD NOT MEASURE, AND THAT IS WRONG IN
-# THE ONE DIRECTION THAT COSTS SOMETHING. Found by ladybug 2026-08-01, hit live at a session start.
+# THE ONE DIRECTION THAT COSTS SOMETHING. Found 2026-08-01, hit live at a session start.
 # On the FIRST tool call of a session the transcript carries no assistant row with `.message.usage`
 # yet; `last // {}` then yields `{}`, the arithmetic gives 0, and the output read:
 #     context: 0 tok = 0.0% of 1000k   (free: 100.0%, ~1000000 tok)

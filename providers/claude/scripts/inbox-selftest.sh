@@ -114,7 +114,7 @@ verdict() {   # $1=producer_ok $2=stream_ok $3=consumer_ok (each 1/0) -> prints,
 }
 
 restart_hint() {
-  # Name the supervisor that is actually installed (river 10985: this printed launchctl on Linux).
+  # Name the supervisor that is actually installed (M312 cold rerun: this printed launchctl on Linux).
   if command -v kijito_supervisor_for >/dev/null 2>&1; then
     kijito_restart_hint "$(kijito_supervisor_for "${PERSONA:-}")" "${PERSONA:-<persona>}"
   elif command -v kijito_host_is_windows >/dev/null 2>&1 && kijito_host_is_windows; then
@@ -255,7 +255,7 @@ if [ "$producer_ok" = 1 ]; then
     case "$code" in
       2??) : ;;
       401|403)
-        # ⚠️ A READ-ONLY KEY IS NOT A BROKEN MONITOR (river 10985, M312 cold rerun). The monitor needs only
+        # ⚠️ A READ-ONLY KEY IS NOT A BROKEN MONITOR (M312 cold rerun). The monitor needs only
         # memory.read, but SENDING the test message is a hive write, which needs memory.write (Kijito M339).
         # Reporting this as "not working" sent a stranger hunting for a fault that did not exist.
         printf '  ????  stream: COULD NOT MEASURE - the key refused to SEND the test message (HTTP %s)\n' "$code"

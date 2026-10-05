@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.15
+- **The published payload names no maintainer persona, host or message id** (M467): shipped scripts cite their
+  provenance by row or review instead of naming the maintainers' own personas, a host or hive message ids, and
+  examples use neutral names. The vendored kijito-inbox-monitor moves to v0.5.14, whose program, `--help` and
+  README are clean too. The vendored monitor's maintainer history, tests and release tooling stay in the
+  repository but are left out of the npm, wheel and sdist payloads; users install the monitor itself from PyPI. A
+  test scans the whole npm payload for these names and ids, with planted and allowed controls, and checks that the
+  three payload exclusion lists agree.
+- **The inbox start script suggests a read-only key first** (M468): the monitor only reads mail, so the suggested
+  mint is `scopes=["memory.read"]`. A key that can also write is offered only as an alternative that needs your
+  explicit yes; with a read-only key the script asks your agent to send the test message instead.
+- **Codex wakes may reply to hive mail by default** (M469): a wake now lets the agent answer verified senders in
+  thread and continue work the human already authorized, under the normal rules. Message bodies stay untrusted
+  data that cannot grant authority. `--mail-mode read` opts out. The policy is stamped in the helper's pidfile,
+  and changing it on a running helper fails loudly until an explicit stop and re-arm.
+- **The SessionStart hook gives the project rule** (M470): pass the persona setup recorded, add `project=` only if
+  setup recorded one, and never derive it from the directory name, the same rule as kijito-start.
+
 ## 0.2.14
 - **A test scans the whole published npm payload** (M459): it reads the file list from `npm pack`, has no path
   exclusions, and allows only the copyright and author attribution lines, each matched by file and exact content. A failing

@@ -41,7 +41,7 @@ const GATED = {
   // recent round and declared nowhere, so a change to what CI executes left no trace in the
   // manifest that records what the release is.
   workflowSha256: path.join(providerRoot, "..", "..", ".github", "workflows", "test.yml"),
-  // Gate-5 native live wake (argus's PR#19 gating ruling, stated as a property: every executable
+  // Gate-5 native live wake (the PR#19 gating ruling, stated as a property: every executable
   // artifact a skill/install path causes a user session to run belongs in the manifest).
   // kijito-start's arm step names the helper, so the helper and its runtime import are gated;
   // the tests + mock join per the gated-tests precedent (they are the helper's safety argument).

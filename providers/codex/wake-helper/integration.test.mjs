@@ -216,7 +216,7 @@ test("producer stream vanishing mid-run -> gasp turn + loud exit 4", async () =>
   assert.equal(code, 4);
   assert.match(child.stdoutText, /producer-stream-vanished/);
   const gasps = daemon.turnStarts().filter((t) => t.params.input[0].text.includes("KIJITO WAKE HELPER NOTICE"));
-  assert.equal(gasps.length, 1, "death must be visible in-session (assay §6-row-5 ruling)");
+  assert.equal(gasps.length, 1, "death must be visible in-session (§6-row-5 ruling)");
   assert.match(gasps[0].params.input[0].text, /catch-up-only/);
   await daemon.close();
 });
@@ -294,7 +294,7 @@ test("SIGTERM -> gasp + pidfile cleanup (graceful path of §6 row 5)", async () 
   await daemon.close();
 });
 
-// ── F1 regression (argus PR#19 review): a stale "armed" line from a PREVIOUS run in the
+// ── F1 regression (PR#19 review): a stale "armed" line from a PREVIOUS run in the
 // persistent ndjson must never verify a NEW arm whose child is still attaching (or failing
 // slowly). Pre-fix bytes report "armed pid=<new>" off the old record at the first 300ms
 // tick; fixed bytes scan only post-spawn appended bytes AND bind on the child's own pid.
@@ -328,7 +328,7 @@ test("F1: stale armed line from a previous run never verifies a new arm", async 
   try { (await import("node:child_process")).execSync(`pkill -f "run --persona codex --thread-id T1 --events ${env.events}" 2>/dev/null || true`); } catch { /* gone */ }
 });
 
-// ── F2 regression (argus PR#19 review): a mail line torn EXACTLY across the 256KB read cap
+// ── F2 regression (PR#19 review): a mail line torn EXACTLY across the 256KB read cap
 // must still deliver, exactly once. Pre-fix bytes advance offset past the torn head and the
 // event silently vanishes; fixed bytes consume only through the last complete line.
 test("F2: line torn across the 256KB read cap delivers exactly once", async () => {

@@ -1,6 +1,6 @@
 {
   "name": "kijito-tools",
-  "version": "0.2.14",
+  "version": "0.2.15",
   "description": "Installer for kijito-tools: copies the context-tracking, session catch-up, and self-clear scripts plus the Kijito skills into ~/.claude.",
   "license": "Apache-2.0",
   "type": "commonjs",
@@ -16,7 +16,16 @@
     "!providers/codex/plans/",
     "!providers/codex/n0-harness/",
     "!providers/codex/*plan*.md",
-    "!providers/codex/n0-capability-probe-protocol.md"
+    "!providers/codex/n0-capability-probe-protocol.md",
+    "!providers/monitor/.github/",
+    "!providers/monitor/CHANGELOG.md",
+    "!providers/monitor/docs/",
+    "!providers/monitor/IMPORT-PROVENANCE.md",
+    "!providers/monitor/OPAQUE-OUTPUT-ENFORCEMENT.md",
+    "!providers/monitor/RELEASING.md",
+    "!providers/monitor/scripts/mutation-check.py",
+    "!providers/monitor/scripts/prepublish-gate.sh",
+    "!providers/monitor/test_kijito_monitor.py"
   ],
   "engines": {
     "node": ">=18"

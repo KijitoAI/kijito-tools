@@ -12,7 +12,7 @@ refuse(){ echo "self-clear REFUSED: $1" >&2; lc_log SELFCLEAR_REFUSED "$1"; exit
 
 lc_stopped && refuse "kill switch present ($KIJITO_LC_STOP) — rm it to re-enable" 9
 lc_is_child && refuse "subagent marker set — would clear the PARENT pane" 6
-# ⚠️ THE TMUX CHECK MUST PRECEDE THE ARMED CHECK, AND THE ORDER USED TO BE REVERSED (argus, 2026-08-01).
+# ⚠️ THE TMUX CHECK MUST PRECEDE THE ARMED CHECK, AND THE ORDER USED TO BE REVERSED (found 2026-08-01).
 # Outside tmux there is no TMUX_PANE, so lc_is_armed falls back to a placeholder and refuses with
 # "not an armed pane — launch via claude-armed.sh". But arming is PANE-KEYED and arm-session.sh
 # itself exits 1 outside tmux, so that refusal pointed at a remedy which cannot work. It is the
@@ -57,7 +57,7 @@ age=$(( $(lc_now) - $(cat "$tok" 2>/dev/null || echo 0) ))
 # ⚠️ If a genuine runaway ever needs catching, detect the LOOP, not the count:
 # consecutive cycles that land no commits and no memories. Do not reintroduce a
 # counter — it is the same defect class as a stranded-mail check that measures
-# broadcast cadence instead of neglect.
+# broadcast frequency instead of neglect.
 cf="$(lc_cycle_file)"; cyc=$(( $(cat "$cf" 2>/dev/null || echo 0) + 1 )); echo "$cyc" > "$cf"
 
 # C5 — consume the token (one clear per QA pass) and fire as the LAST action
@@ -69,7 +69,7 @@ delay="${KIJITO_SELFCLEAR_DELAY:-3.0}"
 # say THAT a seat recycled and WHEN, but not whether it went at 20% or 78% — so "does the fleet
 # actually recycle near the target?" was unanswerable, including retrospectively. You could not
 # spot a seat looping at 15%, nor one running to 80% and doing its worst work in the tail.
-# (Found by ladybug 2026-08-01 while auditing the myctx residual; this also gives myctx's
+# (Found 2026-08-01 while auditing the myctx residual; this also gives myctx's
 # non-zero exit its first real consumer — until now its only "consumer" was a sentence of prose
 # telling an agent to run it.)
 #
@@ -77,8 +77,8 @@ delay="${KIJITO_SELFCLEAR_DELAY:-3.0}"
 # "refuse to self-clear when context is UNMEASURABLE" — makes jq, $CLAUDE_CODE_SESSION_ID and a
 # readable transcript into three new fleet-wide halt conditions for the autonomous loop. That is
 # a STRICTLY LARGER outage than the risk it removes. ★ The blast radius a new gate on this path
-# may have is "can stop ONE cycle"; that one is "can stop EVERY cycle on EVERY seat". ladybug
-# proposed it against their own instinct for exactly this reason, hours after nearly shipping
+# may have is "can stop ONE cycle"; that one is "can stop EVERY cycle on EVERY seat". It was
+# proposed against the reviewer's own instinct for exactly this reason, hours after nearly shipping
 # `lc_is_child` — a real defect with an invented fix that would have refused forever.
 #
 # ✅ THE CAVEAT THEY FLAGGED IS RESOLVED BY MEASUREMENT, NOT BY ARGUMENT: myctx inside a SUBAGENT
@@ -106,7 +106,7 @@ lc_log SELFCLEAR_FIRE "cycle=$cyc delay=$delay ctx=$ctx"
   lc_pane_alive "$PANE" || { lc_log SELFCLEAR_ABORT "pane gone during delay"; exit 0; }
   # ⛔ BRANCH ON DELIVERY. `SELFCLEAR_DONE` used to be logged UNCONDITIONALLY, with both send-keys
   # calls discarding stderr and nothing reading their status — so a REFUSED delivery still wrote
-  # DONE (argus, 2026-08-01). An audit log asserting an action that did not occur is the one thing
+  # DONE (found 2026-08-01). An audit log asserting an action that did not occur is the one thing
   # an audit log must never do, and it chained with the decorative lc_pane_alive: gate passes,
   # delivery fails, log says DONE, token is consumed — the loop believes it recycled and did not.
   #

@@ -9,7 +9,7 @@ import { createServer } from "node:http";
 const SHAPE = /^Kijito: [a-z0-9][a-z0-9-]{0,31} — \d+ unread$/u;
 
 test("valid inputs render the exact anchored shape", () => {
-  for (const [p, c] of [["codex", 1], ["a", 0], ["river-2", 314], ["x".repeat(32), 7]]) {
+  for (const [p, c] of [["codex", 1], ["a", 0], ["alice-2", 314], ["x".repeat(32), 7]]) {
     const out = renderTemplate(p, c);
     assert.notEqual(out, null, `${p}/${c} should render`);
     assert.match(out, SHAPE);
