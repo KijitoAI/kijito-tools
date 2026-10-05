@@ -23,6 +23,8 @@ The `codex` provider of [kijito-tools](../../README.md). What is live:
   from the live path; `--skills-only` deploys the skills after that verify passes.
 - **N0 harness** ([`n0-harness/`](n0-harness/), `test/n0-*`): the disposable capability-probe
   harness and its closed-world guard census — self-contained, unaffected by the retirement.
+  Maintainer material: it is in the repository, not in the npm or PyPI package (M459), and
+  neither is anything else under `test/` or `plans/`, nor the plan documents below.
 
 The wake PROTOCOL is not Codex-specific and lives one level up in
 [`../_shared/wake-core.mjs`](../_shared/wake-core.mjs): event-line validation and the

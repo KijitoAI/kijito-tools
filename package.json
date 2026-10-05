@@ -11,7 +11,12 @@
     "bin/",
     "providers/",
     "install.sh",
-    "NOTICE"
+    "NOTICE",
+    "!providers/codex/test/",
+    "!providers/codex/plans/",
+    "!providers/codex/n0-harness/",
+    "!providers/codex/*plan*.md",
+    "!providers/codex/n0-capability-probe-protocol.md"
   ],
   "engines": {
     "node": ">=18"
