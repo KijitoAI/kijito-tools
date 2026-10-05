@@ -6,6 +6,10 @@
   (preauthorized, pre-approved, already authorized, standing directive/order) plus more names.
 - Tests: `KIJITO_REMOTE_CONTROL` set to empty, `true` or `yes` is pinned to keep Remote Control off.
 - README: what can type into an armed pane now includes the self-clear send and any tmux client.
+- The shipped scripts no longer quote the operator by name or cite a person's instruction as the reason
+  for a behaviour (self-clear, inbox-selftest, session-autosend, kijito-persona-lib, heartbeat-watchdog,
+  session-catchup-hint). A new test fails if an operator name or an authority claim reappears in any
+  shipped `.sh`/`.mjs`/`.js`/`.py` file (M459).
 
 ## 0.2.12
 - **Remote Control is now opt-in for armed launches.** `claude-armed.sh` passes `--remote-control`
