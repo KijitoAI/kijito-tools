@@ -9,7 +9,7 @@ fi
 
 # PROVE THE WAKE PATH, END TO END, BEFORE ANYONE BELIEVES THE INSTALL (row M304).
 #
-# WHY THIS EXISTS. From Jason's onboarding call with the first external operator: "Inbox didn't arm
+# WHY THIS EXISTS. From the onboarding call with the first external user: "Inbox didn't arm
 # properly on initial install." The installer had printed its ✓ lines and exited 0; the first real
 # message did not wake the agent; the HUMAN had to notice the silence, ask for a diagnosis, ask for
 # a repair, and only then did the agent think to mail itself as a test. Everything the installer
@@ -43,7 +43,7 @@ PERSONA=""
 TIMEOUT=90
 DO_SEND=1
 CANARY=0
-# TWO CALLERS, TWO CONTRACTS, ONE VERDICT FUNCTION (river ruling, 2026-09-21).
+# TWO CALLERS, TWO CONTRACTS, ONE VERDICT FUNCTION (decided 2026-09-21).
 # The INSTALL-TIME run legitimately has no consumer — no agent session exists yet — so a missing
 # consumer there is PARTIAL with the next step, not a failed install. The AGENT-DRIVEN ONBOARDING
 # flow runs this same check AFTER the agent has armed its consumer and must report a machine-readable

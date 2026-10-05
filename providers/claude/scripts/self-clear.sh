@@ -34,7 +34,7 @@ age=$(( $(lc_now) - $(cat "$tok" 2>/dev/null || echo 0) ))
 
 # C2 — cycle COUNTER, telemetry only. NOT a gate.
 #
-# ⛔ REMOVED 2026-07-29 ON JASON'S EXPLICIT INSTRUCTION: the cycle cap (default 12)
+# ⛔ REMOVED 2026-07-29: the cycle cap (default 12)
 # and the every-5 human checkpoint. Both were COUNT-based, and a count cannot
 # distinguish a runaway loop from a productive day — it measures UPTIME.
 #
@@ -44,9 +44,8 @@ age=$(( $(lc_now) - $(cat "$tok" 2>/dev/null || echo 0) ))
 #      3  kijito-qa-memory pass is stale    <- PROPERTY-based, genuinely useful
 #      1  not an armed pane                 <- PROPERTY-based, genuinely useful
 #      1  no kijito-qa-memory pass          <- PROPERTY-based, genuinely useful
-# 19 of 24 refusals were the two count gates. Jason: "it's never once been useful,
-# it's just gotten you to high context usage and blocked on something that isn't
-# useful." Correct: they fired hardest on the most productive days, and the cost
+# 19 of 24 refusals were the two count gates, and none of them ever caught a loop:
+# they fired hardest on the most productive days, and the cost
 # was a degraded session sitting at ~70% context waiting for a human to type rm.
 #
 # ★ THE REAL GATES ARE ALL STILL ABOVE and none of them is a counter: kill-switch,
@@ -112,7 +111,7 @@ lc_log SELFCLEAR_FIRE "cycle=$cyc delay=$delay ctx=$ctx"
   # delivery fails, log says DONE, token is consumed — the loop believes it recycled and did not.
   #
   # ★ THE TWO FAILURES ARE LOGGED SEPARATELY ON PURPOSE: "not typed" and "typed but not submitted"
-  # are different states with different causes, and the second is exactly what Jason observed for
+  # are different states with different causes, and the second is exactly what was observed live in
   # session-autosend. Collapsing them would hide the one the settle-sleep below addresses.
   if lc_send_text "$PANE" "/clear"; then
     # Same paste-buffer race that broke session-autosend — an Enter arriving inside the TUI's ingest

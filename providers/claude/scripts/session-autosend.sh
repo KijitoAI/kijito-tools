@@ -26,7 +26,7 @@ else
   # rather than send-keys'ing a literal "/kijito-start" (the TUI slash-autocomplete menu is an
   # extra failure mode this path doesn't need). The skill covers catch-up + inbox-arm + new-persona
   # setup; the trailing directive carries the autonomous-resume mandate. (This prompt predated the
-  # skill — updated 2026-07-10 per Jason.)
+  # skill — updated 2026-07-10.)
   prompt="Run the kijito-start skill (Skill: kijito-start) and follow it fully — catch up deeply on memory, arm the inbox, and if this is a brand-new project with no persona yet, set that up per CLAUDE.md. Then, if the current-state / next-steps pointer shows ACTIVE WORK in progress, CONTINUE it autonomously without waiting for further instruction — work to its DONE-WHEN criteria, stopping only for a genuine gate. If there is no active work to resume, report ready."
 fi
 
@@ -39,8 +39,8 @@ lc_pane_alive "$pane"  || { lc_log AUTOSEND_ABORT "pane gone"; exit 0; }
 lc_send_text "$pane" "$prompt"
 
 # ⛔ THE ENTER NEEDS A GAP AFTER THE TEXT, AND WITHOUT ONE THE WHOLE AUTONOMOUS LOOP SILENTLY DIES.
-# Observed 2026-08-01 (Jason, live): "the injected start prompt was just entered into the input but
-# remained unsent." The two send-keys calls used to be back-to-back. The TUI is an Ink app that
+# Observed 2026-08-01 (live, by the operator): the injected start prompt was entered into the input but
+# remained unsent. The two send-keys calls used to be back-to-back. The TUI is an Ink app that
 # buffers a fast burst of characters as a PASTE, and an Enter arriving inside that burst is taken as
 # a NEWLINE IN THE BUFFER rather than as submit. The prompt then sits in the input box, complete and
 # unsent, forever.

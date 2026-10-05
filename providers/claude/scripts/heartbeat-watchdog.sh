@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# BACKUP heartbeat for an armed autonomous pane. (Jason, 2026-08-01: "please also setup a backup
-# heartbeat.")
+# BACKUP heartbeat for an armed autonomous pane (added 2026-08-01).
 #
 #   ~/.claude/heartbeat-watchdog.sh %3 &        # or run under systemd/launchd; see WIRING below
 #

@@ -159,9 +159,8 @@ kijito_producer_running() {
 kijito_restart_hint() {
   case "${1:-}" in
     launchd) printf 'launchctl kickstart -k gui/$(id -u)/com.kijito.inbox-monitor' ;;
-    # Windows: MANUAL start first. Jason's ruling (2026-09-27, relayed by crucible): "Ideally in both
-    # places I want monitor start to be manual, these are gaming comps after all." A Scheduled Task is
-    # the opt-in autostart, never the default suggestion.
+    # Windows: MANUAL start first (2026-09-27): these hosts are often gaming PCs whose owners want the
+    # monitor started by hand. A Scheduled Task is the opt-in autostart, never the default suggestion.
     task)    printf 'start it by hand from a normal (non-sandboxed) shell: kijito-inbox-monitor --persona %s  (or your supervisor script); if you opted into autostart, run its Scheduled Task instead: schtasks /Run /TN "<task name>"' "${2:-<persona>}" ;;
     # No supervisor on this host: the one-command start (it starts a producer and proves it with a message).
     manual)  printf '~/.claude/kijito-inbox-start.sh --persona %s  (starts a producer by hand; it stops at logout/reboot - see the monitor README for supervision)' "${2:-<persona>}" ;;

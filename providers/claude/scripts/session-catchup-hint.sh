@@ -2,7 +2,7 @@
 # SessionStart hook → (1) ALWAYS print a passive catch-up reminder + an EXPLICIT, per-persona
 # WAKE-CAPABLE inbox-arming instruction, (2) ARMED auto-send if this pane is armed.
 #
-# Why the explicit arming block (Jason fleet-directive, "an unmonitored mailbox is useless"):
+# Why the explicit arming block (an unmonitored mailbox is useless):
 # agents fail two ways — they forget to arm, or they arm WRONG. A bare background `tail -F` is
 # CAPTURE-ONLY: it writes matching lines to a file and never exits, so the harness never
 # re-invokes the agent and mail is silently missed (argus's exact failure, 2026-06-29). The
