@@ -5,7 +5,7 @@ description: Rigorous Kijito memory curation with enforced creation + cold-boot 
 
 # Kijito QA Memory — curate the graph, then PROVE it works cold
 
-Kijito — your `mcp__kijito__*` tools, backed by the **hosted Kijito service at `api.kijito.ai`** (the one shared brain; a local `:7474` daemon is a test env only) — is the only thing that survives a `/clear` or a new session. "QA memory" is not "fix a few wrong notes" — it is **make the graph match what this session actually learned, then confirm a cold agent can act on it.** Pass your persona/project on every write.
+Kijito — your `mcp__kijito__*` tools, backed by the **hosted Kijito service at `api.kijito.ai`** — is the only thing that survives a `/clear` or a new session. "QA memory" is not "fix a few wrong notes" — it is **make the graph match what this session actually learned, then confirm a cold agent can act on it.** Pass your persona/project on every write.
 
 ## The bias this skill exists to defeat
 
@@ -53,7 +53,7 @@ Only move on when BOTH questions return nothing.
 
 `kijito_recall` each topic you touched this session. For every memory that is now **wrong or changed** → `kijito_correct` (fades old + links the fix; never edit history). **Obsolete** → `kijito_fade`. Operational/"how X works" memories are the most dangerous when stale — verify against reality (code/config/files) before trusting or correcting.
 
-⚠️ **Correcting a memory ROTS every `[[id]]` link pointing AT it, and nothing warns you.** `kijito_correct` links *forward* (corpse → truth), but nothing traverses *backward*, so a live memory citing the old id now points at a record the system itself believes is false. **The more disciplined you are, the more rot you generate — correcting well is what causes it.** So after each correction, find its inbound citers and re-point them at the live id (`kijito_update` with `structural=true`, which preserves the staleness clock because bracketed digits carry no meaning). ⚠️ A dead target announces itself in `kijito_get` — its `Status:` line reads `retired (believed-false — corrected; …)` (re-measured 2026-09-11; this file used to say it read `active`, which is no longer true); in recall/startup/browse output, which carries no Status line, **check `importance` (retired ≈ 0.1) and `confidence` (≈ 0.05) instead.**
+⚠️ **Correcting a memory ROTS every `[[id]]` link pointing AT it, and nothing warns you.** `kijito_correct` links *forward* (corpse → truth), but nothing traverses *backward*, so a live memory citing the old id now points at a record the system itself believes is false. **The more disciplined you are, the more rot you generate — correcting well is what causes it.** So after each correction, find its inbound citers and re-point them at the live id (`kijito_update` with `structural=true`, which preserves the staleness clock because bracketed digits carry no meaning). ⚠️ A dead target announces itself in `kijito_get` — its `Status:` line reads `retired (believed-false — corrected; …)`; in recall/startup/browse output, which carries no Status line, **check `importance` (retired ≈ 0.1) and `confidence` (≈ 0.05) instead.**
 
 ## Phase 3 — PRELOAD THE HANDOFF (the current-state pointer)
 
@@ -72,7 +72,7 @@ Prove the memory works in a context that has never seen this conversation. Spawn
 
 > You are a brand-new session. Connect to Kijito and cold-boot: `kijito_startup(persona="<P>", project="<J>")`, then read the current-state pointer it names and the memories it links. Using ONLY what Kijito returns (you have no other context), report:
 > — Require ONE unambiguous top current-state result and FAIL the boot if it is absent or tied with another plausible live pointer.
-> — Treat a predecessor marked `Source: version_history`, or one reachable only by a `version_of` edge at importance ≤ 0.1, as retired audit history regardless of its body; note it exists but never follow its `RESUME NOW`. Judge liveness the way each tool shows it: `kijito_get` renders a definitive `Status:` line (`retired (believed-false — corrected; …)` on a corrected record — trust it; re-measured 2026-09-11); `kijito_recall` / `kijito_startup` / `kijito_browse` render no Status, so there judge by `importance` (retired ≈ 0.1) / `confidence` (retired ≈ 0.05).
+> — Treat a predecessor marked `Source: version_history`, or one reachable only by a `version_of` edge at importance ≤ 0.1, as retired audit history regardless of its body; note it exists but never follow its `RESUME NOW`. Judge liveness the way each tool shows it: `kijito_get` renders a definitive `Status:` line (`retired (believed-false — corrected; …)` on a corrected record — trust it); `kijito_recall` / `kijito_startup` / `kijito_browse` render no Status, so there judge by `importance` (retired ≈ 0.1) / `confidence` (retired ≈ 0.05).
 > 1. the single active task in progress,
 > 2. the exact next step to take right now,
 > 3. what is already done vs. not,
@@ -107,4 +107,3 @@ State plainly: N memories created, N corrected, N faded; the current-state point
 ## Notes
 
 - This skill IS the memory half of the self-clear gate: a session may only self-`/clear` after this passes (then the next session resumes from the pointer).
-- Reproducible from Kijito: the procedure is also stored in the graph — `kijito_recall("kijito-qa-memory skill procedure cold-boot verify")` — so any agent on any machine can recover or rebuild it even without this file.

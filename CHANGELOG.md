@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+- **kijito-start takes the project setup recorded, never the directory name** (M461): the project the project
+  instructions name, else the one the identity memory and pointer were filed under, else no project argument at
+  all. A new persona's setup now records the project it chose, so later sessions pass the same value. Both the
+  Claude Code and the Codex skill.
+- **The shipped skills carry no maintainer-internal text** (M462): no local test daemon, no maintainers' token-file
+  path, no client-version measurement notes, no dated measurement asides, and no claim that the routine is
+  "stored in the graph". A stopped inbox producer now points to `kijito-inbox-start.sh --persona <P>`, which
+  starts it and proves the wake. The scanner bans these shapes, with one control each, and checks that both
+  kijito-start skills keep the project rule.
+
 ## 0.2.13
 - Vendored kijito-inbox-monitor 0.5.13: its comments and test fixtures no longer name the operator, and a test
   keeps it that way. No behaviour change.

@@ -19,7 +19,10 @@ duplicate `PostCompact` without the ticket is also a no-op.
 
 1. Call `kijito_startup(persona="<persona>", project="<project>")` to restore identity
    and broad context, with the persona and project your project instructions assign
-   (for example `AGENTS.md`); pass them explicitly.
+   (for example `AGENTS.md`); pass them explicitly. Use the project exactly as setup
+   recorded it: the one your instructions name, else the one your identity memory and
+   pointer were filed under; if neither records one, omit the project argument. Never derive it
+   from the directory name — a guessed project splits your memory in two.
 2. Discover the live pointer with
    `kijito_recall(query="<PERSONA>_CURRENT_STATE_POINTER_V1 RESUME NOW", scope="project", project="<project>", full=true)`,
    where `<PERSONA>_CURRENT_STATE_POINTER_V1` is the sentinel your pointer opens with.
@@ -156,8 +159,7 @@ armed (they must equal the new checkout's gated hashes in
    DONE-WHEN without waiting for another prompt. Otherwise report the completed
    or genuinely blocked state.
 
-Use only the hosted Kijito service at `https://api.kijito.ai/mcp/`. A local `:7474`
-daemon is a test environment.
+Use the hosted Kijito service at `https://api.kijito.ai/mcp/`.
 
 Report: the pointer ID, active task, exact next step, inbox result, hosted
 Kijito reachability, which of the three session states you landed in (and why,
