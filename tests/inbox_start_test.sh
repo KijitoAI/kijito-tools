@@ -64,10 +64,18 @@ out=$(ARGS="--persona tester" run PATH="/usr/bin:/bin"); rc=${out##*rc=}
   && grn "no monitor installed: exit 2 with the install line" || red "no monitor: rc=$rc $out"
 
 out=$(ARGS="--persona tester" run); rc=${out##*rc=}
-# The mint must carry memory.write: the self-test SENDS one message, a hive write (river 10985 / Kijito M339).
-[ "$rc" = 2 ] && grep -q 'kijito_api_key(action="create"' <<<"$out" \
-  && grep -q 'scopes=\["memory.read","memory.write"\]' <<<"$out" && grep -q 'chmod 600' <<<"$out" \
-  && grn "no token: exit 2 with a mint recipe the self-test can actually use (read + write)" || red "no token: rc=$rc $out"
+# M468 (M312 rerun #8): the inbox step promises a READ-ONLY key, and an agent mints the first scopes it is shown.
+# So the first (default) mint is memory.read alone; a write scope appears only as an alternative that needs the
+# human's explicit yes. (The self-test then asks the agent to send the test message: a read-only key cannot.)
+first_scopes=$(grep -o 'scopes=\[[^]]*\]' <<<"$out" | head -1)
+[ "$rc" = 2 ] && grep -q 'kijito_api_key(action="create"' <<<"$out" && grep -q 'chmod 600' <<<"$out" \
+  && [ "$first_scopes" = 'scopes=["memory.read"]' ] \
+  && grn "no token: exit 2, and the first mint suggested is read-only" || red "no token: rc=$rc first=$first_scopes $out"
+if grep 'memory.write' <<<"$out" | grep -qv 'explicitly say yes'; then
+  red "no token: a write scope is offered without the human's explicit yes"
+elif grep -q 'explicitly say yes' <<<"$out" && grep -q 'must not mint a write scope without that yes' <<<"$out"; then
+  grn "no token: the write scope is only an alternative that needs the human's explicit yes"
+else red "no token: the explicit-yes condition on a write scope is missing"; fi
 
 mkdir -p "$H/.config/kijito-inbox-monitor"; printf 'kjt_SECRET_DO_NOT_PRINT' > "$H/.config/kijito-inbox-monitor/token"
 chmod 600 "$H/.config/kijito-inbox-monitor/token"

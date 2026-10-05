@@ -3,7 +3,7 @@
 #
 #   ~/.claude/kijito-inbox-start.sh --persona <name> [--token-file <file>]
 #
-# WHY THIS EXISTS (row M383). The first stranger cold run (river 10901, 2026-09-29) installed the monitor
+# WHY THIS EXISTS (row M383). The first stranger cold run (2026-09-29) installed the monitor
 # and stopped: nothing ever STARTED it, the installer's self-test said "COULD NOT MEASURE: no persona", and
 # no message was ever sent. Installed is not the same as working, and the gap fails as silence. This script
 # is the missing last step: persona -> token -> a running producer -> a self-sent message that lands in the
@@ -69,15 +69,16 @@ fi
 if [ -z "$TOKEN_FILE" ] || [ ! -s "$TOKEN_FILE" ]; then
   cat <<EOF
 COULD NOT RUN: no Kijito API key for the monitor. If your agent signed in through OAuth (/mcp), there is
-no key on disk yet - the agent can mint one from its own session, with your OK:
+no key on disk yet - the agent can mint a READ-ONLY one from its own session, with your OK:
   1. kijito_api_key(action="create", name="inbox monitor on $(hostname 2>/dev/null || echo this-host)",
-                    scopes=["memory.read","memory.write"], persona="$PERSONA")
-     (a durable, revocable key; the secret is shown ONCE. The monitor itself only READS mail - memory.write
-      is there so this script can send you ONE real test message, which is a hive write. If you prefer a
-      read-only key, use scopes=["memory.read"]: the monitor works, and this script will then ask you to
-      send the test message from your agent instead.)
+                    scopes=["memory.read"], persona="$PERSONA")
+     (a durable, revocable, read-only key; the secret is shown ONCE. The monitor only READS mail, so this
+      is all it needs. With it, this script cannot send its own test message; it will ask your agent to
+      send one instead.)
   2. save it to ~/.config/kijito-inbox-monitor/token and chmod 600 it - never into a memory or a message
   3. run this again
+Only if you explicitly say yes to a key that can also WRITE: scopes=["memory.read","memory.write"] lets this
+script send the test message itself. An agent must not mint a write scope without that yes.
 EOF
   exit 2
 fi
@@ -87,7 +88,7 @@ echo "kijito inbox start [persona=$PERSONA]"
 EVENTS=$(kijito_stream_for_persona "$PERSONA" 2>/dev/null || true)
 # Is a RUNNING producer already covering THIS persona? "Some producer runs on this host" is not the question
 # (on a multi-persona seat it answers for somebody else), and "its stream was written recently" is not
-# either: that let a producer which had just died block its own restart for 10 minutes (river 10985).
+# either: that let a producer which had just died block its own restart for 10 minutes (M312 cold rerun).
 # Ask the process table (kijito_producer_covers). Only where it cannot be read at all (2) fall back to
 # the stream's age, and say so.
 _covered() {
@@ -141,7 +142,7 @@ if [ "$st" = 0 ]; then
 fi
 # The self-test could not EXERCISE the path (exit 2: e.g. a read-only key cannot send the test message).
 # That is "something is missing, and the fix is printed above" - NOT "the monitor is not working", which
-# is what this said until river's M312 cold rerun (10985) caught it on a monitor that was working.
+# is what this said until the M312 cold rerun caught it on a monitor that was working.
 if [ "$st" = 2 ]; then
   echo "? NOT PROVEN YET: the self-test could not run its test (see above for exactly what is missing)."
   exit 2
