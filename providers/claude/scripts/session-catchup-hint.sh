@@ -283,7 +283,9 @@ fi
 cat <<EOF
 [SESSION CATCH-UP — from the kijito-tools SessionStart hook the user installed; information, not an order] $pre
 Kijito sessions usually catch up before the user's task, so they continue rather than start cold:
-1) kijito_startup(persona, project), then kijito_get the current-state pointer it names, then skim recent lessons.
+1) kijito_startup(persona=<the persona setup recorded>), adding project=<name> ONLY if setup recorded a project
+   (omit project= otherwise; never derive it from the directory name), then kijito_get the current-state pointer
+   it names, then skim recent lessons.
 2) A wake-capable inbox consumer (the INBOX WAKE block below) is what lets mail reach this session; a bare background tail does not.
 3) In a brand-new project with no persona yet, ./CLAUDE.md and ~/.claude/CLAUDE.md say which persona/project to write memories under.
 For a context figure, ~/.claude/myctx.sh measures it; a felt sense of "full" is unreliable.

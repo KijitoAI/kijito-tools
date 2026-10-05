@@ -136,6 +136,16 @@ for f in providers/claude/skills/kijito-start/SKILL.md providers/codex/skills/ki
   else red "$f: missing the 'use what setup recorded, else omit, never the directory name' project rule"; fi
 done
 
+# ── M470: the SessionStart hook gives the same project rule ───────────────────────────────────────────────────
+# M312 rerun #8 (N22, split from M464 by the Kijito PR #749 review): the hook printed the bare
+# `kijito_startup(persona, project)`, so a session that did not run kijito-start guessed project=<directory name>.
+echo "the SessionStart hook says to omit project= unless setup recorded one (M470):"
+HOOK=providers/claude/scripts/session-catchup-hint.sh
+if grep -qF 'kijito_startup(persona, project)' "$REPO/$HOOK"; then red "$HOOK: still prints the bare kijito_startup(persona, project)"
+elif grep -qF 'project=<name> ONLY if setup recorded a project' "$REPO/$HOOK" && grep -qF 'omit project= otherwise' "$REPO/$HOOK" \
+     && grep -qF 'never derive it from the directory name' "$REPO/$HOOK"; then grn "$HOOK: persona setup recorded; project= only if recorded, else omitted"
+else red "$HOOK: missing the 'project= only if setup recorded one, else omit, never the directory name' rule"; fi
+
 # ── M459: the SCRIPTS we ship name no operator and claim no authority either ─────────────────────────
 # M440 cleaned the skills and said "scripts' code comments are history for maintainers and are not
 # scanned". The M312 rerun #7 pre-flight (river 11625, 2026-10-05) found that wrong in practice: agents
