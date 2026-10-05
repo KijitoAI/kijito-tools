@@ -147,7 +147,7 @@ while true; do
   #   3. Byte-identical NUDGE log lines at the same timestamp cannot be
   #      resolved into "two panes coinciding" vs "one pane double-firing",
   #      so a double-fire is a real bug the log is structurally unable to
-  #      reveal (argus).
+  #      reveal.
   #
   # RANDOM, not derived -- and this is the ONE place in the design where that
   # is correct. The derived-nonce ruling covers producer events, which have an
@@ -164,7 +164,7 @@ while true; do
     # nonce is byte-indistinguishable from a strong one at the point of use,
     # so a silent downgrade is the false-calm shape this whole file exists to
     # remove: collisions would surface far downstream as two wakes that look
-    # like one, and nothing would point back here. (assay, review of 225cc0e.)
+    # like one, and nothing would point back here. (review of 225cc0e.)
     _nonce="$(date +%s%N | cksum | tr -dc '0-9' | head -c 11)"
     lc_log HEARTBEAT_NONCE_DEGRADED "urandom unavailable; ~36-bit fallback nonce=$_nonce"
   fi
@@ -175,7 +175,7 @@ while true; do
   # this seat. The one context where the prefix IS populated is a hand-run,
   # which is the one context that never runs in production.
   #
-  # ⚠️ IT IS `target_pane=`, NOT `pane=`, AND THAT IS NOT COSMETIC (cadence,
+  # ⚠️ IT IS `target_pane=`, NOT `pane=`, AND THAT IS NOT COSMETIC (measured,
   # caught pre-install). lc_log ALWAYS emits `pane=` in its prefix, so a body
   # field of the same name puts TWO `pane=` on one line:
   #     … sid=? pane=?  HEARTBEAT_NUDGE  pane=%4 nonce=…

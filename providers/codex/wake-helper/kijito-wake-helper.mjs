@@ -16,7 +16,7 @@
 //   - another live helper on a DIFFERENT thread   -> exit 6  "arm-refused-other-thread"
 // kijito-start reads these and reports catch-up-only with the reason, per the §4a ladder.
 //
-// §4b ARM PRIMITIVE (spec'd by argus 7446, in the certified plan): an owner pidfile bound to
+// §4b ARM PRIMITIVE (spec'd in the certified plan): an owner pidfile bound to
 // the thread id. stale -> reap+arm; live+same-thread -> "already-armed" (exit 0, idempotent —
 // the DOUBLE-ARM battery probe); live+other-thread -> loud refuse, never kill the other helper.
 
@@ -28,7 +28,7 @@ import { spawn } from "node:child_process";
 import { parseEventLine, fixedWakeText, normalizeMailMode } from "../../_shared/wake-core.mjs";
 import { connectWsUds } from "./ws-uds.mjs";
 
-// Gate-7 R2 (argus 7809): the armed record stamps the sha256 of the helper's OWN bytes and of
+// Gate-7 R2: the armed record stamps the sha256 of the helper's OWN bytes and of
 // its runtime import, so "which bytes are running" is derivable from the log after a main
 // advance — the by-effect proof for the upgrade path (stop → verify → arm) is one log-line
 // read, and the successor liveness instrument gets version attribution for free. Computed once
@@ -41,7 +41,7 @@ export const HELPER_SHA256 = sha256File(HELPER_FILE);
 export const WAKE_CORE_SHA256 = sha256File(WAKE_CORE_FILE);
 
 const POLL_MS = 500;              // events file poll (tail-by-offset; inode-change aware)
-const IDLE_RECHECK_MS = 1_000;    // defer-until-idle recheck cadence (belt for missed notify)
+const IDLE_RECHECK_MS = 1_000;    // defer-until-idle recheck interval (belt for missed notify)
 const RPC_TIMEOUT_MS = 10_000;
 const MAX_BATCH = 20;
 
@@ -327,7 +327,7 @@ export class WakeHelper {
     }
   }
 
-  // Helper-death visibility (plan §6 row 5, assay ruling): every path that CAN speak, does —
+  // Helper-death visibility (plan §6 row 5): every path that CAN speak, does —
   // a final in-session line so the state transition to catch-up-only is visible where the user
   // is. SIGKILL cannot gasp; that residue is measured and documented in the battery log.
   async gasp(message) {

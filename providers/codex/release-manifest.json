@@ -13,13 +13,13 @@
     "verify": "node providers/codex/install.mjs   (default action; also runs before any skills deploy)"
   },
   "artifacts": {
-    "wakeCoreSha256": "0da99f65a76e30190b325bada3a276bf546ae0bb9687b686f2db92879ebe3562",
+    "wakeCoreSha256": "a652d3fd2207b10ff85d1af99c5224b8d07a5f503bdf6039c954eb8f8a7d8f9b",
     "workflowSha256": "e5413d06bc842687b86ab57ceb7c8f549975e46e54e5542ac1cd9023c4eef4f2",
     "planSha256": "b9a068c3797831628c06207216598c3af4c14306521224cd81a6cf11d8068b12",
-    "wakeHelperSha256": "916c247cfcae7ae85702d23ec99ff1587c9e15e46ece004986ac25fcfff1d548",
+    "wakeHelperSha256": "15324e75e34fb0501d7fa251ad37bc31f258cdba273bfd1c27b74abdf1dddd42",
     "wsUdsSha256": "4da13eef89b572fb735e756cb06846a021919dec7f91c6d07989377944cc776c",
-    "wakeHelperTestsSha256": "d069e12f1bf55b82c6a4a471e704c67a2e168bd5e0bc2f63360adbc517b781ae",
-    "wakeHelperIntegrationTestsSha256": "8b433a7f628180cfa0c552b27271f284ef7db3e78269b92ffb2be00281e8145e",
+    "wakeHelperTestsSha256": "813eec46ceb6c83ea0c6ad1367fbcc84e1c342d74c095bbdeb6402fec4f6436b",
+    "wakeHelperIntegrationTestsSha256": "6c6605a6fed4aa465e2af25514cba12ce2ab679f041061dcab354a21fb013872",
     "wakeHelperMockDaemonSha256": "3406bcd46d913071c0ee293e30f46b42ad5cf8c5c77f70c4000d9bb37854dd0c"
   },
   "legacyArtifacts": {

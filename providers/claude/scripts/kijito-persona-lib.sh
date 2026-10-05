@@ -111,7 +111,7 @@ kijito_unread_for_persona() {
   printf '%s' "$n"
 }
 
-# ── NATIVE WINDOWS (Git Bash / MSYS / Cygwin). Reported by praetor on a real Windows 11 seat: Git Bash
+# ── NATIVE WINDOWS (Git Bash / MSYS / Cygwin). Reported on a real Windows 11 seat: Git Bash
 # has no `pgrep`, and MSYS `ps` cannot see native Windows processes at all, so every process probe below
 # answered "not running" — the hook said "producer: DOWN" beside a producer that was delivering mail, and
 # suggested launchctl/systemctl, neither of which exists there. ⛔ THE FIX IS A THIRD ANSWER, NOT A
@@ -124,7 +124,7 @@ kijito_host_is_windows() {
 
 # _kijito_win_count <Where-Object filter> -> prints how many native Windows processes match; returns 2
 # (and prints nothing) when PowerShell is absent or its answer is not a number.
-# ⛔ THE FILTER IS CODE: never interpolate a caller-supplied value into it (river's 0.2.11 review, MEDIUM-2:
+# ⛔ THE FILTER IS CODE: never interpolate a caller-supplied value into it (the 0.2.11 review, MEDIUM-2:
 # a persona from a cloned repo's .kijito_persona reached `-like '*--persona $p*'`, so `x' -or (iwr …|iex)
 # -or 'y` ran inside Where-Object). Pass the value in $KIJITO_PS_ARG and read it as $env:KIJITO_PS_ARG -
 # PowerShell then treats it as data, and [regex]::Escape / .Contains keep it literal.
@@ -173,14 +173,14 @@ kijito_restart_hint() {
 # path verbatim (systemd's --events-file), `--persona <p>` as a whole argument (a per-persona unit), or
 # `--all-personas` (one producer for every persona; launchd passes a TEMPLATE, not the path).
 # ⛔ A STREAM FILE IS NOT A PRODUCER. kijito-inbox-start.sh used "written in the last 10 min" as proof, so a
-# producer that had just died blocked its own restart for 10 minutes (river 10985, M312 cold rerun); the
-# hook learned the same rule the hard way (assay cert F1). ⛔ And a process that merely MENTIONS the
+# producer that had just died blocked its own restart for 10 minutes (M312 cold rerun); the
+# hook learned the same rule the hard way (cert F1). ⛔ And a process that merely MENTIONS the
 # producer (a grep, a checker shell) is not the producer: only a python process or the console script.
 kijito_producer_covers() {
   local p=${1:-} ev=${2:-} line n
   [ -n "$p" ] || return 1
   if kijito_host_is_windows; then
-    # --persona as a WHOLE argument (LOW-3: '*--persona river*' also matched 'riverbank'), optionally quoted.
+    # --persona as a WHOLE argument (LOW-3: '*--persona ann*' also matched 'anna'), optionally quoted.
     n=$(KIJITO_PS_ARG="$p" _kijito_win_count "\$_.CommandLine -match 'kijito_inbox_monitor\.py|kijito-inbox-monitor\.exe|bin[\\/]kijito-inbox-monitor' -and @('tail.exe','grep.exe','bash.exe','sh.exe','powershell.exe','pwsh.exe') -notcontains \$_.Name -and (\$_.CommandLine -match ('--persona[\s=]+\"?' + [regex]::Escape(\$env:KIJITO_PS_ARG) + '\"?(\s|\$)') -or \$_.CommandLine -like '*--all-personas*')") || return 2
     [ "$n" -gt 0 ] && return 0
     return 1
@@ -193,7 +193,7 @@ kijito_producer_covers() {
   while IFS= read -r line; do
     case "$line" in *[Pp]ython*|*/kijito-inbox-monitor\ *|*/kijito-inbox-monitor) ;; *) continue ;; esac
     case "$line" in *" grep "*|*session-catchup-hint*|*kijito-inbox-start*) continue ;; esac
-    # whole-argument match: "--persona river" must not match "--persona riverbank"
+    # whole-argument match: "--persona ann" must not match "--persona anna"
     case "$line " in *" --persona $p "*|*" --persona=$p "*|*" --all-personas "*) return 0 ;; esac
     [ -n "$ev" ] && case "$line " in *" $ev "*) return 0 ;; esac
     # A producer started with NO --persona watches every persona IN ITS ACCOUNT (the launchd job passes
@@ -211,7 +211,7 @@ kijito_producer_covers() {
 
 # kijito_supervisor_for <persona> -> prints task | systemd | launchd | manual: the supervisor that is
 # ACTUALLY present for the inbox producer on this host.
-# ⚠️ WHY (river 10985, M312 cold rerun): the hook guessed the supervisor from which stream PATH existed,
+# ⚠️ WHY (M312 cold rerun): the hook guessed the supervisor from which stream PATH existed,
 # so a producer started by hand on a box with no systemd was reported "UP (systemd)" and offered a
 # systemctl restart line that could not work; the self-test offered launchctl on Linux. The question is
 # not "which layout is this file in" but "what would restart it here", and only the supervisors can say.
@@ -271,7 +271,7 @@ _kijito_etime_secs() {
 # none, 2 COULD NOT MEASURE.
 # ⚠️ WHY THE AGE: a consumer's EXISTENCE does not prove it can wake anyone. The Claude Code Monitor
 # tool caps a watch at 30 min on many sessions, and on Windows/Git Bash an expired Monitor LEAKS its
-# tail (crucible measured 65 live orphans on one seat, [35702]) — so "a tail exists" read as "armed"
+# tail (65 live orphans measured on one Windows seat) — so "a tail exists" read as "armed"
 # forever. Callers compare the age with that cap; they cannot know ownership, so they report, not kill.
 kijito_stream_consumers() {
   local s=${1:-} p b psh out e found=1

@@ -77,7 +77,7 @@ if [ "${KIJITO_REMOTE_CONTROL:-0}" = "1" ]; then
   fi
   [ -n "$rc_prefix" ] && rc_args+=(--remote-control-session-name-prefix "$rc_prefix")
 fi
-# Session provenance ([18500]; Kijito #624/#627). The Claude Code MCP client forwards ONLY the
+# Session provenance (Kijito #624/#627). The Claude Code MCP client forwards ONLY the
 # Authorization header from .mcp.json `headers` (measured on 2.1.265 — every other header, literal or
 # not, is dropped) and expands `${VAR}` in a server URL from the LAUNCHING environment only; it never
 # injects its own session id there. So the id is minted HERE, exported for the URL

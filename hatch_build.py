@@ -20,6 +20,17 @@ PAYLOAD_EXCLUDE = (
     "providers/codex/n0-harness/*",
     "providers/codex/*plan*.md",
     "providers/codex/n0-capability-probe-protocol.md",
+    # M467: the vendored monitor's maintainer history, tests and release tooling. The monitor program,
+    # its README, templates, migrate script and package metadata still ship.
+    "providers/monitor/.github/*",
+    "providers/monitor/CHANGELOG.md",
+    "providers/monitor/docs/*",
+    "providers/monitor/IMPORT-PROVENANCE.md",
+    "providers/monitor/OPAQUE-OUTPUT-ENFORCEMENT.md",
+    "providers/monitor/RELEASING.md",
+    "providers/monitor/scripts/mutation-check.py",
+    "providers/monitor/scripts/prepublish-gate.sh",
+    "providers/monitor/test_kijito_monitor.py",
 )
 
 

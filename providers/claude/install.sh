@@ -45,7 +45,7 @@ fi
 # run — a user who fixed the mode by hand lost the fix at the next install, with no warning.
 SET="$DEST/settings.json"
 
-# ⚠️ FOLLOW A SYMLINK INSTEAD OF REPLACING IT (assay, second-operator review of 0.1.3).
+# ⚠️ FOLLOW A SYMLINK INSTEAD OF REPLACING IT (second-operator review of 0.1.3).
 # `mv tmp settings.json` REPLACES a symlink with a regular file. The live config ends up correct, so
 # nothing looks wrong — but a dotfiles-managed setup (settings.json -> ~/dotfiles/claude/settings.json)
 # is silently de-linked, future dotfile updates stop reaching Claude, AND the abandoned target keeps
@@ -116,7 +116,7 @@ chmod 0600 "$SET_REAL.tmp"
 mv "$SET_REAL.tmp" "$SET_REAL"
 
 # ⚠️ SAY SO WHEN THE MODE CHANGED. Tightening 0644 → 0600 is correct (a settings.json holding a
-# bearer token has no legitimate other-reader, and assay's review endorsed it), but doing it
+# bearer token has no legitimate other-reader, and the review endorsed it), but doing it
 # SILENTLY is wrong: the output read "mode 0600" identically whether it had been 0600 all along or
 # had just been changed underneath the user. A deliberate loosening should be visibly reverted, not
 # quietly undone — otherwise the installer is making a policy decision the operator cannot see.

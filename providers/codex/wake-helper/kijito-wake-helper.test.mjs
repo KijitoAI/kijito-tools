@@ -51,7 +51,7 @@ test("seam: the certified filter accepts mail/lifecycle for OUR persona and reje
   const ok = parseEventLine(JSON.stringify({ source: "kijito-inbox", persona: "codex", event: "new", id: 7 }), "codex");
   assert.equal(ok.event.key, "new:7");
   assert.equal(ok.event.trigger, "mail");
-  const wrongPersona = parseEventLine(JSON.stringify({ source: "kijito-inbox", persona: "river", event: "new", id: 7 }), "codex");
+  const wrongPersona = parseEventLine(JSON.stringify({ source: "kijito-inbox", persona: "alice", event: "new", id: 7 }), "codex");
   assert.equal(wrongPersona.ignore, "wrong-persona");
   const wrongKind = parseEventLine(JSON.stringify({ source: "kijito-inbox", persona: "codex", event: "heartbeat" }), "codex");
   assert.equal(wrongKind.ignore, "wrong-event");
@@ -74,7 +74,7 @@ test("R2: the armed-record byte stamps equal the sha256 of the files actually lo
   const here = path.dirname(new URL(import.meta.url).pathname);
   const sha = (f) => createHash("sha256").update(fs.readFileSync(f)).digest("hex");
   // The stamps must be derived from the real on-disk bytes — a hardcoded or cached-stale value
-  // would defeat the upgrade-path by-effect proof (argus 7809 R1/R2).
+  // would defeat the upgrade-path by-effect proof (review R1/R2).
   assert.equal(HELPER_SHA256, sha(path.join(here, "kijito-wake-helper.mjs")));
   assert.equal(WAKE_CORE_SHA256, sha(path.join(here, "..", "..", "_shared", "wake-core.mjs")));
   assert.match(HELPER_SHA256, /^[0-9a-f]{64}$/);
@@ -150,7 +150,7 @@ test("CLI accepts equals form and rejects ambiguous or unknown arguments", () =>
   }
 });
 
-// ── Gate-7 seam extension (argus 7819 conditions a/b): the NEW_LENIENT 8-kind set ──
+// ── Gate-7 seam extension (review conditions a/b): the NEW_LENIENT 8-kind set ──
 
 test("seam: every diagnostic kind wakes with a lifecycle key; armed/heartbeat provably never wake", () => {
   const DIAG = ["alert", "recovered", "state_corrupt", "baseline_skipped", "seed_ahead", "replay_capped", "persona_added", "still_unread"];

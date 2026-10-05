@@ -203,7 +203,6 @@ providers/monitor/NOTICE|Copyright 2026 Arcada Labs
 providers/monitor/NOTICE|This product includes software developed at Arcada Labs.
 providers/monitor/README.md|Apache License 2.0. See [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE). Copyright 2026 Arcada Labs.
 providers/monitor/pyproject.toml|authors = [{ name = "Arcada Labs", email = "jason@arcadalabs.com" }]
-providers/monitor/test_kijito_monitor.py|    ALLOWED = {("pyproject.toml", 'authors = [{ name = "Arcada Labs", email = "' + "ja" + 'son@arcadalabs.com" }]')}
 ALLOW
 )
 pscan() {  # $1 = root, $2 = file listing the payload paths (one per line); prints offending file:line matches
@@ -252,6 +251,90 @@ else
   if grep -q '^install.sh:' <<<"$got"; then grn "control: the same attribution text in another file is still caught"
   else red "control: attribution text was allowed outside its own file"; fi
 fi
+
+# ── M467: the whole payload names no fleet persona, host or message id ─────────────────────────────────────────
+# M312 rerun #8 (river 11677): both cold-run models read self-clear.sh, which cited "argus, 2026-08-01" and "Found by
+# ladybug"; lifecycle-lib.sh named a persona and a host; kijito-inbox-start.sh cited hive message ids; and the vendored
+# monitor's --help suggested watching "codex,river,ladybug". A maintainer persona, host or message id points at an
+# account the reader cannot see, and a persona name in an example reads like a name to use. So nothing npm publishes
+# may carry one: provenance is a row id (M312) or a review name, and examples use neutral names. "codex" is a product
+# name and stays allowed. The vendored monitor's maintainer history, tests and release tooling are not published
+# (package.json files[], hatch_build.py PAYLOAD_EXCLUDE and the sdist exclude, checked equal below).
+FLEETNAMES='river|ladybug|cadence|assay|argus|vellum|crucible|praetor|sterling|herald|mason|loom|maestro|omniview|leadgen|beacon|quill|korangar|tamalitron'
+# Ids: a [[memory]] or [memory] id; a hive/msg/message/memory/mail/ruling/note number (not a date: 2026-...); a
+# five-digit id in parentheses after a space (not readline(65536)).
+FLEETID='\[\[?[0-9]{4,6}\]\]?|\b(hive|msg|message|memory|mail|ruling|note)[ #]+[0-9]{3,6}([^-0-9]|$)|(^|[^A-Za-z0-9_])\([0-9]{5}\)'
+FPAT="\b($FLEETNAMES)\b|$FLEETID"
+fscan() {  # $1 = root, $2 = file listing the payload paths; prints offending file:line matches
+  (cd "$1" && tr '\n' '\0' < "$2" | xargs -0 -r grep -nHI "" 2>/dev/null \
+     | perl -CSD -pe 's/[\x{2010}-\x{2015}]/-/g; s/[\x{00A0}\x{202F}\x{2007}]/ /g; s/on a cadence//gi' | grep -iE "$FPAT")
+}
+echo "the whole npm payload names no fleet persona, host or message id (M467):"
+if ! command -v npm >/dev/null 2>&1; then red "npm is not installed - the fleet-name scan cannot run, and a scan that cannot run is not a pass"
+else
+  FL="$T/payload-m467.txt"
+  n=$(plist "$FL")
+  if ! [ "$n" -ge 50 ] 2>/dev/null; then red "npm pack listed only $n files - the payload listing failed, so nothing was scanned"
+  else
+    hits=$(fscan "$REPO" "$FL")
+    if [ -z "$hits" ]; then grn "all $n published files: no fleet persona, host or message id"
+    else red "fleet-internal names or ids in the published payload:"; printf '        %s\n' "$hits" | cut -c1-200; fi
+  fi
+  mkdir -p "$T/fl/providers/claude/scripts"
+  printf '%s\n' providers/claude/scripts/x.sh > "$T/fl.txt"
+  # One control per shape rerun #8 found, plus the id shapes: each must be caught.
+  while IFS= read -r planted; do
+    [ -n "$planted" ] || continue
+    printf '%s\n' "$planted" > "$T/fl/providers/claude/scripts/x.sh"
+    if [ -n "$(fscan "$T/fl" "$T/fl.txt")" ]; then grn "control: caught - $planted"
+    else red "control: MISSED - $planted"; fi
+  done <<'PLANTED'
+# ⚠️ THE TMUX CHECK MUST PRECEDE THE ARMED CHECK, AND THE ORDER USED TO BE REVERSED (argus, 2026-08-01).
+# (Found by ladybug 2026-08-01 while auditing the myctx residual; this also gives myctx's
+# Measured on wtmux 4.0.3 (crucible, TAMALITRON, 2026-09-27): no list-panes / has-session, and
+# Measured on wtmux 4.0.3 (a Windows seat, TAMALITRON, 2026-09-27)
+# WHY THIS EXISTS (row M383). The first stranger cold run (river 10901, 2026-09-29) installed the monitor
+# is what this said until the M312 cold rerun (10985) caught it on a monitor that was working.
+                   help="Comma-separated personas to watch, e.g. codex,river,ladybug.")
+# tail (65 live orphans on one seat, [35702]) — so "a tail exists" read as "armed"
+# Session provenance ([[18500]]; Kijito #624/#627).
+// The accepted kinds. Gate-7 widening (review ruling, hive 7819): the original three-kind
+(PR #5, live message 2630) and the same-chat continuation plans remain in
+the cursor IS the acknowledgement (Loom re-audit 7, HIGH 1)
+PLANTED
+  # ... and ordinary text stays allowed.
+  while IFS= read -r ok; do
+    [ -n "$ok" ] || continue
+    printf '%s\n' "$ok" > "$T/fl/providers/claude/scripts/x.sh"
+    if [ -z "$(fscan "$T/fl" "$T/fl.txt")" ]; then grn "control: allowed - $ok"
+    else red "control: wrongly flagged - $ok"; fi
+  done <<'ALLOWED'
+# whole-argument match: "--persona ann" must not match "--persona anna" (walk along the riverbank)
+Codex users run this too; kijito_hive_send to "$PERSONA"
+                who = json.loads(fh.readline(65536)).get("persona")
+"reason": "... last observed message 2026-07-24T23:24:43Z) ..."
+error code -32600 no rollout found
+poll kijito_hive_inbox on a cadence until the producer is back
+# producer that had just died blocked its own restart for 10 minutes (M312 cold rerun); the
+help="Comma-separated personas to watch, e.g. alice,bob,carol."
+ALLOWED
+fi
+
+# The three payload exclusion lists must agree, or one artifact (npm, wheel, sdist) ships what the others drop.
+echo "npm, wheel and sdist leave out the same maintainer material (M459 + M467):"
+lists=$(cd "$REPO" && python3 - <<'PY'
+import json, re, tomllib
+norm = lambda xs: sorted(x.rstrip("*") for x in xs)
+npm = [f[1:] for f in json.load(open("package.json"))["files"] if f.startswith("!")]
+sdist = tomllib.load(open("pyproject.toml", "rb"))["tool"]["hatch"]["build"]["targets"]["sdist"]["exclude"]
+src = open("hatch_build.py").read()
+wheel = re.findall(r'"([^"]+)"', src[src.index("PAYLOAD_EXCLUDE = ("):src.index(")", src.index("PAYLOAD_EXCLUDE = ("))])
+print(json.dumps([norm(npm), norm(sdist), norm(wheel)]))
+PY
+)
+if [ -n "$lists" ] && python3 -c 'import json,sys; a,b,c=json.loads(sys.argv[1]); sys.exit(0 if a==b==c and any("providers/monitor/" in x for x in a) else 1)' "$lists"; then
+  grn "package.json files[], the sdist exclude and hatch_build.PAYLOAD_EXCLUDE list the same paths"
+else red "the payload exclusion lists differ: $lists"; fi
 
 echo; echo "passed: $pass   failed: $fail"
 [ "$fail" -eq 0 ]

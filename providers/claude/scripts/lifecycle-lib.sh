@@ -29,7 +29,7 @@ lc_is_child() { [ -n "${CLAUDE_AGENT_TYPE:-}" ] || [ -n "${CLAUDE_CODE_AGENT:-}"
 #   wtmux  "wtmux-<PID>-<PANE>"   ($WTMUX_PID + $WTMUX_PANE, e.g. wtmux-8812-1.1)
 # ⛔ THE wtmux ID MUST CARRY THE SERVER PID. wtmux pane ids ("1.1") restart in every wtmux instance, so
 # a marker keyed on "1.1" alone is exactly the recycled-key hazard the fingerprint below exists to stop.
-# Measured on wtmux 4.0.3 (crucible, TAMALITRON, 2026-09-27): no list-panes / has-session, and
+# Measured on wtmux 4.0.3 (a Windows seat, 2026-09-27): no list-panes / has-session, and
 # `display-message -t` fails even for a live pane — but `capture-pane -p -t PANE` exits 0 for a live
 # pane and 1 for a missing one, and `send-keys -t PANE ...` delivers. Those two verbs are all we use.
 # Every wtmux call needs MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' under Git Bash, or MSYS rewrites
@@ -83,7 +83,7 @@ lc_capture() {                                           # $1 = pane id; the pan
   fi
 }
 # Type TEXT into the pane without submitting it. tmux types it literally (-l). wtmux gets it as ONE
-# argument without -l: praetor proved `send-keys -t P "/clear" Enter` on a real seat, and `-l` is
+# argument without -l: a real Windows seat proved `send-keys -t P "/clear" Enter` and `-l` is
 # accepted by wtmux 4.0.3 but its effect is unmeasured, so it is not relied on.
 lc_send_text() {                                         # $1 = pane id, $2 = text
   if _lc_wt_valid "${1:-}"; then
@@ -103,7 +103,7 @@ lc_send_enter() {                                        # $1 = pane id
 }
 
 # ⛔ THIS GATE RETURNED TRUE FOR EVERY INPUT, INCLUDING GARBAGE — IT HAD NEVER ONCE REFUSED.
-# Found by argus 2026-08-01, measured on Linux tmux 3.4 AND macOS tmux 3.6a. The old body asked
+# Found 2026-08-01, measured on Linux tmux 3.4 AND macOS tmux 3.6a. The old body asked
 # `tmux display-message -p -t "$1" '#{session_name}'` and read its EXIT CODE — but display-message
 # EXITS 0 FOR A NONEXISTENT PANE, it simply prints empty fields:
 #     $ tmux display-message -p -t %999 'sess=#{session_name}'   ->  "sess="   rc=0
@@ -114,7 +114,7 @@ lc_send_enter() {                                        # $1 = pane id
 # not verified at all. (Reproduced before fixing: %999 and "nonsense" TRUE on the old body, both
 # FALSE on this one, real pane still TRUE.)
 #
-# ⚠️ BOUNDED HONESTLY, per argus: `send-keys` itself refuses on a dead pane, and enumerating every
+# ⚠️ BOUNDED HONESTLY: `send-keys` itself refuses on a dead pane, and enumerating every
 # pane on the host confirmed a dead-pane /clear lands in NO pane — so this could not misfire into a
 # sibling's session on a shared seat. The gate was decorative, not dangerous.
 #
@@ -146,11 +146,11 @@ lc_pane_usable() {
 #       revocable from inside a session at all.
 # ⛔ WHY THE SPLIT EXISTS: while (2) is in force, deleting the marker changes NOTHING. `arm-session.sh
 # off` did exactly that and printed "AUTONOMY OFF" — a control that reported success without acting,
-# which is worse than one that errors (measured by ladybug on the Ubuntu VM 2026-08-01: with
+# which is worse than one that errors (measured on an Ubuntu VM 2026-08-01: with
 # KIJITO_AUTOCATCHUP=1 live, `lc_is_armed %99999` — a pane that does not exist — returns ARMED).
 # The only brake that works against (2) is the kill switch: touch "$KIJITO_LC_DIR/STOP".
 # ⛔ A ZERO-BYTE MARKER FILE IS NOT EVIDENCE THAT *YOU* ARMED *THIS* SESSION — AND tmux PANE IDS
-# RESTART AT %0 WHEN THE SERVER RESTARTS, AND RECYCLE. ladybug found 13 stale `arm.*` markers on the
+# RESTART AT %0 WHEN THE SERVER RESTARTS, AND RECYCLE. A review found 13 stale `arm.*` markers on a
 # Mac (2026-08-01) with `arm.%2` matching a LIVE, UNRELATED pane. Markers are never garbage-collected
 # and carry no provenance, so a fresh session landing on a low-numbered pane silently INHERITS an
 # arming performed weeks ago by a different agent — and arming gates an IRREVERSIBLE `/clear`.
@@ -253,7 +253,7 @@ lc_is_armed()     { lc_marker_armed "${1:-}" || lc_env_armed; }
 # shell), 2 COULD NOT MEASURE (wtmux pane, no ps, no claude ancestor found, tmux silent, a real tty that is not
 # the pane's): callers keep their old behaviour on 2, so this can only ever REMOVE a send, never block the
 # loop on a host it cannot read.
-# ⚠️ WHY (river, 2026-10-02): headless `claude -p` sessions run by a subagent in an ARMED pane inherited
+# ⚠️ WHY (2026-10-02): headless `claude -p` sessions run by a subagent in an ARMED pane inherited
 # TMUX_PANE, so each one's SessionStart hook autosent the catch-up prompt into the live conversation.
 # ⛔ NOT BY SESSION ID: /clear rotates CLAUDE_CODE_SESSION_ID (above), and the post-/clear session is the one
 # that MUST autosend. What survives /clear is the terminal: the pane's claude holds #{pane_tty}; a claude
@@ -270,7 +270,7 @@ lc_hook_owns_pane() {
     _lc_argv "$p"
     # The claude PROGRAM: its own name, or the script/entry point an interpreter runs (node .../cli.js, a
     # wrapper script named claude). Never "claude" merely appearing in a command string: a Bash-tool shell
-    # whose -c text mentions claude is not one (river's review, LOW-4).
+    # whose -c text mentions claude is not one (review LOW-4).
     if [ "${comm##*/}" = claude ] || [ "${argv[0]##*/}" = claude ]; then found=1; break; fi
     case "${argv[0]##*/}" in
       node|bun|bash|sh|zsh|python|python3)
@@ -287,7 +287,7 @@ lc_hook_owns_pane() {
   [ -n "$ptty" ] || return 2
   [ "/dev/${tty#/dev/}" = "$ptty" ] && return 0
   # A REAL tty that is not the pane's (claude under screen/script inside tmux): not one of M437's signals, so
-  # "could not tell" - behave as before rather than silently stall an armed owner's loop (river, LOW-4).
+  # "could not tell" - behave as before rather than silently stall an armed owner's loop (review LOW-4).
   return 2
 }
 # _lc_argv <pid> -> sets the array argv to that process's arguments: exact tokens from /proc (Linux), else

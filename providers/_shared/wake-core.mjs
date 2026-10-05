@@ -47,7 +47,7 @@ function requirePersona(persona) {
   return persona;
 }
 
-// The accepted kinds. Gate-7 widening (argus ruling, hive 7819): the original three-kind
+// The accepted kinds. Gate-7 widening (review ruling): the original three-kind
 // allowlist made the helper the one consumer where the monitor's LOSS ANNOUNCEMENTS died
 // silently — measured live 2026-08-15: a real corrupt-state producer emitted baseline_skipped
 // into an armed stream and the helper ignored it, the exact "a diagnostic added to kill a
@@ -101,7 +101,7 @@ export function fixedWakeText(batch, persona, mailMode = "reply") {
   const reply = normalizeMailMode(mailMode) === "reply";
   const kinds = [...new Set(batch.map((item) => item.kind))].sort();
   const ids = [...new Set(batch.map((item) => item.id).filter(Number.isSafeInteger))].sort((a, b) => a - b);
-  // Gate-7 wake-class split (argus 7819 condition a): mail kinds keep the exact-row read-only
+  // Gate-7 wake-class split (review condition a): mail kinds keep the exact-row read-only
   // peek; diagnostic kinds take an alert-shaped summarize-the-diagnostic turn — METADATA ONLY,
   // because these events carry no message body at all (kind + timestamp IS the payload), and
   // the injection fence below applies to them identically.

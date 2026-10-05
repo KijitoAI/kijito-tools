@@ -35,7 +35,7 @@ fence editable while verify still reports GREEN.
 [`codex-kijito-parity-plan.md`](codex-kijito-parity-plan.md) is RECORDED for provenance (its hash
 is carried in the manifest, deliberately not gated — hash-gating a release on a prose document was
 a real defect, fixed in the 2026-07-30 fold). The withdrawn dedicated-thread notifier history
-(PR #5, live message 2630) and the same-chat continuation plans remain in
+(PR #5) and the same-chat continuation plans remain in
 [`same-chat-continuation-plan.md`](same-chat-continuation-plan.md) and the plan documents for
 review only.
 

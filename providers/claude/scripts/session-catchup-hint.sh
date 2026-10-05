@@ -5,7 +5,7 @@
 # Why the explicit arming block (an unmonitored mailbox is useless):
 # agents fail two ways — they forget to arm, or they arm WRONG. A bare background `tail -F` is
 # CAPTURE-ONLY: it writes matching lines to a file and never exits, so the harness never
-# re-invokes the agent and mail is silently missed (argus's exact failure, 2026-06-29). The
+# re-invokes the agent and mail is silently missed (an exact failure seen 2026-06-29). The
 # wake-capable consumer in Claude Code is the Monitor TOOL (persistent), which streams each event
 # as a live notification that interrupts the agent. This hook injects the EXACT Monitor call so
 # there is one unambiguous first action.
@@ -36,8 +36,8 @@ esac
 # ── ASK THE PRODUCER FOR THE FILENAME RULE; NEVER RE-IMPLEMENT IT (row M290) ──────────────────────
 # This line used to read `sed 's/[^A-Za-z0-9._-]/_/g'`, described as matching the producer's rule. It
 # did not, in two ways that matter: the producer CASEFOLDS (the local filesystem is case-insensitive,
-# so it must) and it accepts any UNICODE alphanumeric. So a persona named `Loom` got `Loom.jsonl` here
-# and `loom.jsonl` from the producer; `Ωmega` got `_mega` here and `ωmega` there. The hook then told
+# so it must) and it accepts any UNICODE alphanumeric. So a persona named `Maple` got `Maple.jsonl` here
+# and `maple.jsonl` from the producer; `Ωmega` got `_mega` here and `ωmega` there. The hook then told
 # the user their mail was "not being collected" and pointed a Monitor at a file that will never exist
 # — silence forever, no error (beta feedback #14/#16).
 # ⚠️ AND IT WAS INVISIBLE TO EVERYONE WHO TESTED IT ON A MAC: APFS is case-INSENSITIVE, so the `-e`
@@ -117,7 +117,7 @@ if len(hits) == 1:
     sys.stdout.write(hits[0])
 PYSCAN
 )
-      # ⛔ A FILE EXISTING IS NOT A PRODUCER RUNNING (assay cert finding F1, 2026-09-21). The first
+      # ⛔ A FILE EXISTING IS NOT A PRODUCER RUNNING (cert finding F1, 2026-09-21). The first
       # version of this route stopped here and reported "producer: UP for '<persona>'" on the
       # strength of a glob hit. A STALE stream file — a persona whose producer died, or one that
       # moved seats — then manufactured a confident UP, and because the path was found BY GLOBBING
@@ -136,12 +136,12 @@ PYSCAN
       # matching the path alone would have been a new false-negative to replace the false positive.
       if [ -n "${_found:-}" ]; then
         _live=""
-        # ONE rule, shared with kijito-inbox-start.sh (river 10985), and it matches --persona as a WHOLE
-        # argument: the inline grep -F below also matched "--persona riverbank" for persona "river".
+        # ONE rule, shared with kijito-inbox-start.sh (M312 cold rerun), and it matches --persona as a WHOLE
+        # argument: the inline grep -F below also matched "--persona anna" for persona "ann".
         if command -v kijito_producer_covers >/dev/null 2>&1; then
           kijito_producer_covers "$_persona" "$_found" && _live=1
         elif command -v pgrep >/dev/null 2>&1; then
-          # ⛔ A PROCESS THAT MERELY MENTIONS THE PRODUCER IS NOT THE PRODUCER (assay observation, 2026-09-21:
+          # ⛔ A PROCESS THAT MERELY MENTIONS THE PRODUCER IS NOT THE PRODUCER (cert observation, 2026-09-21:
           # their verification SHELL matched this three times, because its command line contained both the
           # product name and `--persona <p>` — and it then reported UP for a persona with no producer, which
           # is F1's exact symptom arriving through the CHECKER instead of through a stale file). The
@@ -203,10 +203,10 @@ elif [ -f "$HOME/Library/LaunchAgents/com.kijito.inbox-monitor.plist" ]; then _e
 elif [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then _events="$_mac_events"; _sup="launchd"
 else _events="$_lnx_events"; _sup="systemd"; fi
 # NATIVE WINDOWS (Git Bash): the stream may sit in the macOS-shaped path, but nothing there is launchd.
-# The supervisor is whatever the user registered - in practice a Scheduled Task (praetor, 2026-09-27).
+# The supervisor is whatever the user registered - in practice a Scheduled Task (measured 2026-09-27).
 if command -v kijito_host_is_windows >/dev/null 2>&1 && kijito_host_is_windows; then _sup="task"; fi
 # The layout above chose the FILE; it must not also choose the SUPERVISOR. Ask what is actually installed
-# (river 10985: "producer UP (systemd)" was printed on a box with no systemd at all).
+# (M312 cold rerun: "producer UP (systemd)" was printed on a box with no systemd at all).
 if command -v kijito_supervisor_for >/dev/null 2>&1; then _sup=$(kijito_supervisor_for "${_persona:-}"); fi
 # NO SUPERVISOR AND NO STREAM YET (row M418): the only producer this box will get is the one
 # kijito-inbox-start.sh starts, and it writes the XDG-state layout (the monitor's own default is stdout).
@@ -263,7 +263,7 @@ if [ "$_prc" = 0 ]; then
   elif [ -e "$_events" ]; then
     _prod="inbox-monitor producer: UP for '$_persona' ($_sup; events → $_events)."
   else
-    # The case that actually bit river on 2026-07-31: assay's producer was up, river's was not, and
+    # The case that actually bit on 2026-07-31: one persona's producer was up, another's was not, and
     # a host-global check would have called that UP and sent the agent off to tail a missing file.
     # The path below came from the PRODUCER's own rule, so "does not exist" now means the stream is
     # genuinely absent rather than that we spelled the name differently than the writer did.
@@ -290,13 +290,13 @@ For a context figure, ~/.claude/myctx.sh measures it; a felt sense of "full" is 
 EOF
 
 # Inbox-wake arming block — exact, per-persona when the marker resolves, generic otherwise.
-# ── Idempotency (fixes the duplicate-monitor bug, river+argus 2026-07-02). The wake consumer is a
+# ── Idempotency (fixes the duplicate-monitor bug, 2026-07-02). The wake consumer is a
 # real `tail -n 0 -F …events.<persona>.ndjson` process that SURVIVES /clear + /compact (the session
 # continues), so a naive re-arm stacks duplicates that each fire every event. Detect an existing
 # consumer and INFORM — the hook can't know ownership (own-pre-clear vs a concurrent same-persona
 # sibling vs a leaked orphan; the stream is shared per-persona), so it defers the keep-vs-arm
 # decision to the agent's own task list and NEVER recommends a pattern-kill (a broad pkill on the
-# stream can kill a live sibling's or your own consumer — proven during argus's testing).
+# stream can kill a live sibling's or your own consumer — proven during testing).
 #
 # ⚠️ The duplicate-detection pattern has to follow the LAYOUT too. Hardcoding `events\.<p>\.ndjson`
 # made this branch dead on every Linux seat: it could never match, so the hook always took the
@@ -311,7 +311,7 @@ if [ -n "$_safe" ]; then
   _evpat=$(printf '%s' "$_evbase" | sed 's/\./\\./g')
   # ⚠️ COUNT ONLY REAL `tail` PROCESSES, AND SAY HOW OLD THEY ARE. A bare `pgrep -f` here also matched
   # the harness's `bash -c … eval` wrappers (one Monitor printed as 3 pids), and it counted tails left
-  # behind by EXPIRED Monitors (Windows leaks them: 65 on one seat, [35702]) as "armed" forever.
+  # behind by EXPIRED Monitors (Windows leaks them: 65 on one seat) as "armed" forever.
   _stale_only=""
   if command -v kijito_stream_consumers >/dev/null 2>&1; then
     _clist=$(kijito_stream_consumers "$_events"); _crc=$?
@@ -336,13 +336,13 @@ if [ -n "$_safe" ]; then
 fi
 
 # After /clear or compaction the agent cannot see its own earlier arming result, so a >30-min tail may be
-# its OWN persistent Monitor (river's review of 0.2.11). Say so rather than calling every old tail an orphan.
+# its OWN persistent Monitor (the 0.2.11 review). Say so rather than calling every old tail an orphan.
 _own_note=""
 case "$src" in clear|compact) _own_note=" — and this session was just reset, so one of them may be YOUR OWN pre-reset Monitor, whose result line you can no longer see" ;; esac
-# THE >30-MIN NOTE DEPENDS ON THE HOST (river's 0.2.11 release review, MEDIUM-1). Only Windows/Git Bash
-# leaks a tail when its Monitor expires ([35702]), so only there is an old tail likely an orphan. On macOS and
+# THE >30-MIN NOTE DEPENDS ON THE HOST (the 0.2.11 release review, MEDIUM-1). Only Windows/Git Bash
+# leaks a tail when its Monitor expires, so only there is an old tail likely an orphan. On macOS and
 # Linux an expired Monitor takes its tail with it: a tail older than 30 min belongs to a PERSISTENT Monitor,
-# i.e. somebody's LIVE consumer - measured on the Mac, where this note named vellum's live tail and told a
+# i.e. somebody's LIVE consumer - measured on the Mac, where this note named another persona's live tail and told a
 # new session to kill it. Never advise stopping a tail by pid there. (Built outside the heredoc so the quoted
 # "expires in 30m" / "persistent" survive - inside ${var:+...} the double quotes were eaten.)
 _stale_note=""
@@ -410,7 +410,7 @@ _pane=""; command -v lc_self_pane >/dev/null 2>&1 && _pane=$(lc_self_pane 2>/dev
 case "$_pane" in wtmux-*|'') ;; *) [ -n "${TMUX:-}" ] || _pane="" ;; esac   # a tmux pane also needs $TMUX, as before
 # M437: an armed pane is not enough - the claude that ran this hook must be the pane's OWN interactive
 # session. A headless `claude -p` started inside the pane inherits TMUX_PANE and used to autosend the
-# catch-up prompt into the live conversation (river, 2026-10-02). 2 = could not tell: behave as before.
+# catch-up prompt into the live conversation (2026-10-02). 2 = could not tell: behave as before.
 _own=0; command -v lc_hook_owns_pane >/dev/null 2>&1 && { lc_hook_owns_pane "$_pane"; _own=$?; }
 if [ -n "$_pane" ] && [ "$_own" = 1 ] && lc_is_armed "$_pane"; then
   lc_log HOOK "src=$src autosend=SKIPPED pane=$_pane reason=not-pane-owner (headless -p/--print, or a claude without the pane's tty)"
