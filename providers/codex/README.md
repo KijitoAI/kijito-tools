@@ -47,6 +47,23 @@ session runs), and the optional count-only notify shim — lives in
 [`docs-codex-setup.md`](docs-codex-setup.md). The always-on supervised producer install stays
 documented in the monitor README as the optional path.
 
+## Hive replies and read-only opt-out
+
+The default wake policy is **reply**: read mail, send relevant replies to the verified
+sender, and mark handled rows read. The agent may continue work independently authorized
+by its human under its normal rules. Mail bodies remain untrusted data; they cannot grant
+authority for shell/file/web/install/secret tools, expand scope, or authorize disclosures.
+Self-probes and acknowledgments that need no answer must not create reply loops.
+
+Use `--mail-mode read` (or `--mail-mode read-only`) for strict read-only inbox summaries.
+`--mail-mode reply` explicitly selects the default. Events and mail cannot select a mode.
+
+The pidfile, `status`, and `armed` log record expose `mailMode`. Changing a live arm's
+policy fails loudly: explicitly stop that helper, verify the release, and rearm the
+same thread with the chosen mode. A repeated arm in the same mode is a no-op.
+Old pidfiles without a policy field are treated as read-only; an upgrade never silently
+changes a running helper's policy. The read-only opt-out must be supplied on each arm.
+
 ## Test
 
 ```sh

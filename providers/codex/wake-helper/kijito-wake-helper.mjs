@@ -5,7 +5,7 @@
 // Shape (plan §3): everything platform-agnostic comes from providers/_shared/wake-core.mjs —
 // event validation (parseEventLine = the certified doorbell filter) and the injection-safe wake
 // turn text (fixedWakeText). This file is only the last inch: attach to the user's own codex
-// app-server DAEMON over its control socket and, when hive mail fires, start a read-only wake
+// app-server DAEMON over its control socket and, when hive mail fires, start a policy-bound wake
 // turn on THIS session's thread — deferring until the thread is idle so nothing stomps the
 // user's in-flight work.
 //
@@ -25,7 +25,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
-import { parseEventLine, fixedWakeText } from "../../_shared/wake-core.mjs";
+import { parseEventLine, fixedWakeText, normalizeMailMode } from "../../_shared/wake-core.mjs";
 import { connectWsUds } from "./ws-uds.mjs";
 
 // Gate-7 R2 (argus 7809): the armed record stamps the sha256 of the helper's OWN bytes and of
@@ -47,7 +47,7 @@ const MAX_BATCH = 20;
 
 // ---------- pidfile arm primitive (§4b) ----------
 
-export function armCheck(pidfilePath, threadId, isAlive = defaultIsAlive) {
+export function armCheck(pidfilePath, threadId, isAlive = defaultIsAlive, mailMode) {
   let raw;
   try {
     raw = fs.readFileSync(pidfilePath, "utf8");
@@ -65,7 +65,12 @@ export function armCheck(pidfilePath, threadId, isAlive = defaultIsAlive) {
     return { action: "reap-then-arm", reason: "pidfile-malformed" };
   }
   if (!isAlive(rec.pid)) return { action: "reap-then-arm", reason: "stale-pid" };
-  if (rec.threadId === threadId) return { action: "already-armed", pid: rec.pid };
+  if (rec.threadId === threadId) {
+    if (mailMode !== undefined && (rec.mailMode ?? "read-only") !== mailMode) {
+      return { action: "refuse", reason: "live-helper-policy-mismatch-stop-before-rearm", pid: rec.pid };
+    }
+    return { action: "already-armed", pid: rec.pid };
+  }
   return { action: "refuse", reason: "live-helper-other-thread", pid: rec.pid, otherThread: rec.threadId };
 }
 
@@ -74,10 +79,10 @@ function defaultIsAlive(pid) {
   catch (error) { return error.code === "EPERM"; }
 }
 
-function writePidfile(pidfilePath, threadId) {
+function writePidfile(pidfilePath, threadId, mailMode) {
   fs.mkdirSync(path.dirname(pidfilePath), { recursive: true, mode: 0o700 });
   fs.writeFileSync(pidfilePath, JSON.stringify({
-    pid: process.pid, threadId, startedAt: new Date().toISOString(),
+    pid: process.pid, threadId, mailMode, startedAt: new Date().toISOString(),
   }) + "\n", { mode: 0o600 });
 }
 
@@ -146,6 +151,7 @@ export class WakeHelper {
     this.sockPath = opts.sockPath;
     this.pidfilePath = opts.pidfilePath;
     this.producerCmd = opts.producerCmd ?? null;
+    this.mailMode = normalizeMailMode(opts.mailMode);
     this.log = opts.log ?? ((obj) => process.stdout.write(JSON.stringify({ ts: new Date().toISOString(), ...obj }) + "\n"));
     this.offset = 0;
     this.eventIno = null;
@@ -218,7 +224,7 @@ export class WakeHelper {
     if (opened?.thread?.id !== this.threadId) this.fail(5, "thread-gone", { reason: "resume-returned-wrong-thread" });
     this.threadIdle = (opened.thread.status?.type ?? "unknown") === "idle";
 
-    writePidfile(this.pidfilePath, this.threadId);
+    writePidfile(this.pidfilePath, this.threadId, this.mailMode);
     process.on("SIGTERM", () => this.gracefulStop("SIGTERM"));
     process.on("SIGINT", () => this.gracefulStop("SIGINT"));
 
@@ -228,7 +234,7 @@ export class WakeHelper {
     // pid is stamped so the arm wrapper can bind this record to ITS child — an armed line
     // from a previous run (same thread, persistent log) must never verify a new arm (F1).
     // helperSha256/wakeCoreSha256 are stamped so the record also says WHICH bytes armed (R2).
-    this.log({ event: "armed", pid: process.pid, threadId: this.threadId, eventsFile: this.eventsFile, offset: this.offset, helperSha256: HELPER_SHA256, wakeCoreSha256: WAKE_CORE_SHA256 });
+    this.log({ event: "armed", pid: process.pid, threadId: this.threadId, mailMode: this.mailMode, eventsFile: this.eventsFile, offset: this.offset, helperSha256: HELPER_SHA256, wakeCoreSha256: WAKE_CORE_SHA256 });
     this.pollTimer = setInterval(() => this.pollEvents().catch((e) => this.log({ event: "poll-error", error: e.message })), POLL_MS);
     this.idleTimer = setInterval(() => this.deliverIfReady().catch(() => {}), IDLE_RECHECK_MS);
   }
@@ -297,7 +303,7 @@ export class WakeHelper {
     this.delivering = true;
     try {
       const batch = this.pendingBatch.splice(0, MAX_BATCH);
-      const text = fixedWakeText(batch, this.persona);      // injection-safe, from _shared
+      const text = fixedWakeText(batch, this.persona, this.mailMode); // local policy, never from mail
       let started;
       try {
         started = await this.client.send("turn/start", {
@@ -373,13 +379,21 @@ async function main() {
   const runtimeDir = opts.runtime ?? path.join(codexHome, "kijito-wake");
   const persona = opts.persona;
   const threadId = opts["thread-id"];
+  let mailMode;
+  try {
+    if (Object.hasOwn(opts, "mail-mode") && !opts["mail-mode"]) throw new Error("missing mode");
+    mailMode = normalizeMailMode(opts["mail-mode"]);
+  } catch {
+    process.stderr.write("invalid --mail-mode: expected read, read-only, or reply\n");
+    process.exit(2);
+  }
   if (cmd === "run") {
     if (!persona || !threadId || !opts.events) {
       process.stderr.write("run requires --persona --thread-id --events\n");
       process.exit(2);
     }
     const pidfilePath = path.join(runtimeDir, `helper-${persona}.pid`);
-    const check = armCheck(pidfilePath, threadId);
+    const check = armCheck(pidfilePath, threadId, defaultIsAlive, mailMode);
     if (check.action === "already-armed") { process.stdout.write(`already-armed pid=${check.pid}\n`); process.exit(0); }
     if (check.action === "refuse") {
       process.stderr.write(`arm-refused: ${check.reason}${check.otherThread ? ` thread=${check.otherThread} pid=${check.pid}` : ""}\n`);
@@ -387,7 +401,7 @@ async function main() {
     }
     if (check.action === "reap-then-arm") { try { fs.unlinkSync(pidfilePath); } catch { /* raced */ } }
     const helper = new WakeHelper({
-      persona, threadId, eventsFile: opts.events, sockPath, pidfilePath,
+      persona, threadId, eventsFile: opts.events, sockPath, pidfilePath, mailMode,
       // --producer-cmd "prog arg arg": session-scoped producer OWNED by the helper (gate-3
       // default shape). Space-split; producer invocations have no spaced arguments.
       producerCmd: opts["producer-cmd"] ? opts["producer-cmd"].split(/\s+/) : null,
@@ -402,7 +416,7 @@ async function main() {
       process.exit(2);
     }
     const pidfilePath = path.join(runtimeDir, `helper-${persona}.pid`);
-    const check = armCheck(pidfilePath, threadId);
+    const check = armCheck(pidfilePath, threadId, defaultIsAlive, mailMode);
     if (check.action === "already-armed") { process.stdout.write(`already-armed pid=${check.pid}\n`); process.exit(0); }
     if (check.action === "refuse") {
       process.stderr.write(`arm-refused: ${check.reason}${check.otherThread ? ` thread=${check.otherThread} pid=${check.pid}` : ""}\n`);
@@ -419,6 +433,7 @@ async function main() {
     const child = spawn(process.execPath, [new URL(import.meta.url).pathname, "run",
       "--persona", persona, "--thread-id", threadId, "--events", opts.events,
       "--codex-home", codexHome, "--runtime", runtimeDir,
+      "--mail-mode", mailMode,
       ...(opts.sock ? ["--sock", opts.sock] : []),
       ...(opts["producer-cmd"] ? ["--producer-cmd", opts["producer-cmd"]] : [])],
     { detached: true, stdio: ["ignore", out, out] });
@@ -441,7 +456,7 @@ async function main() {
       for (const line of appended.trim().split("\n").reverse()) {
         try {
           const rec = JSON.parse(line);
-          if (rec.event === "armed" && rec.threadId === threadId && rec.pid === child.pid) { verdict = `armed pid=${child.pid}`; break; }
+          if (rec.event === "armed" && rec.threadId === threadId && rec.pid === child.pid && rec.mailMode === mailMode) { verdict = `armed pid=${child.pid} mail-mode=${mailMode}`; break; }
           if (rec.event === "helper-exit") { verdict = `failed: ${rec.reason}`; break; }
         } catch { /* partial line */ }
       }
@@ -474,7 +489,7 @@ async function main() {
       process.exit(1);
     }
   }
-  process.stderr.write("usage: kijito-wake-helper <arm|run|status|stop> --persona P --thread-id T --events FILE [--codex-home DIR] [--sock PATH] [--runtime DIR]\n");
+  process.stderr.write("usage: kijito-wake-helper <arm|run|status|stop> --persona P --thread-id T --events FILE [--codex-home DIR] [--sock PATH] [--runtime DIR] [--mail-mode reply|read|read-only]\n");
   process.exit(2);
 }
 
