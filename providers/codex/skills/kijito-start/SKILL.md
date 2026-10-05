@@ -26,6 +26,8 @@ duplicate `PostCompact` without the ticket is also a no-op.
 2. Discover the live pointer with
    `kijito_recall(query="<PERSONA>_CURRENT_STATE_POINTER_V1 RESUME NOW", scope="project", project="<project>", full=true)`,
    where `<PERSONA>_CURRENT_STATE_POINTER_V1` is the sentinel your pointer opens with.
+   If no project is recorded, drop `scope` and `project` and match on the sentinel alone;
+   never fill in a project to make this call work.
    Require one unambiguous top current-state result; fail closed if it is absent
    or tied with another plausible live pointer. Scan every returned live memory
    and fail if any body other than the selected pointer contains the literal

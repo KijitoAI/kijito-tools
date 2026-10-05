@@ -217,11 +217,22 @@ pscan() {  # $1 = root, $2 = file listing the payload paths (one per line); prin
 echo "the whole npm payload names no operator and claims no authority (M459, payload):"
 if ! command -v npm >/dev/null 2>&1; then red "npm is not installed - the payload scan cannot run, and a scan that cannot run is not a pass"
 else
+  # plist <out-file> -> writes the payload paths and prints their count as ONE integer (0 on any failure). The 0.2.14
+  # release review caught the first version passing vacuously: `grep -c . || echo 0` printed "0" TWICE on an empty
+  # listing, the numeric test errored, and the else branch scanned zero files and printed green.
+  plist() {
+    (cd "$REPO" && npm pack --dry-run --json 2>/dev/null) \
+      | python3 -c 'import json,sys; [print(f["path"]) for f in json.load(sys.stdin)[0]["files"]]' > "$1" 2>/dev/null
+    local c; c=$(grep -c . "$1" 2>/dev/null); printf '%s\n' "${c:-0}"
+  }
   PL="$T/payload.txt"
-  (cd "$REPO" && npm pack --dry-run --json 2>/dev/null) \
-    | python3 -c 'import json,sys; [print(f["path"]) for f in json.load(sys.stdin)[0]["files"]]' > "$PL" 2>/dev/null
-  n=$(grep -c . "$PL" 2>/dev/null || echo 0)
-  if [ "$n" -lt 50 ]; then red "npm pack listed only $n files - the payload listing failed, so nothing was scanned"
+  n=$(plist "$PL")
+  # Control: with an npm that fails, the listing must come back too short to pass.
+  mkdir -p "$T/badnpm"; printf '#!/bin/sh\nexit 1\n' > "$T/badnpm/npm"; chmod +x "$T/badnpm/npm"
+  nb=$(PATH="$T/badnpm:$PATH" plist "$T/bad.txt")
+  if [ "$nb" -lt 50 ] 2>/dev/null; then grn "control: a failing npm listing is caught (count $nb), never scanned as clean"
+  else red "control: a failing npm listing was not caught (count '$nb')"; fi
+  if ! [ "$n" -ge 50 ] 2>/dev/null; then red "npm pack listed only $n files - the payload listing failed, so nothing was scanned"
   else
     hits=$(pscan "$REPO" "$PL")
     if [ -z "$hits" ]; then grn "all $n published files: no operator name or authority claim outside the attribution lines"

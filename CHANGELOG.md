@@ -2,7 +2,8 @@
 
 ## 0.2.14
 - **A test scans the whole published npm payload** (M459): it reads the file list from `npm pack`, has no path
-  exclusions, and allows only the copyright and author attribution lines, each matched by file and exact content.
+  exclusions, and allows only the copyright and author attribution lines, each matched by file and exact content. A failing
+  `npm pack` listing fails the test instead of scanning nothing.
 - **The packages no longer ship the Codex provider's maintainer material** (M459): `providers/codex/test/`,
   `plans/`, `n0-harness/` and the plan documents stay in the repository and are left out of the npm, wheel and
   sdist payloads. Nothing an installer runs changes: the Codex installer's hash-gated set (`wake-helper/` and
@@ -13,10 +14,12 @@
   instructions name, else the one the identity memory and pointer were filed under, else no project argument at
   all. A new persona's setup now records the project it chose, so later sessions pass the same value. Both the
   Claude Code and the Codex skill.
-- **The shipped skills carry no maintainer-internal text** (M462): no local test daemon, no maintainers' token-file
-  path, no client-version measurement notes, no dated measurement asides, and no claim that the routine is
-  "stored in the graph". A stopped inbox producer now points to `kijito-inbox-start.sh --persona <P>`, which
-  starts it and proves the wake. The scanner bans these shapes, with one control each, and checks that both
+- **The kijito-start and kijito-qa-memory skills carry no maintainer-internal text** (M462): no local test daemon,
+  no maintainers' token-file path, no client-version measurement notes, no dated measurement asides, and no claim
+  that the routine is "stored in the graph". The `.mcp.json` example drops the `X-Kijito-Session` header (Claude
+  Code never forwards it; the `?session=` URL parameter carries the session). A stopped inbox producer: restart the
+  supervised unit if one is installed, otherwise `kijito-inbox-start.sh --persona <P>` starts one and proves the
+  wake. The boot inbox read now peeks (`mark_read=false`), so deferred mail stays unread until it is handled. The scanner bans these shapes, with one control each, and checks that both
   kijito-start skills keep the project rule.
 
 ## 0.2.13
