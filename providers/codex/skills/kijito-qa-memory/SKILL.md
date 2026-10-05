@@ -45,7 +45,7 @@ correction, find the inbound citers and re-point them at the live id with
 `kijito_update` and `structural=true`, which preserves the operational-staleness
 clock because bracketed digits carry no meaning.
 
-Liveness reads differently per tool (re-measured 2026-09-11): `kijito_get` renders a definitive
+Liveness reads differently per tool: `kijito_get` renders a definitive
 `Status:` line (`retired (believed-false — corrected; …)` on a corrected record — trust it);
 `kijito_recall` / `kijito_startup` / `kijito_browse` render no Status, so there judge by
 `importance` (retired ≈ 0.1) / `confidence` (retired ≈ 0.05). An earlier version of this file said

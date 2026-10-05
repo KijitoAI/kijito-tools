@@ -65,7 +65,11 @@ IDENT='(persona|project)=["'"'"'`]?[^<$"'"'"'` ]|persona[: ]+`[A-Za-z]'
 # `tail -F` on it waits forever, which is indistinguishable from "no mail" (0.2.13 release review, MEDIUM: the
 # codex kijito-start skill said ~/.kijito-monitor/codex.jsonl, events.codex.ndjson, kijito-inbox-monitor@codex).
 STREAMID='(kijito-monitor/|events\.|inbox-monitor@)[A-Za-z][-A-Za-z0-9_]*|\.\*[A-Za-z][-A-Za-z0-9_]*\\?\.\(?(jsonl|ndjson)'
-OPAT="\b($NAMES)\b|$AUTH|\bfleet\b|$IDENT|$STREAMID"
+# Fleet-internal text a stranger cannot use (M462, river 11643, M312 rerun #7): the maintainers' local test daemon,
+# their token-file convention, client-version measurement notes, dated measurement asides, and the claim that the
+# routine is "stored in the graph" (true only in the maintainers' own account).
+FLEETINT=':7474\b|\.kijito_api_token|measured on claude code|(re-?)?measured:? 20[0-9]{2}-[0-9]{2}|(observed|measured) 20[0-9]{2}-[0-9]{2}-[0-9]{2}|stored in the graph'
+OPAT="\b($NAMES)\b|$AUTH|\bfleet\b|$IDENT|$STREAMID|$FLEETINT"
 oscan() {  # $1 = root; prints offending file:line matches
   # Normalise Unicode hyphens (U+2010-U+2015) to "-" and drop ONLY the ordinary phrase "on a cadence"
   # before matching: the old filter skipped any line containing it, names and authority claims included.
@@ -105,12 +109,31 @@ Run it as persona `codex`.
        ls ~/.cache/kijito-inbox-monitor/events.codex.ndjson    # launchd (macOS)
        `systemctl --user enable --now kijito-inbox-monitor@codex` on systemd
        pgrep -f "^tail -n 0 -F .*codex\.(jsonl|ndjson)"
+backed by the hosted service (a local `:7474` daemon is a test env only)
+   (Only for a deliberate LOCAL test/dev env, use url `http://127.0.0.1:7474/mcp/` with no auth header instead.)
+header `Authorization: Bearer ${KIJITO_API_TOKEN}` (token at `~/.claude/.kijito_api_token`)
+⚠️ **Measured on Claude Code 2.1.265: the client forwards ONLY `Authorization` from `headers`
+`kijito_get` renders a definitive `Status:` line — TRUST IT (re-measured 2026-09-11 on prod by two personas)
+Liveness reads differently per tool (re-measured 2026-09-11):
+agent reports itself armed. **Measured 2026-07-31: three personas hit this on one Linux seat**
+- Reproducible from Kijito: the routine is also stored in the graph — `kijito_recall("session start")`
 PLANTED
 # ... and the ordinary words stay allowed.
-for ok in 'poll kijito_hive_inbox on a cadence until the producer is back' 'walk along the riverbank' 'Codex users run this too' 'kijito_startup(persona="<persona>", project="<project>")' 'ls ~/.kijito-monitor/<persona>.jsonl' 'systemctl --user enable --now kijito-inbox-monitor@<persona>' 'pgrep -f "^tail -n 0 -F .*<persona>\.(jsonl|ndjson)"' 'tail -n 0 -F $STREAM' 'kijito-inbox-monitor@.service'; do
+for ok in 'poll kijito_hive_inbox on a cadence until the producer is back' 'walk along the riverbank' 'Codex users run this too' 'kijito_startup(persona="<persona>", project="<project>")' 'ls ~/.kijito-monitor/<persona>.jsonl' 'systemctl --user enable --now kijito-inbox-monitor@<persona>' 'pgrep -f "^tail -n 0 -F .*<persona>\.(jsonl|ndjson)"' 'tail -n 0 -F $STREAM' 'kijito-inbox-monitor@.service' 'your Kijito API key in the KIJITO_API_TOKEN environment variable' 'Measured on one session: 6 rounds, 11 verifiers' 'It was retired on 2026-08-15 and its code is archived'; do
   printf '%s\n' "$ok" > "$PF"
   if [ -z "$(oscan "$T")" ]; then grn "control: allowed - $ok"
   else red "control: wrongly flagged - $ok"; fi
+done
+
+# ── M461: kijito-start must not let an agent invent its project ─────────────────────────────────────────
+# M312 rerun #7 (river 11643): after /clear, kijito-start passed project=<the directory name> while setup had filed
+# memory under another project, so the agent had to ask the human which was right. Both providers' kijito-start
+# skills must say to use the project setup recorded, else omit it, and never the directory name.
+echo "kijito-start takes the project setup recorded, never the directory name (M461):"
+for f in providers/claude/skills/kijito-start/SKILL.md providers/codex/skills/kijito-start/SKILL.md; do
+  if grep -qiE "never derive it( from the directory name)?" "$REPO/$f" && grep -qi "directory name" "$REPO/$f" \
+     && grep -qiE "omit (\`project=\`|the project argument)" "$REPO/$f"; then grn "$f: project rule present"
+  else red "$f: missing the 'use what setup recorded, else omit, never the directory name' project rule"; fi
 done
 
 # ── M459: the SCRIPTS we ship name no operator and claim no authority either ─────────────────────────
