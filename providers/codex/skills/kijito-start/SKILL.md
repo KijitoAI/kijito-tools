@@ -93,23 +93,23 @@ session please") works with no flags and outranks this default.
    - If it is not installed, or `codex` was launched with a config override
      that prevents daemon attachment, or the producer's events stream is absent:
      check whether this session has the `Monitor` tool (Claude Code client).
-     - **If Monitor IS available** (codex persona running in a Claude Code
+     - **If Monitor IS available** (your persona running in a Claude Code
        session): fall back to the Claude Code arm path — the same proven
        `tail -F` + `grep` Monitor pattern every Claude Code persona uses
        (certified in the claude provider's kijito-start skill). Resolve the
        stream file path for YOUR persona:
        ```bash
        # Whichever of these exists is your stream:
-       ls ~/.kijito-monitor/codex.jsonl                        # systemd (Linux)
-       ls ~/.cache/kijito-inbox-monitor/events.codex.ndjson    # launchd (macOS)
+       ls ~/.kijito-monitor/<persona>.jsonl                    # systemd (Linux)
+       ls ~/.cache/kijito-inbox-monitor/events.<persona>.ndjson # launchd (macOS)
        ```
        If NEITHER exists, the producer is not running — see "Producer down"
        in the claude provider's kijito-start skill (enable with
-       `systemctl --user enable --now kijito-inbox-monitor@codex` on systemd
+       `systemctl --user enable --now kijito-inbox-monitor@<persona>` on systemd
        or `launchctl kickstart -k gui/$(id -u)/com.kijito.inbox-monitor` on
        launchd). Check idempotently — one line per live monitor:
        ```bash
-       pgrep -f "^tail -n 0 -F .*codex\.(jsonl|ndjson)"
+       pgrep -f "^tail -n 0 -F .*<persona>\.(jsonl|ndjson)"
        ```
        If nothing prints, arm exactly ONE persistent Monitor:
        ```
