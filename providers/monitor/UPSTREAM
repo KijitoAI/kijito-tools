@@ -1,13 +1,13 @@
 # The upstream release providers/monitor is a byte-exact copy of (row M314).
 # Written by scripts/import-monitor.sh; verified by tests/vendored_monitor_test.sh. Never hand-edit.
 repo=KijitoAI/kijito-inbox-monitor
-sha=f754da07c4567efc215e6323cb20747243b9e602
-tree=2f6462e5108e2e9bef3ffe068bd12821a24f2d4d
-tag=v0.5.12
+sha=9849f15273b6a9e3cce6164ba368fd6b127d8818
+tree=acfa552dc4ebaf8161dc4449c2fe21286ba04c95
+tag=v0.5.13
 file=100644 8d88ccb0fd09b9144505f985b4f882db278fac1f .github/workflows/publish-npm.yml
 file=100644 19ce3471a2cffa689be9d261049c1e74e3e7a25e .github/workflows/publish-pypi.yml
 file=100644 4534290a5dd36d18d07a782b784b6b0ad5ee38fc .gitignore
-file=100644 2829cadb855bd412aa924f8b4d649627941d1c13 CHANGELOG.md
+file=100644 fe0125ca77e8b35e23878408a204203a259f6720 CHANGELOG.md
 file=100644 d645695673349e3947e8e5ae42332d0ac3164cd7 LICENSE
 file=100644 f6b0e5634f3fd4156c1c000efb31578bfb068cf3 NOTICE
 file=100644 e74216a2bd031dd876ca84c4bcf29b9246b2fe67 README.md
@@ -17,10 +17,10 @@ file=100755 bbe3f07de13dab8a8a7a4798481156ae4a46ab8f bin/cli.js
 file=100644 fffa8bd23749a321285bd942a3f4f4a98936129c com.kijito.inbox-monitor.plist.template
 file=100644 16c216f2024836df3e7710ee1fcf1b7e9462e614 docs/DESIGN.md
 file=100644 4f5e53a8633e60e6c57c451e28546f8af8783fe8 kijito-inbox-monitor@.service.template
-file=100644 c00330c73a5eb6f4c9cafc0d86e0030ca1faf59f kijito_inbox_monitor.py
-file=100644 a42346c89b2b4eb63f1bf51400270f08db54b284 package.json
-file=100644 371ffc10b044f0f8ae0cdecbe85dfd85bdfb8221 pyproject.toml
+file=100644 e3b36ca0d0b828db1859b41739700f99dad34d42 kijito_inbox_monitor.py
+file=100644 f85ca6490f7702e9588a43d4f27df54d3e01e669 package.json
+file=100644 bee2713e1710f155b8242cab3cea3dab9a52e54d pyproject.toml
 file=100755 b34a5c775385ecfaefd4b374c1fc1aa082a85d14 scripts/migrate-systemd-unit.sh
 file=100755 868ba904f6beae4a50e53a8147693af3eb66bab2 scripts/mutation-check.py
 file=100755 acba6196213736922fc4f7135749386d85d172a6 scripts/prepublish-gate.sh
-file=100644 472f8a1bf6e6dc1e04f3e184239c702de083c3de test_kijito_monitor.py
+file=100644 5f5b8cf9c2452e3fc9ec0268eccf1cf0fec4f7d1 test_kijito_monitor.py

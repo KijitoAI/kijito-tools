@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.2.13
+- Vendored kijito-inbox-monitor 0.5.13: its comments and test fixtures no longer name the operator, and a test
+  keeps it that way. No behaviour change.
+- The Codex skills no longer hardcode a persona or name the operator's fleet: they use `<persona>` and
+  `<project>` placeholders, and the scanner now covers `providers/codex/skills` too.
 - Tests: the M440 operator-text scanner strips only the phrase "on a cadence" instead of skipping the
   line, normalises Unicode hyphens, and catches the wider shapes of an authority claim
   (preauthorized, pre-approved, already authorized, standing directive/order) plus more names.
