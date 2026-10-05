@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.2.14
+- **A test scans the whole published npm payload** (M459): it reads the file list from `npm pack`, has no path
+  exclusions, and allows only the copyright and author attribution lines, each matched by file and exact content.
 - **The packages no longer ship the Codex provider's maintainer material** (M459): `providers/codex/test/`,
   `plans/`, `n0-harness/` and the plan documents stay in the repository and are left out of the npm, wheel and
   sdist payloads. Nothing an installer runs changes: the Codex installer's hash-gated set (`wake-helper/` and
