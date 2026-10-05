@@ -20,7 +20,7 @@
 // the thread id. stale -> reap+arm; live+same-thread -> "already-armed" (exit 0, idempotent —
 // the DOUBLE-ARM battery probe); live+other-thread -> loud refuse, never kill the other helper.
 
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -67,7 +67,7 @@ export function armCheck(pidfilePath, threadId, isAlive = defaultIsAlive, mailMo
   if (!isAlive(rec.pid)) return { action: "reap-then-arm", reason: "stale-pid" };
   if (rec.threadId === threadId) {
     if (mailMode !== undefined && (rec.mailMode ?? "read-only") !== mailMode) {
-      return { action: "refuse", reason: "live-helper-policy-mismatch-stop-before-rearm", pid: rec.pid };
+      return { action: "refuse", reason: "live-helper-policy-mismatch-stop-before-rearm", pid: rec.pid, liveMailMode: rec.mailMode ?? "read-only" };
     }
     return { action: "already-armed", pid: rec.pid };
   }
@@ -362,29 +362,68 @@ export class WakeHelper {
 
 // ---------- CLI ----------
 
-function parseArgs(argv) {
+export function loadMailMode(policyFile, persona, explicitMode) {
+  if (explicitMode !== undefined) return normalizeMailMode(explicitMode);
+  let raw;
+  try { raw = fs.readFileSync(policyFile, "utf8"); }
+  catch (error) { if (error.code === "ENOENT") return "reply"; throw error; }
+  const saved = JSON.parse(raw);
+  if (saved?.schema !== 1 || saved.persona !== persona || !["read-only", "reply"].includes(saved.mailMode)) {
+    throw new Error("invalid saved mail policy; supply an explicit --mail-mode to replace it");
+  }
+  return saved.mailMode;
+}
+
+export function saveMailMode(policyFile, persona, mailMode) {
+  const record = { schema: 1, persona, mailMode: normalizeMailMode(mailMode) };
+  fs.mkdirSync(path.dirname(policyFile), { recursive: true, mode: 0o700 });
+  const tmp = `${policyFile}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(record) + "\n", { flag: "wx", mode: 0o600 });
+    fs.renameSync(tmp, policyFile);
+  } finally { try { fs.unlinkSync(tmp); } catch (error) { if (error.code !== "ENOENT") throw error; } }
+}
+
+export function parseArgs(argv) {
   const opts = {};
   const pos = [];
+  const allowed = new Set(["persona", "thread-id", "events", "codex-home", "sock", "runtime", "producer-cmd", "mail-mode"]);
   for (let i = 0; i < argv.length; i += 1) {
-    if (argv[i].startsWith("--")) opts[argv[i].slice(2)] = argv[++i];
-    else pos.push(argv[i]);
+    const token = argv[i];
+    if (token.startsWith("--")) {
+      const split = token.indexOf("=");
+      const key = token.slice(2, split < 0 ? undefined : split);
+      if (!allowed.has(key)) throw new Error(`unknown option --${key}`);
+      if (Object.hasOwn(opts, key)) throw new Error(`duplicate option --${key}`);
+      const value = split < 0 ? argv[++i] : token.slice(split + 1);
+      if (!value || value.startsWith("--")) throw new Error(`missing value for --${key}`);
+      opts[key] = value;
+    } else if (token.startsWith("-")) throw new Error(`unknown option ${token}`);
+    else pos.push(token);
   }
+  if (pos.length !== 1 || !["arm", "run", "status", "stop"].includes(pos[0])) throw new Error("expected one command: arm, run, status, or stop");
   return { cmd: pos[0], opts };
 }
 
 async function main() {
-  const { cmd, opts } = parseArgs(process.argv.slice(2));
+  let parsed;
+  try { parsed = parseArgs(process.argv.slice(2)); }
+  catch (error) { process.stderr.write(`${error.message}\n`); process.exit(2); }
+  const { cmd, opts } = parsed;
   const codexHome = opts["codex-home"] ?? path.join(process.env.HOME ?? "", ".codex");
   const sockPath = opts.sock ?? path.join(codexHome, "app-server-control", "app-server-control.sock");
   const runtimeDir = opts.runtime ?? path.join(codexHome, "kijito-wake");
   const persona = opts.persona;
   const threadId = opts["thread-id"];
+  const policyFile = path.join(runtimeDir, `mail-mode-${encodeURIComponent(persona ?? "codex")}.json`);
   let mailMode;
   try {
-    if (Object.hasOwn(opts, "mail-mode") && !opts["mail-mode"]) throw new Error("missing mode");
-    mailMode = normalizeMailMode(opts["mail-mode"]);
-  } catch {
-    process.stderr.write("invalid --mail-mode: expected read, read-only, or reply\n");
+    // status/stop remain usable even if the saved policy needs repair.
+    mailMode = ["arm", "run"].includes(cmd)
+      ? loadMailMode(policyFile, persona, opts["mail-mode"])
+      : normalizeMailMode(opts["mail-mode"]);
+  } catch (error) {
+    process.stderr.write(`invalid --mail-mode or saved policy: ${error.message}\n`);
     process.exit(2);
   }
   if (cmd === "run") {
@@ -394,11 +433,12 @@ async function main() {
     }
     const pidfilePath = path.join(runtimeDir, `helper-${persona}.pid`);
     const check = armCheck(pidfilePath, threadId, defaultIsAlive, mailMode);
-    if (check.action === "already-armed") { process.stdout.write(`already-armed pid=${check.pid}\n`); process.exit(0); }
     if (check.action === "refuse") {
-      process.stderr.write(`arm-refused: ${check.reason}${check.otherThread ? ` thread=${check.otherThread} pid=${check.pid}` : ""}\n`);
+      process.stderr.write(`arm-refused: ${check.reason}${check.otherThread ? ` thread=${check.otherThread} pid=${check.pid}` : ""}${check.liveMailMode ? ` live-mail-mode=${check.liveMailMode} pid=${check.pid}` : ""}\n`);
       process.exit(6);
     }
+    saveMailMode(policyFile, persona, mailMode);
+    if (check.action === "already-armed") { process.stdout.write(`already-armed pid=${check.pid} mail-mode=${mailMode}\n`); process.exit(0); }
     if (check.action === "reap-then-arm") { try { fs.unlinkSync(pidfilePath); } catch { /* raced */ } }
     const helper = new WakeHelper({
       persona, threadId, eventsFile: opts.events, sockPath, pidfilePath, mailMode,
@@ -417,11 +457,12 @@ async function main() {
     }
     const pidfilePath = path.join(runtimeDir, `helper-${persona}.pid`);
     const check = armCheck(pidfilePath, threadId, defaultIsAlive, mailMode);
-    if (check.action === "already-armed") { process.stdout.write(`already-armed pid=${check.pid}\n`); process.exit(0); }
     if (check.action === "refuse") {
-      process.stderr.write(`arm-refused: ${check.reason}${check.otherThread ? ` thread=${check.otherThread} pid=${check.pid}` : ""}\n`);
+      process.stderr.write(`arm-refused: ${check.reason}${check.otherThread ? ` thread=${check.otherThread} pid=${check.pid}` : ""}${check.liveMailMode ? ` live-mail-mode=${check.liveMailMode} pid=${check.pid}` : ""}\n`);
       process.exit(6);
     }
+    saveMailMode(policyFile, persona, mailMode);
+    if (check.action === "already-armed") { process.stdout.write(`already-armed pid=${check.pid} mail-mode=${mailMode}\n`); process.exit(0); }
     fs.mkdirSync(runtimeDir, { recursive: true, mode: 0o700 });
     const logFile = path.join(runtimeDir, `helper-${persona}.ndjson`);
     // F1: the log persists across runs ("a" mode), and a SIGKILL'd helper leaves no

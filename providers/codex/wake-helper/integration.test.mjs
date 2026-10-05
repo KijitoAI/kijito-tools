@@ -47,6 +47,7 @@ for (const [label, flags, expectedMode] of [
   ["explicit reply", ["--mail-mode", "reply"], "reply"],
   ["read opt-out", ["--mail-mode", "read"], "read-only"],
   ["read-only alias", ["--mail-mode", "read-only"], "read-only"],
+  ["equals opt-out", ["--mail-mode=read"], "read-only"],
 ]) test(`arm ${label}: forwards, stamps and delivers the selected policy`, async (t) => {
   const env = mkEnv("reply-policy");
   const daemon = new MockDaemon(env.sock);
@@ -71,7 +72,7 @@ for (const [label, flags, expectedMode] of [
   const text = daemon.turnStarts()[0].params.input[0].text;
   if (expectedMode === "reply") {
     assert.match(text, /Handle hive mail under your normal rules/);
-    assert.match(text, /Continue work independently authorized by the human/);
+    assert.match(text, /If handling the fetched mail requires work independently authorized by the human/);
     assert.doesNotMatch(text, /Only kijito_hive_inbox and kijito_hive_send|Call only kijito_hive_inbox/);
   } else {
     assert.match(text, /Call only kijito_hive_inbox/);
@@ -86,6 +87,55 @@ test("unknown mail mode fails before connecting or arming", async () => {
   const [code] = await once(child, "exit");
   assert.equal(code, 2);
   assert.match(child.stderrText, /invalid --mail-mode/);
+  assert.equal(fs.existsSync(path.join(env.runtime, "helper-codex.pid")), false);
+});
+
+test("CLI typo, empty, duplicate, and unknown equals flags fail before spawning or saving policy", async () => {
+  for (const flags of [["--mailmode", "read"], ["--read-only"], ["--mail-mode=bogus"], ["--mail-mode="],
+    ["--mail-mode"], ["--mail-mode=read", "--mail-mode=reply"]]) {
+    const env = mkEnv("bad-flag");
+    const child = startHelper(env, "T1", flags);
+    const [code] = await once(child, "exit");
+    assert.equal(code, 2, `${flags}: ${child.stderrText}`);
+    assert.equal(fs.existsSync(env.runtime), false);
+  }
+});
+
+test("read opt-out survives helper death and a new thread; mismatch refuses without changing preference", async (t) => {
+  const env = mkEnv("durable-policy");
+  const daemon = new MockDaemon(env.sock);
+  await daemon.listen();
+  const children = [];
+  t.after(async () => { for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); await daemon.close(); });
+  const first = startHelper(env, "T1", ["--mail-mode=read"]); children.push(first);
+  assert.ok(await waitFor(() => first.stdoutText.includes('"event":"armed"')));
+  const policy = path.join(env.runtime, "mail-mode-codex.json");
+  assert.equal(JSON.parse(fs.readFileSync(policy, "utf8")).mailMode, "read-only");
+  const refused = startHelper(env, "T1", ["--mail-mode=reply"]);
+  assert.equal((await once(refused, "exit"))[0], 6);
+  assert.match(refused.stderrText, /live-mail-mode=read-only/);
+  assert.equal(JSON.parse(fs.readFileSync(policy, "utf8")).mailMode, "read-only");
+  const died = once(first, "exit"); first.kill("SIGKILL"); await died;
+  daemon.threadId = "T2";
+  const arm = spawn(process.execPath, [HELPER, "arm", "--persona", "codex", "--thread-id", "T2", "--events", env.events,
+    "--sock", env.sock, "--runtime", env.runtime], { stdio: ["ignore", "pipe", "pipe"] });
+  let out = "", err = ""; arm.stdout.on("data", d => { out += d; }); arm.stderr.on("data", d => { err += d; });
+  t.after(() => { try { process.kill(JSON.parse(fs.readFileSync(path.join(env.runtime, "helper-codex.pid"), "utf8")).pid, "SIGKILL"); } catch {} });
+  assert.equal((await once(arm, "exit"))[0], 0, err);
+  assert.match(out, /mail-mode=read-only/);
+  fs.appendFileSync(env.events, mailLine(707));
+  assert.ok(await waitFor(() => daemon.turnStarts().length === 1));
+  assert.equal(daemon.turnStarts()[0].params.threadId, "T2");
+  assert.match(daemon.turnStarts()[0].params.input[0].text, /Call only kijito_hive_inbox/);
+});
+
+test("malformed saved policy fails closed before arming", async () => {
+  const env = mkEnv("corrupt-policy");
+  fs.mkdirSync(env.runtime);
+  fs.writeFileSync(path.join(env.runtime, "mail-mode-codex.json"), "{}");
+  const child = startHelper(env);
+  assert.equal((await once(child, "exit"))[0], 2);
+  assert.match(child.stderrText, /invalid saved mail policy/);
   assert.equal(fs.existsSync(path.join(env.runtime, "helper-codex.pid")), false);
 });
 
