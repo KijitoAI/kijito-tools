@@ -39,20 +39,33 @@ packages = ["src/kijito_tools"]
 # repo-root dispatcher live outside src/ so the tree doubles as the git-clone install path. Pull
 # them into the wheel under the package so importlib.resources can find them at runtime.
 #
-# ⚠️ providers/ MUST be included WHOLESALE, not enumerated per provider. Two reasons, both
-# measured: (1) the codex installer hash-gates providers/codex/test/codex-hive-watch.test.mjs, so
-# omitting the tests from the payload makes every codex install throw; (2) an enumerated list is a
-# fifth place to forget when a provider is added, and this repo already carries four.
+# ⚠️ providers/ MUST be included WHOLESALE, not enumerated per provider: an enumerated list is a
+# fifth place to forget when a provider is added, and this repo already carries four. (Every file
+# the codex installer hash-gates lives under providers/codex/wake-helper/ and providers/_shared/;
+# its old gate on a file under providers/codex/test/ was retired at gate 6.)
+# hatch_build.py force-includes providers/ file by file: it walks the tree wholesale and drops
+# only the M459 maintainer-material paths, which a static force-include cannot do.
+[tool.hatch.build.targets.wheel.hooks.custom]
+
 [tool.hatch.build.targets.wheel.force-include]
-"providers" = "kijito_tools/_assets/providers"
 "install.sh" = "kijito_tools/_assets/install.sh"
 
 [tool.hatch.build.targets.sdist]
 include = [
   "src/",
+  "hatch_build.py",
   "providers/",
   "install.sh",
   "README.md",
   "LICENSE",
   "NOTICE",
+]
+# M459: the same maintainer material the wheel hook (hatch_build.py PAYLOAD_EXCLUDE) and
+# package.json files[] leave out.
+exclude = [
+  "providers/codex/test/",
+  "providers/codex/plans/",
+  "providers/codex/n0-harness/",
+  "providers/codex/*plan*.md",
+  "providers/codex/n0-capability-probe-protocol.md",
 ]

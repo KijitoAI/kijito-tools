@@ -1,6 +1,12 @@
 # Changelog
 
 ## Unreleased
+- **The packages no longer ship the Codex provider's maintainer material** (M459): `providers/codex/test/`,
+  `plans/`, `n0-harness/` and the plan documents stay in the repository and are left out of the npm, wheel and
+  sdist payloads. Nothing an installer runs changes: the Codex installer's hash-gated set (`wake-helper/` and
+  `_shared/wake-core.mjs`) still ships and verifies from the package. The wheel now pulls `providers/` in
+  through `hatch_build.py` (still the whole tree, minus that list), and CI asserts the exclusion on all three
+  payloads.
 - **kijito-start takes the project setup recorded, never the directory name** (M461): the project the project
   instructions name, else the one the identity memory and pointer were filed under, else no project argument at
   all. A new persona's setup now records the project it chose, so later sessions pass the same value. Both the
