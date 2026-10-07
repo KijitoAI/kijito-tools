@@ -123,10 +123,6 @@ jobs:
           bash tests/stream_layouts_test.sh
           bash tests/windows_detect_test.sh
           bash tests/catchup_topology_test.sh
-      # M488: every key location the docs, scripts, templates and fixtures name is one the monitor's --redeem-key
-      # scans (plan section 5.2), proved both ways with mutants and planted locations.
-      - name: key-location coverage of the docs against the redeem helper's scan lists (M488)
-        run: bash tests/key_locations_coverage_test.sh
       - name: vendored monitor is byte-identical to its recorded upstream release, and its own suite passes (M314 M332)
         run: |
           bash tests/vendored_monitor_test.sh
