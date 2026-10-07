@@ -129,10 +129,12 @@ running for your persona (the install says so), run:
 It checks, in order, that there is a persona, that `kijito-inbox-monitor` is installed, and that an
 API key exists — and when one is missing it prints the exact fix and exits `2`. (Signed in through
 OAuth? Your agent can mint a read-only key from its own session, with your OK:
-`kijito_api_key(action="create", name=…, scopes=["memory.read"])`, saved to
-`~/.config/kijito-inbox-monitor/token` with `chmod 600`.) Then it starts a producer for that persona
-unless one already covers it, sends you a real message, and prints the one consumer line your agent
-must arm. It exits `0` only when the wake is proven; `3` means the mail reaches your stream and only the
+`kijito_api_key(action="create", name=…, scopes=["memory.read"])`, then run the one redeem command
+the reply gives, which saves the key to `~/.config/kijito-inbox-monitor/token` itself so the key never
+passes through the conversation. If the reply shows the key itself (an older or self-hosted server),
+follow its save steps to `~/.config/kijito-inbox-monitor/token` and `chmod 600` it.) Then it starts
+a producer for that persona unless one already covers it, sends you a real message, and prints the one
+consumer line your agent must arm. It exits `0` only when the wake is proven; `3` means the mail reaches your stream and only the
 consumer is left. A producer started this way stops at logout or reboot — for one that stays up, see the
 monitor README's "Running the producer for real (supervision)".
 
@@ -254,6 +256,7 @@ The rest of the suite:
 ```bash
 bash tests/drift_test.sh                     # does this machine RUN what the repo SHIPS?
 bash tests/conformance_test.sh --selftest    # every provider states the shared doctrine
+bash tests/key_locations_coverage_test.sh    # every documented key location is one the key helper scans
 node --test providers/codex/test/codex-hive-watch.test.mjs \
              providers/codex/test/release-packaging.test.mjs   # codex controller + packaging
 node providers/codex/tools/refresh-manifest.mjs --check        # codex gated hashes are current

@@ -263,11 +263,9 @@ if [ "$producer_ok" = 1 ]; then
 
 COULD NOT MEASURE: the key the monitor uses is fine for WATCHING mail (memory.read), but it cannot SEND
 the self-test message: sending is a hive write, which needs memory.write. The monitor may be working.
-Prove the wake one of two ways:
-  - send yourself one message from your agent: kijito_hive_send(persona="$PERSONA", to="$PERSONA",
-    content="inbox test") and check that it wakes your agent; or
-  - give the monitor a key that can also send - kijito_api_key(action="create", name="inbox monitor",
-    scopes=["memory.read","memory.write"], persona="$PERSONA") - save it (chmod 600) and re-run this.
+Prove the wake from your agent instead - send yourself one message:
+  kijito_hive_send(persona="$PERSONA", to="$PERSONA", content="inbox test")
+and check that it wakes your agent. The monitor needs no other key.
 EOF
         exit 2 ;;
       *)
