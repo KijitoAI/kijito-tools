@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.16
+- **The vendored kijito-inbox-monitor moves to v0.5.15** (M486): an `--api-base` flag and a `KIJITO_BASE`
+  environment variable select the Kijito API (the flag wins, then the environment, then `https://api.kijito.ai`).
+  Plain `http` is accepted only for a loopback address, proxy environment variables are ignored, and a pinned
+  connection tries every resolved address. The `armed` and `heartbeat` events carry `api_base`, and
+  `scripts/render-service.sh` renders the launchd plist or systemd unit. With no flag and no variable set,
+  behaviour is unchanged.
+
 ## 0.2.15
 - **The published payload names no maintainer persona, host or message id** (M467): shipped scripts cite their
   provenance by row or review instead of naming the maintainers' own personas, a host or hive message ids, and
