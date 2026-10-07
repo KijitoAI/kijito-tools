@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+- **Setup text for a new key covers the redeem command** (M488): when there is no key, the inbox start script
+  asks the agent to mint a read-only key and run the one redeem command the reply gives, which saves the key to
+  `~/.config/kijito-inbox-monitor/token` without the key passing through the conversation. A reply that shows the
+  key itself (an older or self-hosted server) is still saved there by hand with `chmod 600`. The offer of a key
+  that can also write is gone from the start script and the self-test: such a key is saved to the REST key file,
+  which neither reads, and the self-test asks the agent to send the test message instead.
+- **A test keeps the docs and the key helper's scan in step** (M488): every key-file path, key variable name and
+  client-config header form that the docs, scripts, templates and test fixtures name must be one the monitor's
+  `--redeem-key` looks at, with an explicit list of files that hold no key. Mutants of the helper's lists and
+  planted undocumented locations each make it fail. The Codex notify example now points at the monitor's key file.
+
 ## 0.2.16
 - **The vendored kijito-inbox-monitor moves to v0.5.15** (M486): an `--api-base` flag and a `KIJITO_BASE`
   environment variable select the Kijito API (the flag wins, then the environment, then `https://api.kijito.ai`).

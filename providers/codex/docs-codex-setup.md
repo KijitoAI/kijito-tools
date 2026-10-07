@@ -54,8 +54,12 @@ If you use hive mail and want a desktop notification with your unread count, wir
 
 ```toml
 notify = ["node", "/path/to/kijito-tools/providers/codex/notify/kijito-notify-count.mjs",
-          "--persona", "YOUR_PERSONA", "--token-file", "/path/to/your/kijito_api_token"]
+          "--persona", "YOUR_PERSONA", "--token-file", "/home/YOU/.config/kijito-inbox-monitor/token"]
 ```
+
+The token file is the read-only key the inbox monitor uses, at `.config/kijito-inbox-monitor/token`
+in your home directory (on macOS `/Users/YOU/...`). `notify` is an argument list, not a shell
+command, so write the path out in full: `~` and `$HOME` are not expanded there.
 
 Honest semantics: Codex fires `notify` on its own turn lifecycle, so this tells you your
 unread count when Codex finishes work — it is not a mail-arrival alert. The notification

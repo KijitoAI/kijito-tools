@@ -72,13 +72,13 @@ COULD NOT RUN: no Kijito API key for the monitor. If your agent signed in throug
 no key on disk yet - the agent can mint a READ-ONLY one from its own session, with your OK:
   1. kijito_api_key(action="create", name="inbox monitor on $(hostname 2>/dev/null || echo this-host)",
                     scopes=["memory.read"], persona="$PERSONA")
-     (a durable, revocable, read-only key; the secret is shown ONCE. The monitor only READS mail, so this
-      is all it needs. With it, this script cannot send its own test message; it will ask your agent to
-      send one instead.)
-  2. save it to ~/.config/kijito-inbox-monitor/token and chmod 600 it - never into a memory or a message
+     (a durable, revocable, read-only key. The monitor only READS mail, so this is all it needs. With it,
+      this script cannot send its own test message; it will ask your agent to send one instead.)
+  2. run the one redeem command the reply gives: it saves the key to ~/.config/kijito-inbox-monitor/token
+     itself, so the key never passes through the conversation. If the reply shows the key itself instead
+     (an older or self-hosted server), follow its save steps to ~/.config/kijito-inbox-monitor/token and
+     chmod 600 it - never into a memory or a message.
   3. run this again
-Only if you explicitly say yes to a key that can also WRITE: scopes=["memory.read","memory.write"] lets this
-script send the test message itself. An agent must not mint a write scope without that yes.
 EOF
   exit 2
 fi

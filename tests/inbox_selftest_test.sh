@@ -71,7 +71,9 @@ fi
 rm -rf "$H"
 
 # 6. a READ-ONLY key cannot send the test message (a hive write needs memory.write, Kijito M339). That
-#    is COULD NOT MEASURE (2) with both ways to finish - never "not working" (river 10985, M312 rerun).
+#    is COULD NOT MEASURE (2) with the way to finish - never "not working" (river 10985, M312 rerun).
+#    M488: the text no longer offers a write key (under key pickup a memory.read+memory.write key is a REST
+#    key saved to ~/.config/kijito/api_token, which the monitor never reads); the agent sends the message.
 H="$(mktemp -d)"; SH="$(mktemp -d)"
 mkdir -p "$H/.kijito-monitor"
 printf '{"event": "armed", "persona": "rotester", "cursor": 1}\n' > "$H/.kijito-monitor/rotester.jsonl"
@@ -86,9 +88,10 @@ out="$(HOME="$H" KIJITOMON_TOKEN_FILE="$H/.claude_token" KIJITOMON_BIN="$(type -
         "$SELFTEST" --persona rotester --timeout 3 2>&1)"; rc=$?
 if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q "cannot SEND" \
    && printf '%s' "$out" | grep -q 'kijito_hive_send(persona="rotester", to="rotester"' \
-   && printf '%s' "$out" | grep -q 'scopes=\["memory.read","memory.write"\]' \
+   && ! printf '%s' "$out" | grep -q 'scopes=' \
+   && ! printf '%s' "$out" | grep -q 'kijito_api_key(' \
    && ! printf '%s' "$out" | grep -q "VERDICT: NOT WORKING"; then
-  grn "read-only key => exit 2 naming memory.write and both ways to prove the wake (not NOT WORKING)"
+  grn "read-only key => exit 2, the agent sends the test message, no write key offered (not NOT WORKING)"
 else
   red "read-only key gave rc=$rc: $out"
 fi
