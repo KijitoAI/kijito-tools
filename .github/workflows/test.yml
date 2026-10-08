@@ -107,6 +107,11 @@ jobs:
           test -f "$HOME/.codex/skills/kijito-start/SKILL.md"
           test -f "$HOME/.codex/skills/kijito-start/agents/openai.yaml"
 
+      # M502: the skill names ONE absolute wake-helper path; a packed install into a fresh HOME
+      # (npm install --prefix + npx --skills-only) proves that path exists and runs.
+      - name: codex wake helper path agrees with the installed package (M502)
+        run: bash tests/codex_wake_helper_path_test.sh
+
       - name: lifecycle suite
         run: |
           bash tests/lc_test.sh

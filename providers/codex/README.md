@@ -14,9 +14,14 @@ The `codex` provider of [kijito-tools](../../README.md). What is live:
 - **Skills** ([`skills/`](skills/)): `kijito-start` and `kijito-qa-memory`, deployed to
   `~/.codex/skills` with their `agents/openai.yaml` interface sidecars.
 - **Native session wake helper** ([`wake-helper/`](wake-helper/)): the gate-5 opt-in live wake —
-  `kijito-start`'s arm step runs it from the checkout against the Codex daemon's WS-over-UDS
-  transport (gate-4 battery certified 2/2, gate-5 merged at `dcce0bd`). It is never installed;
-  its bytes, its runtime import (the shared wake core), its tests and its mock daemon are
+  `kijito-start`'s arm step runs it against the Codex daemon's WS-over-UDS transport (gate-4
+  battery certified 2/2, gate-5 merged at `dcce0bd`). It is not installed by `install.mjs`; it runs
+  from the package copy Kijito setup keeps with `npm install --prefix ~/.local/share/kijito-tools
+  kijito-tools`, at exactly `$HOME/.local/share/kijito-tools/node_modules/kijito-tools/providers/codex/wake-helper/kijito-wake-helper.mjs`
+  (row M502: the skill names that one absolute path and has the agent record it in its
+  current-state pointer; `tests/codex_wake_helper_path_test.sh` installs into a fresh HOME and
+  checks the path exists and runs). An operator may run it from a checkout and record that path
+  instead. Its bytes, its runtime import (the shared wake core), its tests and its mock daemon are
   hash-gated in [`release-manifest.json`](release-manifest.json).
 - **The release gate** ([`install.mjs`](install.mjs)): `node install.mjs` verifies every gated
   artifact (absent file and hash mismatch both fail loud) and that no executable ships ungated

@@ -73,13 +73,38 @@ session please") works with no flags and outranks this default.
    | **catch-up-only** | helper absent, daemon absent, or no verified live arm remains after a precondition failure | plainly: what is missing, and that mail waits for your next prompt |
    | **isolated** | the user asked not to arm | acknowledge and skip arming |
 
-   - If the kijito-tools native wake helper is installed (it ships in
-     `providers/codex/wake-helper/kijito-wake-helper.mjs` — gate-4
-     battery-certified 2/2 on the measured WS-over-UDS daemon transport),
-     arm it IDEMPOTENTLY per its own check-then-arm contract:
-     `kijito-wake-helper arm --persona <P> --thread-id <this session's thread>
-     --events <events file> --producer-cmd "<inbox-monitor cmd>"` (plus
-     `--codex-home/--sock/--runtime` as installed). If the user chooses read-only,
+   - **Where the helper is — one absolute path, never a guess.** Kijito setup keeps a
+     copy of the kijito-tools package with
+     `npm install --prefix ~/.local/share/kijito-tools kijito-tools`, which puts the
+     native wake helper (gate-4 battery-certified 2/2 on the measured WS-over-UDS
+     daemon transport) at exactly:
+
+     ```
+     $HOME/.local/share/kijito-tools/node_modules/kijito-tools/providers/codex/wake-helper/kijito-wake-helper.mjs
+     ```
+
+     Use the helper path your current-state pointer records, if it records a full path
+     ending in `kijito-wake-helper.mjs` (an operator who runs the helper from a git
+     checkout records that checkout's path there); otherwise use the path above. Never
+     build a path from a directory name, and never drop `node_modules/kijito-tools`
+     from it. The helper is installed only if `node "<helper path>" status --persona <P>`
+     runs (it prints `not-armed` or a JSON record); if the file is missing, you are
+     catch-up-only: say so and name the path you checked. **Record the helper path you
+     used, in full, in your current-state pointer** the first time you arm, so the next
+     session (and any later re-arm on a new thread) runs the same file.
+   - If the helper is installed, arm it IDEMPOTENTLY per its own check-then-arm
+     contract, outside the sandbox (it has to reach Codex itself), as one command:
+     ```bash
+     node "$HOME/.local/share/kijito-tools/node_modules/kijito-tools/providers/codex/wake-helper/kijito-wake-helper.mjs" \
+       arm --persona <P> --thread-id "$CODEX_THREAD_ID" \
+       --events "$HOME/.codex/kijito-wake/events-<P>.ndjson" \
+       --producer-cmd "<inbox-monitor cmd>"
+     ```
+     with the recorded helper path in place of the default if your pointer names one
+     (`$CODEX_THREAD_ID` is this session's thread; add `--codex-home/--sock/--runtime`
+     as installed). The inbox monitor ships in the same package copy:
+     `python3 $HOME/.local/share/kijito-tools/node_modules/kijito-tools/providers/monitor/kijito_inbox_monitor.py --persona <P> --token-file $HOME/.config/kijito-inbox-monitor/token --events-file $HOME/.codex/kijito-wake/events-<P>.ndjson`
+     is the `<inbox-monitor cmd>`. If the user chooses read-only,
      pass `--mail-mode read`; if they choose replies, pass `--mail-mode reply`.
      Otherwise OMIT the mode flag so the helper loads the saved choice for that
      persona from `mail-mode-<encoded persona>.json` in its runtime directory.
@@ -151,28 +176,33 @@ session please") works with no flags and outranks this default.
    producer is indistinguishable from an empty mailbox to any consumer. Report
    producer trouble loudly; do not arm anything on top of a dead producer.
 
-### Upgrade path — after the kijito-tools checkout advances (main moved)
+### Upgrade path — after the package copy (or checkout) advances
 
-The helper runs FROM THE CHECKOUT, so a main advance creates: RUNNING helper =
-old bytes, DISK = new gated bytes, pidfile live. `arm` on that state correctly
+The helper runs FROM the package copy (or an operator's checkout) at the helper
+path above, so an update creates: RUNNING helper = old bytes, DISK = new gated
+bytes, pidfile live. `arm` on that state correctly
 reports `already-armed` only if the resolved policy matches. A policy mismatch
 instead refuses with `live-helper-policy-mismatch-stop-before-rearm` (exit 6),
 reporting the still-live helper's mode. Neither path kills or swaps it — an old
-helper keeps running until you retire it explicitly. The explicit path:
+helper keeps running until you retire it explicitly. `<pkg>` below is the package
+directory your helper path starts with (by default
+`$HOME/.local/share/kijito-tools/node_modules/kijito-tools`). The explicit path:
 
-1. `kijito-wake-helper stop` (graceful; logs `helper-exit`),
-2. `node providers/codex/install.mjs` — the release gate must PASS on the new
+1. `node "<helper path>" stop --persona <P>` (graceful; logs `helper-exit`),
+   then update the copy: `npm install --prefix ~/.local/share/kijito-tools kijito-tools@latest`
+   (an operator's checkout: pull it instead) — the helper path stays the same,
+2. `node "<pkg>/providers/codex/install.mjs"` — the release gate must PASS on the new
    bytes before anything runs them,
 3. re-`arm` per step 6, retaining the saved choice or passing the user's explicitly
    chosen mode; a mismatch refusal did not save the rejected choice,
-4. `node providers/codex/install.mjs --skills-only` then the drift check —
-   deployed skills go stale on every main advance that edits them, and nothing
+4. `node "<pkg>/providers/codex/install.mjs" --skills-only` then the drift check —
+   deployed skills go stale on every update that edits them, and nothing
    else re-deploys them (a gap found at release certification).
 
 Verify the swap BY EFFECT, not by intention: the new `armed` record stamps
 `helperSha256` + `wakeCoreSha256` — one log-line read proves WHICH bytes are
-armed (they must equal the new checkout's gated hashes in
-`release-manifest.json`). Verify and report `mailMode` from that record and `status`
+armed (they must equal the new copy's gated hashes in
+`<pkg>/providers/codex/release-manifest.json`). Verify and report `mailMode` from that record and `status`
 too; running the new bytes is not proof that the intended policy was selected.
 
 ## Resume
