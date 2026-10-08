@@ -1,6 +1,31 @@
 # Changelog
 
 ## Unreleased
+
+## 0.2.17 - 2026-10-08
+- **The vendored kijito-inbox-monitor moves to v0.6.0** (M488): the first release with `--redeem-key`, including the
+  second-signal hardening (kijito-inbox-monitor #20) that the npm launcher's SIGTERM/SIGHUP relay relies on.
+- **`redeem-key` collects a pickup key and never runs the installer** (M488): `npx -y 'kijito-tools@>=0.2.17'
+  redeem-key --kind watcher|rest ...` (and `pipx run --spec 'kijito-tools>=0.2.17' kijito-tools redeem-key ...` or
+  `uvx --from 'kijito-tools>=0.2.17' kijito-tools redeem-key ...`) is caught by both launchers before the bash
+  lookup and runs the bundled monitor's `--redeem-key` with Python under `-I -S`, with the same options, the same
+  stdin and its exit code passed back (a death by signal too). Only the options that mode reads are accepted, each
+  at most once, in the shapes a reply renders (`--kind watcher|rest`, `--expect-account acct_` + 16 hex,
+  `--replace-prefix kjt_` + 8), and a value may not start with `-`; anything else, or a positional (the pickup code
+  goes on stdin), is refused with `REDEEM_REFUSED reason=usage` and exit 2, without echoing any argument value. An
+  installer run that looks like a mangled redeem command (`redeem` in any spelling, including Unicode dashes,
+  fullwidth letters and stray whitespace, a pickup code, or a redeem-only option) is refused the same way instead of
+  installing. Before this, `npx kijito-tools redeem-key ...` ran the whole toolkit install and ignored the code.
+- **Signals reach the monitor through either launcher**: the PyPI launcher execs the monitor; the npm launcher
+  relays SIGTERM and SIGHUP sent to it alone (npm forwards a TERM to its child only) and lets Ctrl-C reach the
+  monitor directly, so a harness kill always ends in the monitor's own outcome line and exit code. Needs
+  kijito-inbox-monitor's second-signal hardening (a group kill plus the relay delivers TERM twice).
+- **Native Windows needs no bash**: the npm launcher looks for `py -3`, `python3`, then `python` (elsewhere
+  `python3`, then `python`) in the absolute `PATH` entries only, never the current directory, probes that exact file
+  for Python 3.9+ and runs it; a Store alias or an old Python is skipped. None found gives `reason=no_python`, exit
+  2 (on macOS the message explains the Command Line Tools dialog `/usr/bin/python3` can open).
+- **Publish gate**: `tests/redeem_key_test.sh` (now in `prepublishOnly`) fails once the package version is 0.2.17
+  or later while the bundled monitor's `--help` does not list `--redeem-key`.
 - **Setup text for a new key covers the redeem command** (M488): when there is no key, the inbox start script
   asks the agent to mint a read-only key and run the one redeem command the reply gives, which saves the key to
   `~/.config/kijito-inbox-monitor/token` without the key passing through the conversation. A reply that shows the

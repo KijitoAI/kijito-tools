@@ -3,6 +3,42 @@
 All notable changes to kijito-inbox-monitor are documented in this file.
 The format is based on Keep a Changelog, and this project follows Semantic Versioning.
 
+## [Unreleased]
+
+## [0.6.0] - 2026-10-08
+
+### Added
+- **`--redeem-key`: one-time key pickup (row M488).** A key minted with `delivery="pickup"` is never shown to the
+  agent; the reply carries a single-use code, and `printf '%s\n' '<code>' | kijito-inbox-monitor --redeem-key
+  --kind watcher|rest` collects the key over TLS and writes it to its key file (0600, in a 0700 directory). The
+  key never appears in an argv, a prompt or any output; the helper prints one `KEY_SAVED file=... mode=0600
+  prefix=... scopes=... account=... verified=yes` line. Exit codes 0 and 2 to 8 are documented in the README.
+- It talks only to `https://api.kijito.ai`, or to a base the human wrote into the owner-only
+  `~/.config/kijito-inbox-monitor/api_base` (loopback included; a flag or `$KIJITO_BASE` alone is refused), and
+  only with a code whose host matches that base. On Windows only the default base is accepted.
+- It writes only the canonical key files (`~/.config/kijito-inbox-monitor/token`, `~/.config/kijito/api_token`)
+  or a per-persona `token.<persona>`; never over an existing key without `--replace` or a matching
+  `--replace-prefix`; a target that changes during the redeem leaves the key in an owner-only temp file
+  (`KEY_PARKED`). Paths come from the account's passwd entry, and a disagreeing `$HOME` stops the run.
+- For the server's account check it sends the SHA-256 of every key it finds on the machine (key files, the MCP
+  client configs of Claude Code, Codex and OpenCode, and key-shaped environment values), at most 32, and never
+  a key or an `Authorization` header. A key file that is not 0600, or a symlink, stops the run.
+- The legacy key files are one glob, `~/.claude/.kijito_api_token*`, as the README says: a renamed or backed-up
+  copy such as `.kijito_api_token-old` is hashed too, not only the bare file and its `.<name>` siblings.
+- An interrupt, SIGTERM or SIGHUP during `--redeem-key` still prints an outcome and cleans up; once the key is
+  in place the outcome is read from the disk, so a saved key is never reported lost. A server that does not
+  offer pickup answers `PICKUP_UNAVAILABLE` (exit 7: nothing collected; revoke the minted key and ask for it
+  with delivery="inline").
+- Only the first interrupt acts during `--redeem-key`. A second SIGTERM, SIGHUP or Ctrl-C (a process-group kill that
+  also reaches a launcher which relays it, as kijito-tools' npm launcher does, or a harness repeating its TERM) is
+  ignored, so it can no longer fire inside the clean-up or the outcome line; a run that a signal ended keeps them
+  ignored until it exits, so a late duplicate cannot turn exit 6 into a death by SIGTERM. Ctrl-Break (SIGBREAK) on
+  Windows takes the same path as Ctrl-C, and a signal already ignored on entry (`nohup`) stays ignored.
+- `--replace-prefix` accepts exactly `kjt_` and 8 characters, the prefix a renewal reply renders; a longer value,
+  such as a whole key, is refused before anything is sent.
+- `scripts/mutation-check.py` accepts the multi-part `(label, [(pattern, replacement), ...])` form its docstring
+  already described, and gains 68 `M488-*` mutants, one per defence.
+
 ## [0.5.15] - 2026-10-07
 
 ### Added
