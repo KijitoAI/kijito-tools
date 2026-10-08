@@ -110,15 +110,28 @@ it to its key file, so the key never passes through the conversation:
 printf '%s\n' 'kpc_…@api.kijito.ai' | npx -y 'kijito-tools@>=0.2.17' redeem-key --kind watcher --expect-account acct_…
 ```
 
-`redeem-key` must be the first argument. Both launchers (`bin/cli.js` for npm, `kijito_tools/cli.py` for
-`pipx run` / `uvx`) catch it before anything else and run the bundled kijito-inbox-monitor's `--redeem-key`
-with the same options and the same stdin, and pass its exit code back. They never run `install.sh` or `bash`.
-Only the options that mode reads are accepted (`--kind`, `--expect-account`, `--api-base`, `--token-file`,
-`--replace`, `--replace-prefix`, `--no-verify`); anything else is refused with exit `2` before anything
-runs, and so is `redeem-key` anywhere but first. It needs Python 3.9+, not bash, so it also works in native
-Windows PowerShell: the npm launcher tries `py -3`, then `python3`, then `python` there (`python3`, then
-`python` elsewhere), and the PyPI launcher uses the Python it runs on. The helper's exit codes and output
-lines are documented in the monitor README.
+`redeem-key` must be the first argument. Through PyPI, always ask for the floor too, because a cached older
+kijito-tools would run the installer instead: `pipx run --spec 'kijito-tools>=0.2.17' kijito-tools redeem-key ...`
+or `uvx --from 'kijito-tools>=0.2.17' kijito-tools redeem-key ...`. Both launchers (`bin/cli.js` for npm,
+`kijito_tools/cli.py` for PyPI) catch it before anything else and run the bundled kijito-inbox-monitor's
+`--redeem-key` with the same options and the same stdin, under `python -I -S` (no environment variables, user
+site-packages or `.pth` files of whatever Python that is), and pass its exit code back. They never run
+`install.sh` or `bash`.
+
+- Only the options that mode reads are accepted (`--kind`, `--expect-account`, `--api-base`, `--token-file`,
+  `--replace`, `--replace-prefix`, `--no-verify`), each once, and `--kind`, `--expect-account` and
+  `--replace-prefix` only in the shapes a reply renders. Anything else is refused with exit `2` before anything
+  runs, without repeating the value. An installer run that looks like a mangled redeem command (`redeem` in any
+  spelling, a pickup code, or one of those options) is refused the same way instead of installing.
+- Signals: the monitor decides the outcome of an interrupt (it prints it and exits 6, 7, 5 or 8). The PyPI
+  launcher becomes the monitor (exec); the npm launcher relays a SIGTERM or SIGHUP sent to it alone (npm forwards
+  a TERM to its child only) and leaves Ctrl-C to reach the monitor directly.
+- It needs Python 3.9+, not bash, so it also works in native Windows PowerShell. The npm launcher looks for
+  `py -3`, then `python3`, then `python` there (`python3`, then `python` elsewhere) in the absolute entries of
+  `PATH` only, never the current directory, and runs the exact file it checked. The PyPI launcher uses the Python
+  it runs on.
+
+The helper's exit codes and output lines are documented in the monitor README.
 
 The Claude installer copies the scripts to `~/.claude/`, deploys the skills to `~/.claude/skills/`, drops
 the CLAUDE.md doctrine snippet alongside them, and merges the keys it needs into `settings.json`. It

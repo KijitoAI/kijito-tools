@@ -5,8 +5,9 @@ them through ``importlib.resources`` (works whether the package is installed nor
 run via ``pipx run``) and shell out to ``bash``. ``install.sh`` resolves its siblings
 relative to its own directory, so we run it with ``cwd`` set to the assets directory.
 
-ONE EXCEPTION, ``redeem-key`` (row M488): ``pipx run kijito-tools redeem-key --kind ...`` (or
-``uvx kijito-tools redeem-key ...``) collects an API key minted with delivery="pickup". It is
+ONE EXCEPTION, ``redeem-key`` (row M488): ``pipx run --spec 'kijito-tools>=0.2.17' kijito-tools redeem-key
+--kind ...`` (or ``uvx --from 'kijito-tools>=0.2.17' kijito-tools redeem-key ...``; always with the floor, since a
+cached older kijito-tools would run the installer instead) collects an API key minted with delivery="pickup". It is
 intercepted here, before the bash lookup, and runs the vendored kijito-inbox-monitor's
 ``--redeem-key`` with this same Python. It never runs install.sh or bash, writes nothing itself and
 makes no request itself: the monitor does the whole redeem. install.sh is a ``--provider``
@@ -25,12 +26,29 @@ import shutil
 import signal
 import subprocess
 import sys
+import unicodedata
 
 # The flags the monitor's --redeem-key reads (its argparse: --kind, --api-base, --token-file, --replace,
 # --replace-prefix, --expect-account, --no-verify), plus help. Exact names only: argparse would also take an
 # abbreviation such as --tok, which this launcher refuses so that what runs is what was written.
 REDEEM_VALUE_FLAGS = frozenset({"--kind", "--expect-account", "--api-base", "--token-file", "--replace-prefix"})
 REDEEM_BOOL_FLAGS = frozenset({"--replace", "--no-verify", "--help", "-h"})
+# The value shapes the reply renders and the monitor accepts. Checked here so that a misplaced value (a pickup
+# code, a key) is refused by the launcher, which never quotes it, rather than by argparse, which would. URLs and
+# paths are left to the monitor.
+REDEEM_VALUE_SHAPES = {
+    "--kind": (re.compile(r"(?:watcher|rest)"), "watcher or rest"),
+    "--expect-account": (re.compile(r"acct_[0-9a-f]{16}"), "acct_ and 16 hex characters"),
+    "--replace-prefix": (re.compile(r"kjt_[A-Za-z0-9_-]{8}"), "kjt_ and the 8 characters the reply shows"),
+}
+# Option names that only redeem-key takes. No installer reads any of them, so an installer run that carries one
+# is a mangled redeem command, never an install.
+REDEEM_ONLY_NAMES = frozenset({"kind", "expect-account", "api-base", "token-file", "replace", "replace-prefix",
+                               "no-verify"})
+# -I (isolated): no PYTHONPATH / PYTHON* variables, no user site-packages, no script directory on sys.path. -S: no
+# site module, so no .pth file of the environment this python belongs to runs code in the process that holds the
+# key. The monitor is stdlib-only and needs neither.
+PY_FLAGS = ("-I", "-S")
 _QUOTABLE_FLAG = re.compile(r"--?[A-Za-z][A-Za-z0-9-]{0,40}")
 
 
@@ -62,6 +80,9 @@ def check_redeem_args(args):
             # dash there means a flag was swallowed as a value; argparse would read it differently.
             if value == "" or value.startswith("-"):
                 return "%s needs a value" % name
+            shape = REDEEM_VALUE_SHAPES.get(name)
+            if shape and not shape[0].fullmatch(value):
+                return "%s must be %s (the value is not shown)" % (name, shape[1])
         elif name in REDEEM_BOOL_FLAGS:
             if value is not None:
                 return "%s takes no value" % name
@@ -82,13 +103,26 @@ def check_redeem_args(args):
     return None
 
 
+# One argument as a near-miss check sees it: NFKC (fullwidth letters become ASCII), lower case, every Unicode
+# dash and minus as '-', and no whitespace at all. The same explicit character lists as bin/cli.js.
+_DASHES = re.compile("[\u2010-\u2015\u2212\ufe58\ufe63\uff0d]")
+_SPACES = re.compile("[\t\n\v\f\r \u0085\u00a0\u1680\u180e\u2000-\u200b\u2028\u2029\u202f\u205f"
+                     "\u3000\ufeff]")
+
+
+def normalize_arg(a) -> str:
+    return _SPACES.sub("", _DASHES.sub("-", unicodedata.normalize("NFKC", str(a)).lower()))
+
+
 def redeem_near_miss(args) -> bool:
-    """Arguments that look like an attempt to redeem but are not ``redeem-key`` in first position. They are
-    never installer arguments, so they are refused rather than handed to install.sh (whose default provider
-    would run the toolkit install and ignore them)."""
+    """An installer run that is really a mangled redeem command: an argument that mentions redeem or holds a
+    pickup code, or an option only redeem-key takes. Refused rather than handed to install.sh, whose default
+    provider would run the toolkit install, ignore the arguments and leave the code unread."""
     for a in args:
-        n = re.sub(r"^-+", "", str(a).lower()).replace("_", "-")
-        if n in ("redeem-key", "redeemkey", "redeem"):
+        n = normalize_arg(a)
+        if "redeem" in n or "kpc_" in n:
+            return True
+        if n.startswith("-") and re.sub(r"^-+", "", n.split("=", 1)[0]) in REDEEM_ONLY_NAMES:
             return True
     return False
 
@@ -127,24 +161,26 @@ def redeem_key(args) -> int:
         return _refuse("no_python", "this Python does not know its own executable, so redeem-key cannot start the "
                        "helper; use the uvx or npx line from the same reply. Nothing was sent; the code is still "
                        "live")
-    # -I (isolated): no PYTHONPATH / PYTHON* variables, no user site-packages, no script directory on sys.path.
-    # The monitor is stdlib-only, so nothing in a project's environment can shadow a module it imports while it
-    # handles a key. stdin is inherited untouched (this process never reads it): the code goes straight to it.
-    cmd = [exe, "-I", str(monitor), "--redeem-key", *args]
+    # PY_FLAGS (-I -S): nothing in a project's environment can shadow a module the monitor imports or run code in
+    # it while it handles a key. stdin is inherited untouched (this process never reads it): the code goes
+    # straight to the monitor.
+    cmd = [exe, *PY_FLAGS, str(monitor), "--redeem-key", *args]
     sys.stdout.flush()
     sys.stderr.flush()
     if os.name == "posix":
-        # Become the monitor: its exit status, its signals and its stdin are the caller's directly.
+        # Become the monitor: its exit status, its signals and its stdin are the caller's directly. (bin/cli.js
+        # cannot exec, so it relays SIGTERM / SIGHUP to its child to the same effect.)
         try:
             os.execv(exe, cmd)
         except OSError as e:
             return _refuse("spawn_failed", "could not start %s (%s). Nothing was sent; the code is still live"
                            % (exe, type(e).__name__))
     # Windows: os.exec* is emulated there (spawn, then exit), so run it as a child and pass its exit code on.
-    # A console Ctrl-C reaches every process on the console; the monitor owns the outcome of an interrupt (it
-    # prints what happened and exits 6, 7, 5 or 8), so this process ignores it until the monitor returns.
+    # A console Ctrl-C, Ctrl-Break or close reaches every process on the console; the monitor owns the outcome of
+    # an interrupt (it prints what happened and exits 6, 7, 5 or 8), so this process ignores them until the
+    # monitor returns.
     restore = []
-    for name in ("SIGINT", "SIGBREAK"):
+    for name in ("SIGINT", "SIGBREAK", "SIGHUP"):
         sig = getattr(signal, name, None)
         if sig is not None:
             try:
@@ -186,8 +222,9 @@ def main(argv=None) -> int:
     if argv[:1] == ["redeem-key"]:
         return redeem_key(argv[1:])
     if redeem_near_miss(argv):
-        return _refuse("usage", "to collect a key, redeem-key must be the FIRST argument, spelled exactly: "
-                       "pipx run kijito-tools redeem-key --kind watcher|rest ... (nothing was installed)")
+        return _refuse("usage", "that looks like a redeem command. To collect a key, redeem-key must be the FIRST "
+                       "argument, spelled exactly: pipx run --spec 'kijito-tools>=0.2.17' kijito-tools redeem-key "
+                       "--kind watcher|rest ... (nothing was installed)")
     return run_installer(argv)
 
 
