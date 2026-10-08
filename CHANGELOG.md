@@ -1,6 +1,21 @@
 # Changelog
 
 ## Unreleased
+- **TODO before 0.2.17 is tagged (M488 P2b):** 0.2.17 = the `redeem-key` launcher intercept below **plus**
+  re-vendoring kijito-inbox-monitor 0.6.0 (`scripts/import-monitor.sh <sha>`), the first release whose
+  `--redeem-key` exists. The vendored copy is still 0.5.15, which answers `unrecognized arguments:
+  --redeem-key`. Do not bump the version or publish until the re-vendor has landed; the Kijito server's reply
+  asks for `kijito-tools@>=0.2.17`, so a 0.2.17 without the 0.6.0 monitor would resolve and fail.
+- **`redeem-key` collects a pickup key and never runs the installer** (M488): `npx -y 'kijito-tools@>=0.2.17'
+  redeem-key --kind watcher|rest ...` (and `pipx run kijito-tools redeem-key ...`) is caught by both launchers
+  before the bash lookup and runs the bundled monitor's `--redeem-key` with Python in isolated mode (`-I`),
+  with the same options, the same stdin and its exit code passed back (a death by signal too). Only the options
+  that mode reads are accepted, each at most once, and a value may not start with `-`; anything else, a
+  positional (the pickup code goes on stdin), or `redeem-key` anywhere but first is refused with
+  `REDEEM_REFUSED reason=usage` and exit 2, without echoing any argument value. No Python 3.9+ gives
+  `reason=no_python`, exit 2. Native Windows needs no bash: the npm launcher tries `py -3`, `python3`, then
+  `python`, and skips any that is not a working Python 3.9+ (such as the Microsoft Store alias). Before this,
+  `npx kijito-tools redeem-key ...` ran the whole toolkit install and ignored the code.
 - **Setup text for a new key covers the redeem command** (M488): when there is no key, the inbox start script
   asks the agent to mint a read-only key and run the one redeem command the reply gives, which saves the key to
   `~/.config/kijito-inbox-monitor/token` without the key passing through the conversation. A reply that shows the

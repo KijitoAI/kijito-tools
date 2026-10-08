@@ -102,6 +102,24 @@ payload and run `install.sh`, which defaults to the Claude provider. They need `
 run them inside WSL (see Platform support). Pass provider flags straight through, e.g.
 `npx kijito-tools --provider codex --skills-only`.
 
+**One exception: `redeem-key`** (0.2.17+). When an agent mints an API key with the key pickup, the reply
+gives one command that pipes a single-use pickup code into a local helper, which collects the key and saves
+it to its key file, so the key never passes through the conversation:
+
+```sh
+printf '%s\n' 'kpc_…@api.kijito.ai' | npx -y 'kijito-tools@>=0.2.17' redeem-key --kind watcher --expect-account acct_…
+```
+
+`redeem-key` must be the first argument. Both launchers (`bin/cli.js` for npm, `kijito_tools/cli.py` for
+`pipx run` / `uvx`) catch it before anything else and run the bundled kijito-inbox-monitor's `--redeem-key`
+with the same options and the same stdin, and pass its exit code back. They never run `install.sh` or `bash`.
+Only the options that mode reads are accepted (`--kind`, `--expect-account`, `--api-base`, `--token-file`,
+`--replace`, `--replace-prefix`, `--no-verify`); anything else is refused with exit `2` before anything
+runs, and so is `redeem-key` anywhere but first. It needs Python 3.9+, not bash, so it also works in native
+Windows PowerShell: the npm launcher tries `py -3`, then `python3`, then `python` there (`python3`, then
+`python` elsewhere), and the PyPI launcher uses the Python it runs on. The helper's exit codes and output
+lines are documented in the monitor README.
+
 The Claude installer copies the scripts to `~/.claude/`, deploys the skills to `~/.claude/skills/`, drops
 the CLAUDE.md doctrine snippet alongside them, and merges the keys it needs into `settings.json`. It
 backs up `settings.json` and merges with `jq`, so it leaves your existing settings alone and is safe
@@ -183,7 +201,8 @@ against a stand-in wtmux (`tests/wtmux_lifecycle_test.sh`); the first real-seat 
 If Claude Code runs in auto mode there, the auto-mode classifier refuses an agent's own edits to
 `~/.claude/settings.json`, so apply any settings change for self-drive yourself.
 Requirements everywhere: `bash` and `jq`; add `tmux` (or `wtmux` on native Windows) for the autonomy
-features.
+features. The one exception is `npx kijito-tools redeem-key` (see Install), which needs only Node and
+Python 3.9+ and runs in native Windows PowerShell.
 
 ## Managed vs. autonomous panes
 
@@ -257,6 +276,7 @@ The rest of the suite:
 bash tests/drift_test.sh                     # does this machine RUN what the repo SHIPS?
 bash tests/conformance_test.sh --selftest    # every provider states the shared doctrine
 bash tests/key_locations_coverage_test.sh    # every documented key location is one the key helper scans
+bash tests/redeem_key_test.sh                # redeem-key runs only the monitor, never the installer
 node --test providers/codex/test/codex-hive-watch.test.mjs \
              providers/codex/test/release-packaging.test.mjs   # codex controller + packaging
 node providers/codex/tools/refresh-manifest.mjs --check        # codex gated hashes are current
