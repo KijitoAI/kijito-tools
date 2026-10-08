@@ -1,12 +1,10 @@
 # Changelog
 
 ## Unreleased
-- **TODO before 0.2.17 is tagged (M488 P2b):** 0.2.17 = the `redeem-key` launcher intercept below **plus**
-  re-vendoring kijito-inbox-monitor 0.6.0 (`scripts/import-monitor.sh <sha>`), the first release whose
-  `--redeem-key` exists. That release must include kijito-inbox-monitor PR #20 (second-signal hardening), which
-  the npm launcher's SIGTERM/SIGHUP relay relies on. The vendored copy is still 0.5.15, which answers `unrecognized arguments:
-  --redeem-key`. Do not bump the version or publish until the re-vendor has landed; the Kijito server's reply
-  asks for `kijito-tools@>=0.2.17`, so a 0.2.17 without the 0.6.0 monitor would resolve and fail.
+
+## 0.2.17 - 2026-10-08
+- **The vendored kijito-inbox-monitor moves to v0.6.0** (M488): the first release with `--redeem-key`, including the
+  second-signal hardening (kijito-inbox-monitor #20) that the npm launcher's SIGTERM/SIGHUP relay relies on.
 - **`redeem-key` collects a pickup key and never runs the installer** (M488): `npx -y 'kijito-tools@>=0.2.17'
   redeem-key --kind watcher|rest ...` (and `pipx run --spec 'kijito-tools>=0.2.17' kijito-tools redeem-key ...` or
   `uvx --from 'kijito-tools>=0.2.17' kijito-tools redeem-key ...`) is caught by both launchers before the bash

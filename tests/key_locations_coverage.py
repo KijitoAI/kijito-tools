@@ -41,8 +41,7 @@ KEY_LOCATIONS = (
     ".config/kijito/api_token",
     ".config/kijito-inbox-monitor/token.*",
     ".config/kijito/api_token*",
-    ".claude/.kijito_api_token",
-    ".claude/.kijito_api_token.*",
+    ".claude/.kijito_api_token*",   # one glob since monitor 0.6.0 (#19): the bare file, .<persona> files, backups
 )
 MCP_CONFIGS_HOME = (".claude.json", ".claude/settings.json", ".codex/config.toml",
                     ".config/opencode/opencode.json", ".config/opencode/opencode.jsonc")
@@ -336,7 +335,7 @@ MUTANTS = {
     # Each one must turn a scan red - the real repo, or for drop-non-key the allowlist control fixture;
     # tests/key_locations_coverage_test.sh asserts that it does.
     "drop-persona-glob": "KEY_LOCATIONS without .config/kijito-inbox-monitor/token.*",
-    "drop-legacy-glob": "KEY_LOCATIONS without .claude/.kijito_api_token.*",
+    "drop-legacy-glob": "KEY_LOCATIONS without .claude/.kijito_api_token*",
     "env-name-filter": "an environment rule that reads KIJITO_API_TOKEN only",
     "drop-codex-config": "a config-scan list without .codex/config.toml",
     "drop-settings-local": "a working-directory config list without .claude/settings.local.json",
@@ -356,7 +355,7 @@ def main(argv=None):
     if a.mutant == "drop-persona-glob":
         kl = tuple(p for p in kl if p != ".config/kijito-inbox-monitor/token.*")
     elif a.mutant == "drop-legacy-glob":
-        kl = tuple(p for p in kl if p != ".claude/.kijito_api_token.*")
+        kl = tuple(p for p in kl if p != ".claude/.kijito_api_token*")
     elif a.mutant == "env-name-filter":
         en = ("KIJITO_API_TOKEN",)
     elif a.mutant == "drop-codex-config":
