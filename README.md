@@ -80,7 +80,7 @@ bytes ARE the release and no flag is needed.
 | provider | what it installs | where | needs |
 |---|---|---|---|
 | `claude` | bash lifecycle scripts + the two skills, and merges `settings.json` | `~/.claude` | `bash`, `jq` (`tmux` for autonomy) |
-| `codex` | Skills (kijito-start, kijito-qa-memory) + gated native same-session wake helper. The controller-era runtime is retired. `--skills-only` deploys the skills; the native wake helper runs from a persistent checkout (advanced setup). | `~/.codex/skills` | Node 20+, a Codex binary |
+| `codex` | Skills (kijito-start, kijito-qa-memory) + gated native same-session wake helper. The controller-era runtime is retired. `--skills-only` deploys the skills; the native wake helper runs from a persistent package copy (`npm install --prefix ~/.local/share/kijito-tools kijito-tools`, helper at `$HOME/.local/share/kijito-tools/node_modules/kijito-tools/providers/codex/wake-helper/kijito-wake-helper.mjs`) or an operator's checkout. | `~/.codex/skills` | Node 20+, a Codex binary |
 
 The wake protocol both providers rely on — event-line validation, the injection-fenced wake text,
 read-offset persistence, and the single-consumer lock — lives once in `providers/_shared/wake-core.mjs`.

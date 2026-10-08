@@ -1,6 +1,19 @@
 # Changelog
 
 ## Unreleased
+- **The Codex kijito-start skill names one absolute wake-helper path** (M502, from the M456 Codex cold run #2,
+  finding N2): `$HOME/.local/share/kijito-tools/node_modules/kijito-tools/providers/codex/wake-helper/kijito-wake-helper.mjs`,
+  where Kijito setup's `npm install --prefix ~/.local/share/kijito-tools kijito-tools` puts it. The skill used to
+  name only the package-relative path, so a second Codex session guessed
+  `~/.local/share/kijito-tools/providers/...`, hit `Cannot find module`, and fell back to catch-up only. The arm,
+  status, stop and upgrade commands now run `node "<that path>"` (there is no `kijito-wake-helper` command on
+  PATH), the monitor command is spelled out under the same package copy, a path the current-state pointer records
+  wins (an operator's checkout), and the agent is told to record the full path in its pointer when it first arms.
+- **`tests/codex_wake_helper_path_test.sh`** (in CI): the skill text gives exactly that one path and the record
+  instruction; `npm pack` + `npm install --prefix <fresh HOME>/.local/share/kijito-tools` + `npx kijito-tools
+  --provider codex --skills-only` from the tarball, then the deployed skill's path must exist and
+  `node <path> status` must run. Four mutated skills (the old relative path, the session-2 guess, a bare command,
+  no record instruction) must each fail.
 
 ## 0.2.17 - 2026-10-08
 - **The vendored kijito-inbox-monitor moves to v0.6.0** (M488): the first release with `--redeem-key`, including the

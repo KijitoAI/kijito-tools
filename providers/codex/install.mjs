@@ -21,8 +21,11 @@
 //                  versioned prose, meant to be overwritten). Runs verify FIRST, so a checkout
 //                  that fails its release gate never deploys skills from those bytes.
 //
-// The wake-helper itself is NOT installed anywhere: kijito-start's arm step runs it from the
-// checkout, which is why its bytes (and its runtime import, the shared wake core) are gated here.
+// The wake-helper itself is NOT installed by this script: kijito-start's arm step runs it from a
+// package copy (`npm install --prefix ~/.local/share/kijito-tools kijito-tools`, so
+// $HOME/.local/share/kijito-tools/node_modules/kijito-tools/providers/codex/wake-helper/
+// kijito-wake-helper.mjs, the one path the skill names — row M502) or an operator's checkout, which
+// is why its bytes (and its runtime import, the shared wake core) are gated here.
 
 import { createHash } from "node:crypto";
 import fs from "node:fs";
