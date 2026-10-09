@@ -26,6 +26,7 @@ BIN="$T/bin"; mkdir -p "$BIN" "$T/proj"
 cat > "$BIN/kijito-inbox-monitor" <<'SHIM'
 #!/usr/bin/env bash
 [ "${1:-}" = --safe-persona ] && { printf '%s' "$2"; exit 0; }
+[ -n "${KM_ARGS_LOG:-}" ] && echo "$*" >> "$KM_ARGS_LOG"      # M517: what the producer was started with
 ev=""; p=""
 while [ $# -gt 0 ]; do case "$1" in --events-file) ev=$2; shift 2 ;; --persona) p=$2; shift 2 ;; *) shift ;; esac; done
 echo "fake monitor starting for $p" >&2
@@ -35,7 +36,7 @@ SHIM
 # Fake self-test: FAKE_ST picks the verdict the real one would print.
 cat > "$BIN/selftest" <<'SHIM'
 #!/usr/bin/env bash
-echo "kijito inbox self-test [persona=$2]"
+echo "kijito inbox self-test [persona=$2] base=${KIJITO_BASE:-unset}"
 case "${FAKE_ST:-consumer}" in
   all)      echo "  ok    stream: the message reached x after ~1s"; echo "  ok    consumer: armed"; exit 0 ;;
   consumer) echo "  ok    stream: the message reached x after ~1s"; echo "  FAIL  consumer: nothing reads x"; exit 1 ;;
@@ -46,8 +47,8 @@ SHIM
 chmod +x "$BIN/kijito-inbox-monitor" "$BIN/selftest"
 H="$T/home"; mkdir -p "$H"
 run() {  # env overrides as args, then runs the helper from the project dir; prints output + "rc=N"
-  ( cd "$T/proj" && env -u KIJITOMON_TOKEN_FILE -u CLAUDE_PROJECT_DIR HOME="$H" PATH="$BIN:/usr/bin:/bin" \
-      KIJITO_SELFTEST="$BIN/selftest" "$@" bash "$START" ${ARGS:-} 2>&1; echo "rc=$?" )
+  ( cd "$T/proj" && env -u KIJITOMON_TOKEN_FILE -u CLAUDE_PROJECT_DIR -u KIJITO_BASE HOME="$H" PATH="$BIN:/usr/bin:/bin" \
+      KIJITO_SELFTEST="$BIN/selftest" KM_ARGS_LOG="$T/km_args" "$@" bash "$START" ${ARGS:-} 2>&1; echo "rc=$?" )
 }
 
 # How many fake producers run for "tester". Not `pgrep -c`: macOS pgrep has no -c (it prints usage and
@@ -129,6 +130,31 @@ out=$(run FAKE_ST=stream); rc=${out##*rc=}
 out=$(run FAKE_ST=cantsend); rc=${out##*rc=}
 [ "$rc" = 2 ] && grep -q 'NOT PROVEN YET' <<<"$out" && ! grep -q 'did NOT reach your stream' <<<"$out" \
   && grn "a test that could not be sent is exit 2 (what is missing), not 'not working'" || red "cantsend: rc=$rc $out"
+
+# M517 (M312 cold run #9, N30): key pickup has the human write ~/.config/kijito-inbox-monitor/api_base for a
+# non-default server, and the start script used to ignore it - the producer polled api.kijito.ai. The base is
+# --api-base > $KIJITO_BASE > that file (the monitor's own order, plus the file), and it reaches BOTH the
+# producer (--api-base) and the self-test ($KIJITO_BASE). Each case uses a fresh persona so a producer starts.
+_started_with() { grep -- "--persona $1 " "$T/km_args" | tail -1; }
+if _started_with tester | grep -q -- '--api-base'; then red "no base configured: the producer was still given --api-base"
+else grn "no base configured: the producer gets no --api-base (the monitor's hosted default)"; fi
+printf 'http://127.0.0.1:7490/\n' > "$H/.config/kijito-inbox-monitor/api_base"
+out=$(ARGS="--persona apifile" run); rc=${out##*rc=}
+if [ "$rc" = 3 ] && _started_with apifile | grep -q -- '--api-base http://127.0.0.1:7490 ' \
+   && grep -q 'base=http://127.0.0.1:7490$' <<<"$out" && grep -q 'api   http://127.0.0.1:7490 (from ~/.config/kijito-inbox-monitor/api_base)' <<<"$out"; then
+  grn "the api_base file reaches the producer and the self-test (trailing slash dropped)"
+else red "api_base file: rc=$rc started=[$(_started_with apifile)] $out"; fi
+out=$(ARGS="--persona apienv" run KIJITO_BASE=https://env.example.org); rc=${out##*rc=}
+_started_with apienv | grep -q -- '--api-base https://env.example.org ' && grep -q 'base=https://env.example.org$' <<<"$out" \
+  && grn "\$KIJITO_BASE beats the file" || red "env over file: started=[$(_started_with apienv)] $out"
+out=$(ARGS="--persona apiflag --api-base https://flag.example.org" run KIJITO_BASE=https://env.example.org); rc=${out##*rc=}
+_started_with apiflag | grep -q -- '--api-base https://flag.example.org ' && grep -q 'base=https://flag.example.org$' <<<"$out" \
+  && grn "--api-base beats \$KIJITO_BASE" || red "flag over env: started=[$(_started_with apiflag)] $out"
+printf 'kijito.example.org\n' > "$H/.config/kijito-inbox-monitor/api_base"
+out=$(ARGS="--persona apibad" run); rc=${out##*rc=}
+[ "$rc" = 2 ] && grep -q 'is not an http(s) URL' <<<"$out" && [ -z "$(_started_with apibad)" ] \
+  && grn "a base that is not an http(s) URL is exit 2 with the fix, and nothing starts" || red "bad base: rc=$rc $out"
+rm -f "$H/.config/kijito-inbox-monitor/api_base"
 
 echo
 echo "passed: $pass   failed: $fail"
