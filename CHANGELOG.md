@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.18 (2026-10-13)
 - **`kijito-inbox-start.sh` uses the API base you configured** (M517, from M312 cold run #9, finding N30). It now
   takes `--api-base <url>`, else `$KIJITO_BASE`, else `~/.config/kijito-inbox-monitor/api_base` (the file key
   pickup has you write for a non-default server), and passes it to the producer (`--api-base`) and to the
