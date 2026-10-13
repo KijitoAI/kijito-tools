@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Start the Kijito inbox monitor for ONE persona and prove, with a real message, that mail reaches it.
 #
-#   ~/.claude/kijito-inbox-start.sh --persona <name> [--token-file <file>]
+#   ~/.claude/kijito-inbox-start.sh --persona <name> [--token-file <file>] [--api-base <url>]
+#
+# The API is https://api.kijito.ai unless --api-base, $KIJITO_BASE or ~/.config/kijito-inbox-monitor/api_base
+# (written during key pickup for a non-default server) names another - in that order. The producer and the
+# self-test both get it (row M517: the file used to be ignored, so a self-hosted producer polled the hosted API).
 #
 # WHY THIS EXISTS (row M383). The first stranger cold run (2026-09-29) installed the monitor
 # and stopped: nothing ever STARTED it, the installer's self-test said "COULD NOT MEASURE: no persona", and
@@ -15,14 +19,16 @@
 # (NOT done - the text says what to arm) · 1 = a hop failed · 2 = could not run (no persona, no monitor, no
 # token), with the exact fix printed. Never 0 before the wake is proven: an agent reads 0 as "done".
 set -u
-PERSONA=""; TOKEN_FILE="${KIJITOMON_TOKEN_FILE:-}"
+PERSONA=""; TOKEN_FILE="${KIJITOMON_TOKEN_FILE:-}"; API_BASE=""; API_FROM=""
 while [ $# -gt 0 ]; do
   case "$1" in
+    --api-base) API_BASE=${2:-}; API_FROM="--api-base"; shift 2 ;;
+    --api-base=*) API_BASE=${1#*=}; API_FROM="--api-base"; shift ;;
     --persona) PERSONA=${2:-}; shift 2 ;;
     --persona=*) PERSONA=${1#*=}; shift ;;
     --token-file) TOKEN_FILE=${2:-}; shift 2 ;;
     --token-file=*) TOKEN_FILE=${1#*=}; shift ;;
-    -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1 (try --help)" >&2; exit 2 ;;
   esac
 done
@@ -31,6 +37,22 @@ _lib="$_dir/kijito-persona-lib.sh"; [ -r "$_lib" ] || _lib="$HOME/.claude/kijito
 # shellcheck source=/dev/null
 . "$_lib" || { echo "COULD NOT RUN: cannot source kijito-persona-lib.sh"; exit 2; }
 SELFTEST="${KIJITO_SELFTEST:-$_dir/inbox-selftest.sh}"; [ -x "$SELFTEST" ] || SELFTEST="$HOME/.claude/inbox-selftest.sh"
+
+# ── 0. which API (M517) ────────────────────────────────────────────────────────────────────────────
+API_FILE="$HOME/.config/kijito-inbox-monitor/api_base"
+if [ -z "$API_BASE" ] && [ -n "${KIJITO_BASE:-}" ]; then API_BASE=$KIJITO_BASE; API_FROM="\$KIJITO_BASE"; fi
+if [ -z "$API_BASE" ] && [ -s "$API_FILE" ]; then
+  API_BASE=$(head -n 1 "$API_FILE" | tr -d '[:space:]'); API_FROM="~/.config/kijito-inbox-monitor/api_base"
+fi
+API_BASE=${API_BASE%/}
+if [ -n "$API_BASE" ]; then
+  case "$API_BASE" in
+    http://*|https://*) export KIJITO_BASE="$API_BASE" ;;
+    *) echo "COULD NOT RUN: the API base from $API_FROM is not an http(s) URL."
+       echo "  Fix: put the server's address (e.g. https://kijito.example.org) there, or pass --api-base <url>."
+       exit 2 ;;
+  esac
+fi
 
 # ── 1. persona ─────────────────────────────────────────────────────────────────────────────────────
 [ -n "$PERSONA" ] || PERSONA=$(kijito_persona_from_marker 2>/dev/null || true)
@@ -84,6 +106,7 @@ EOF
 fi
 
 echo "kijito inbox start [persona=$PERSONA]"
+[ -n "$API_BASE" ] && echo "  api   $API_BASE (from $API_FROM)"
 # ── 4. a producer for this persona ─────────────────────────────────────────────────────────────────
 EVENTS=$(kijito_stream_for_persona "$PERSONA" 2>/dev/null || true)
 # Is a RUNNING producer already covering THIS persona? "Some producer runs on this host" is not the question
@@ -112,7 +135,7 @@ else
   [ -n "$EVENTS" ] || EVENTS="$D/events.$SAFE.ndjson"
   LOG="$D/producer.$SAFE.log"
   n0=0; [ -f "$EVENTS" ] && n0=$(wc -l < "$EVENTS")
-  nohup "$KM" --persona "$PERSONA" --token-file "$TOKEN_FILE" \
+  nohup "$KM" --persona "$PERSONA" --token-file "$TOKEN_FILE" ${API_BASE:+--api-base "$API_BASE"} \
         --events-file "$EVENTS" --state-file "$D/hive.$SAFE.json" --heartbeat 120 >> "$LOG" 2>&1 &
   pid=$!
   echo "  ..    started the producer (pid $pid) -> $EVENTS   (log: $LOG)"

@@ -1,6 +1,12 @@
 # Changelog
 
 ## Unreleased
+- **`kijito-inbox-start.sh` uses the API base you configured** (M517, from M312 cold run #9, finding N30). It now
+  takes `--api-base <url>`, else `$KIJITO_BASE`, else `~/.config/kijito-inbox-monitor/api_base` (the file key
+  pickup has you write for a non-default server), and passes it to the producer (`--api-base`) and to the
+  self-test (`$KIJITO_BASE`). It used to read none of them, so a self-hosted producer polled api.kijito.ai. A value
+  that is not an http(s) URL stops it with exit 2 and the fix. With nothing configured it passes nothing, as
+  before. `tests/inbox_start_test.sh` (in CI) covers the file, the precedence, and the refusal.
 - **The Codex kijito-start skill names one absolute wake-helper path** (M502, from the M456 Codex cold run #2,
   finding N2): `$HOME/.local/share/kijito-tools/node_modules/kijito-tools/providers/codex/wake-helper/kijito-wake-helper.mjs`,
   where Kijito setup's `npm install --prefix ~/.local/share/kijito-tools kijito-tools` puts it. The skill used to
