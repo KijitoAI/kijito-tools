@@ -74,6 +74,11 @@ NOT_A_LOCATION = (
     # The vendored monitor's --redeem-key tests (from 0.6.0): --token-file targets they assert are REFUSED.
     ("providers/monitor/test_kijito_monitor.py", "./token", "a --token-file target the tests assert is refused"),
     ("providers/monitor/test_kijito_monitor.py", "~/token", "a --token-file target the tests assert is refused"),
+    # claude-armed.sh token-precedence tests: fake keys in a throwaway HOME / temp dir.
+    ("tests/armed_token_precedence_test.sh", "$T/home/.claude/.kijito_api_token",
+     "a fixture key in a throwaway HOME, to test the launcher's file-over-inherited-env rule"),
+    ("tests/armed_token_precedence_test.sh", "$T/alt_token",
+     "a fixture key handed to the launcher through KIJITO_API_TOKEN_FILE in a temp dir"),
 )
 
 # ── (ii) variables that hold a PATH to a key, with the default path they fall back to ──────────────────────────
