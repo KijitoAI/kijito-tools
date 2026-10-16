@@ -46,7 +46,7 @@ trap 'rm -f "$marker"; [ -n "$hb_pid" ] && kill "$hb_pid" 2>/dev/null' EXIT INT 
 
 # Hosted Kijito MCP bearer token for .mcp.json's ${KIJITO_API_TOKEN} — read from a file so it is
 # reliable inside the armed loop regardless of which shell profile did (or didn't) load.
-# ⛔ THE FILE WINS OVER AN INHERITED VALUE. This used to set the var only when it was empty, so a launch
+# ⛔ THE FILE WINS OVER AN INHERITED VALUE (row M528). This used to set the var only when it was empty, so a launch
 # from a long-lived tmux server inherited whatever the server's global env held when it started. Measured
 # 2026-10-16: the key was renewed into the file on 10-13, and a pane launched three days later still
 # carried the OLD key, which expires on 10-19. Every pane launched that way would have lost its MCP

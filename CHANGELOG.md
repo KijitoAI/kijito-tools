@@ -12,7 +12,7 @@
   line. The one exception is unchanged: on Windows, when every tail is old enough to be a leaked orphan.
   `tests/kijito_start_watched_test.sh` (new, in CI, with a mutation that restores the 0.2.18 wording) and block E of
   `tests/catchup_topology_test.sh` cover it.
-- **`claude-armed.sh` prefers the token file over an inherited `KIJITO_API_TOKEN`.** It used to set the variable
+- **`claude-armed.sh` prefers the token file over an inherited `KIJITO_API_TOKEN`** (M528). It used to set the variable
   only when it was empty, so a pane launched from a long-lived tmux server inherited the server's old key after a
   renewal. Measured on the fleet Mac 2026-10-16: the key file was renewed on 10-13, a pane launched on 10-16 still
   carried the old key, and that key expired on 10-19. A mismatch is now announced by key prefix and the file
