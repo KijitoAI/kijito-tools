@@ -5,6 +5,14 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-16
+
+### Documentation
+- README: a new section, "What it does on your machine, and how to remove it". It states that the monitor is
+  opt-in and per-user, never updates itself, talks only to its configured Kijito API base and starts no program
+  but your own `--exec`. It also gives the removal steps for a foreground run, the launchd job and the systemd
+  user unit, plus the command and its files.
+
 ## [0.6.0] - 2026-10-08
 
 ### Added

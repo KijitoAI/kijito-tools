@@ -1,25 +1,25 @@
 # The upstream release providers/monitor is a byte-exact copy of (row M314).
 # Written by scripts/import-monitor.sh; verified by tests/vendored_monitor_test.sh. Never hand-edit.
 repo=KijitoAI/kijito-inbox-monitor
-sha=c9d51f532b75ab2c51c2cf70cc9843732fd8d09d
-tree=b9156396394a60414a54f75c0989a3ca652492c3
-tag=v0.6.0
+sha=edf67211874848582a59d9ce7f611d03540ffa91
+tree=e88217c3c79ccb7e46f3927ca4d2e4ebe4409e8d
+tag=v0.6.1
 file=100644 8d88ccb0fd09b9144505f985b4f882db278fac1f .github/workflows/publish-npm.yml
 file=100644 19ce3471a2cffa689be9d261049c1e74e3e7a25e .github/workflows/publish-pypi.yml
 file=100644 4534290a5dd36d18d07a782b784b6b0ad5ee38fc .gitignore
-file=100644 bff03a4a6aee28ed1aebee40e6afa7984eb30915 CHANGELOG.md
+file=100644 272281b7854baff793f9545f110f03ef7b96814d CHANGELOG.md
 file=100644 d645695673349e3947e8e5ae42332d0ac3164cd7 LICENSE
 file=100644 f6b0e5634f3fd4156c1c000efb31578bfb068cf3 NOTICE
-file=100644 77841f0a97cec6d33a8dfc357ed77d5d03aa84e5 README.md
+file=100644 8be134d962b0a21b4b165522d0f065e5618f7119 README.md
 file=100644 72f0c148f1e721ac1bb4a38e5cae690355774314 RELEASING.md
 file=100755 e103abfc51db9a3060802184741eb7594eae1cb6 arm-hive-monitor.sh
 file=100755 bbe3f07de13dab8a8a7a4798481156ae4a46ab8f bin/cli.js
 file=100644 fffa8bd23749a321285bd942a3f4f4a98936129c com.kijito.inbox-monitor.plist.template
 file=100644 e2735cbf6037d194a493792a50f9144eff9cad15 docs/DESIGN.md
 file=100644 4f5e53a8633e60e6c57c451e28546f8af8783fe8 kijito-inbox-monitor@.service.template
-file=100644 8aaeb59302c48bdb7be230b18a04fe45d241dede kijito_inbox_monitor.py
-file=100644 cf8be1ea36e3a6f9fca86a88edc0de195b555dc0 package.json
-file=100644 a9e9ec5c2c8ebf0c9e7c14aca71a3c8dc0abadea pyproject.toml
+file=100644 efb5868d30b0fdad1c14c1c35c0a173bb266e667 kijito_inbox_monitor.py
+file=100644 1e963054766895d90e427c26c2190060a0d06a8e package.json
+file=100644 241395497d26a6678bf676c76a6d8944da7036da pyproject.toml
 file=100755 93c8a692ba4b7f25d663090fb58e172546d5734a scripts/migrate-systemd-unit.sh
 file=100755 5001eca6370aed0c82b8e426fd8e248cd8b3af0c scripts/mutation-check.py
 file=100755 acba6196213736922fc4f7135749386d85d172a6 scripts/prepublish-gate.sh
