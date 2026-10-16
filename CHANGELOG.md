@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.2.19 (2026-10-16)
+- **The vendored kijito-inbox-monitor moves to v0.6.1** (docs only): its README gains "What it does on your
+  machine, and how to remove it". It says the monitor is opt-in and per-user, never updates itself, talks only to
+  its configured Kijito API base, and starts no program but your own `--exec`. It gives removal steps for a
+  foreground run, the launchd job, the systemd user unit, the command and its files.
 - **kijito-start treats a live inbox consumer in ANY session as "the inbox is watched"** (M524, from M312 cold run
   #10, finding N34). Session 2 found session 1's live `tail -n 0 -F …events.<persona>.ndjson`, still armed a second
   Monitor, and on the `-p` denial told the human "Inbox alerts aren't on … approve the command". The skill now
