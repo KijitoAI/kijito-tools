@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+- **kijito-start treats a live inbox consumer in ANY session as "the inbox is watched"** (M524, from M312 cold run
+  #10, finding N34). Session 2 found session 1's live `tail -n 0 -F …events.<persona>.ndjson`, still armed a second
+  Monitor, and on the `-p` denial told the human "Inbox alerts aren't on … approve the command". The skill now
+  says one live consumer, whether yours from before a `/clear` or another session's, means: arm nothing, ask the
+  human for nothing, never say alerts are off, and peek by hand if mail must reach this session. A consumer you
+  cannot inspect (the command is denied) is not a reason to arm another. The find-your-stream step now also lists
+  `~/.local/state/kijito-inbox-monitor/`, the layout that cold run used. The SessionStart hook says the same thing:
+  with a live consumer it prints "your inbox is ALREADY WATCHED; arm nothing, ask for nothing" and no Monitor
+  line. The one exception is unchanged: on Windows, when every tail is old enough to be a leaked orphan.
+  `tests/kijito_start_watched_test.sh` (new, in CI, with a mutation that restores the 0.2.18 wording) and block E of
+  `tests/catchup_topology_test.sh` cover it.
+- **`claude-armed.sh` prefers the token file over an inherited `KIJITO_API_TOKEN`.** It used to set the variable
+  only when it was empty, so a pane launched from a long-lived tmux server inherited the server's old key after a
+  renewal. Measured on the fleet Mac 2026-10-16: the key file was renewed on 10-13, a pane launched on 10-16 still
+  carried the old key, and that key expired on 10-19. A mismatch is now announced by key prefix and the file
+  wins. `KIJITO_API_TOKEN_PREFER_ENV=1` keeps an inherited value set on purpose.
+  `tests/armed_token_precedence_test.sh` (new, in CI, with a mutation that restores the old rule) covers it.
+
 ## 0.2.18 (2026-10-13)
 - **`kijito-inbox-start.sh` uses the API base you configured** (M517, from M312 cold run #9, finding N30). It now
   takes `--api-base <url>`, else `$KIJITO_BASE`, else `~/.config/kijito-inbox-monitor/api_base` (the file key

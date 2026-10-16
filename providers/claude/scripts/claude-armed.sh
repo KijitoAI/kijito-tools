@@ -45,11 +45,30 @@ fi
 trap 'rm -f "$marker"; [ -n "$hb_pid" ] && kill "$hb_pid" 2>/dev/null' EXIT INT TERM
 
 # Hosted Kijito MCP bearer token for .mcp.json's ${KIJITO_API_TOKEN} — read from a file so it is
-# reliable inside the armed loop regardless of which shell profile did (or didn't) load. Only set it
-# if the file exists AND the var isn't already provided by the environment.
-if [ -z "${KIJITO_API_TOKEN:-}" ] && [ -r "${KIJITO_API_TOKEN_FILE:-$HOME/.claude/.kijito_api_token}" ]; then
-  export KIJITO_API_TOKEN="$(cat "${KIJITO_API_TOKEN_FILE:-$HOME/.claude/.kijito_api_token}" 2>/dev/null)"
+# reliable inside the armed loop regardless of which shell profile did (or didn't) load.
+# ⛔ THE FILE WINS OVER AN INHERITED VALUE. This used to set the var only when it was empty, so a launch
+# from a long-lived tmux server inherited whatever the server's global env held when it started. Measured
+# 2026-10-16: the key was renewed into the file on 10-13, and a pane launched three days later still
+# carried the OLD key, which expires on 10-19. Every pane launched that way would have lost its MCP
+# connection on that date, with nothing pointing at the cause. A renewed key lands in the file, so trust
+# the file. KIJITO_API_TOKEN_PREFER_ENV=1 keeps an inherited value set on purpose. Either way, a mismatch
+# is announced by key prefix, never the key itself.
+_kjt_file="${KIJITO_API_TOKEN_FILE:-$HOME/.claude/.kijito_api_token}"
+if [ -r "$_kjt_file" ]; then
+  _kjt_ftok="$(tr -d '[:space:]' < "$_kjt_file" 2>/dev/null)"
+  if [ -n "$_kjt_ftok" ] && [ -z "${KIJITO_API_TOKEN:-}" ]; then
+    export KIJITO_API_TOKEN="$_kjt_ftok"
+  elif [ -n "$_kjt_ftok" ] && [ "$KIJITO_API_TOKEN" != "$_kjt_ftok" ]; then
+    if [ "${KIJITO_API_TOKEN_PREFER_ENV:-0}" = "1" ]; then
+      echo "claude-armed: KIJITO_API_TOKEN (${KIJITO_API_TOKEN:0:12}…) differs from $_kjt_file (${_kjt_ftok:0:12}…); keeping the inherited value because KIJITO_API_TOKEN_PREFER_ENV=1." >&2
+    else
+      echo "claude-armed: the inherited KIJITO_API_TOKEN (${KIJITO_API_TOKEN:0:12}…) differs from $_kjt_file (${_kjt_ftok:0:12}…); using the file, which is where a renewed key lands. Set KIJITO_API_TOKEN_PREFER_ENV=1 to keep the inherited value." >&2
+      export KIJITO_API_TOKEN="$_kjt_ftok"
+    fi
+  fi
+  unset _kjt_ftok
 fi
+unset _kjt_file
 
 # Remote Control lets you check an unattended session from a phone. RC is a per-PROCESS feature — it
 # survives /clear but NOT a fresh launch, and an agent cannot self-invoke a slash command, so it has to be

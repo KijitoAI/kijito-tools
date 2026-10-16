@@ -320,9 +320,17 @@ check_hook() {
   # to prevent, on exactly the hosts where nobody was watching for it.
   h="$(make_home linux river yes)"
   out="$(FAKE_PRODUCER=1 FAKE_ARMED=1 run_hook "$hook" "$h" "$proj")"
-  if grep -q "do NOT blindly add another" <<<"$out"; then
+  if grep -q "your inbox is ALREADY WATCHED" <<<"$out"; then
     grn "$label: linux seat → existing consumer detected (no duplicate-arm advice)"
   else red "$label: linux seat → duplicate-consumer detection did not fire"; bad=1; fi
+  # M524 (M312 cold run #10 N34): a live consumer in ANY session means the inbox is watched. The hook used
+  # to hand a session with no Monitor of its own a Monitor line and "arm exactly one for yourself", and an
+  # agent did exactly that next to session 1's live tail, then asked the human to approve it.
+  if ! grep -q "Monitor(command=" <<<"$out" && ! grep -qi "arm exactly one for yourself\|arm one for yourself" <<<"$out" \
+     && grep -q "Do NOT ask the human to approve" <<<"$out" \
+     && grep -q 'kijito_hive_inbox(persona="river", unread_only=true, mark_read=false)' <<<"$out"; then
+    grn "$label: live consumer in another session → watched: no Monitor line, no approval ask, peek named (M524)"
+  else red "$label: live consumer still invites a second Monitor or an approval ask (M524): $(grep -iE 'Monitor\(|for yourself|approve' <<<"$out" | head -2)"; bad=1; fi
   # The harness's wrapper shell carries the same argv; counting it made one Monitor read as several.
   if grep -q "4242 (up 5 min)" <<<"$out" && ! grep -q "4241" <<<"$out"; then
     grn "$label: consumer list names only the real tail, with its age (wrapper shell excluded)"

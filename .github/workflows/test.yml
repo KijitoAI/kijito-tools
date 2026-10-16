@@ -128,6 +128,8 @@ jobs:
           bash tests/stream_layouts_test.sh
           bash tests/windows_detect_test.sh
           bash tests/catchup_topology_test.sh
+          bash tests/kijito_start_watched_test.sh --mutation
+          bash tests/armed_token_precedence_test.sh --mutation
       - name: vendored monitor is byte-identical to its recorded upstream release, and its own suite passes (M314 M332)
         run: |
           bash tests/vendored_monitor_test.sh

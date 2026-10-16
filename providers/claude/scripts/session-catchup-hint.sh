@@ -361,23 +361,38 @@ PID (kill <pid>), never by pattern, and arm one fresh — you end with exactly o
 Every tail listed is older than 30 min. On this host an expired Monitor takes its tail with it, so each of
 these belongs to a "persistent" Monitor: yours, or a sibling session'"'"'s LIVE consumer'"${_own_note}"'.
 Do NOT stop any of them unless it is in YOUR OWN task list - stopping a sibling'"'"'s tail silently cuts its
-mail. If none is yours, arm one for yourself as above; two consumers on one stream is the lesser fault.'
+mail. If none is yours, the inbox is still watched (by that session), so arm nothing.'
   fi
 fi
-if [ -n "$_safe" ] && [ -n "$_armed" ]; then
+# A LIVE CONSUMER IN ANY SESSION MEANS THE INBOX IS WATCHED (row M524, M312 cold run #10 N34). This block
+# used to tell a session with no Monitor of its own to "arm exactly one for yourself". An agent that found
+# session 1's live tail did that, was denied in -p, and told the human "Inbox alerts aren't on ... approve
+# the command". A second consumer on one stream double-fires every event and delivers nothing the first
+# does not, so: report it as watched, arm nothing, ask for nothing. The ONE exception is the Windows
+# leaked-orphan case, where every tail is old enough to be an orphan that wakes nobody.
+_win_orphans=""
+if [ -n "${_stale_only:-}" ] && command -v kijito_host_is_windows >/dev/null 2>&1 && kijito_host_is_windows; then _win_orphans=1; fi
+if [ -n "$_safe" ] && [ -n "$_armed" ] && [ -n "$_win_orphans" ]; then
 cat <<EOF
 
-[INBOX WAKE — a consumer already tails your stream; do NOT blindly add another] One or more processes
-are already tailing $_events (pid(s): $_armed). This is EXPECTED after a /clear or /compact
-(your own persistent Monitor survives the reset). The hook can't tell whose it is, so decide from YOUR
-task list:
-  • You ALREADY have a live persistent inbox Monitor in your task list → keep it, do NOT arm another (a
-    2nd double-fires every event — the duplicate bug). If your task list shows MORE than one, TaskStop
-    all but one.
-  • You have NO inbox Monitor (brand-new session; the tail is a sibling's or a leaked orphan that will
-    NOT wake YOU) → arm exactly one for yourself:
-      Monitor(command="tail -n 0 -F $_events | grep --line-buffered -E '\"event\": ?\"(new|alert|recovered|state_corrupt|baseline_skipped|seed_ahead|replay_capped|persona_added|still_unread)\"'", persistent=true)
+[INBOX WAKE — only OLD tails on your stream; they may be leaked orphans] One or more processes are
+tailing $_events (pid(s): $_armed). The consumer line, if you end up arming one:
+  Monitor(command="tail -n 0 -F $_events | grep --line-buffered -E '\"event\": ?\"(new|alert|recovered|state_corrupt|baseline_skipped|seed_ahead|replay_capped|persona_added|still_unread)\"'", persistent=true)
 Dedupe with TaskStop (agent-scoped), NOT \`pkill -f …events…\` (that can kill a sibling's or your own live consumer).$_stale_note $_prod
+EOF
+elif [ -n "$_safe" ] && [ -n "$_armed" ]; then
+cat <<EOF
+
+[INBOX WAKE — your inbox is ALREADY WATCHED; arm nothing, ask for nothing] A live consumer already tails
+$_events (pid(s): $_armed). It may be your own persistent Monitor from before a /clear or /compact, or
+another session of persona "$_persona" (another pane, or an earlier run in this one). Either way:
+  • Do NOT arm another Monitor: a second consumer on the same stream double-fires every event.
+  • Do NOT ask the human to approve or start one, and do NOT tell them alerts are off. Say the inbox is
+    watched and carry on. Being unable to inspect that process is not a reason to arm another.
+  • Mail wakes the session that owns that consumer. If that is not you, peek when you need to:
+    kijito_hive_inbox(persona="$_persona", unread_only=true, mark_read=false).
+  • If your OWN task list shows more than one inbox Monitor, TaskStop all but one. Never \`pkill -f …events…\`
+    (that can kill a sibling's or your own live consumer).$_stale_note $_prod
 EOF
 elif [ -n "$_safe" ]; then
 cat <<EOF

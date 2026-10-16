@@ -163,7 +163,7 @@ grep -q "could NOT check for an existing consumer" <<<"$out" \
   || red "hook gave no could-not-check caveat for the consumer"
 
 out=$(FAKE_PROD=1 FAKE_TAIL=1 run_hook "$WIN" "$H" "$P")
-grep -q "a consumer already tails your stream" <<<"$out" \
+grep -q "your inbox is ALREADY WATCHED" <<<"$out" \
   && grn "hook: an armed tail.exe is recognised (no second consumer suggested)" \
   || red "hook missed the armed Windows consumer"
 grep -q "9001 (up 5 min)" <<<"$out" && ! grep -q "LEAKED ORPHANS" <<<"$out" \
