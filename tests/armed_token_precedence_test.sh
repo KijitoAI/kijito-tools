@@ -47,9 +47,31 @@ check() {
   else red "mismatch announcement missing, or a full key leaked to stderr: ${err:-<nothing>}"; bad=1; fi
 
   err=$(launch "$armed" KIJITO_API_TOKEN="$ENV_TOK" KIJITO_API_TOKEN_PREFER_ENV=1)
-  if [ "$(cat "$T/got")" = "$ENV_TOK" ] && grep -q "PREFER_ENV=1" <<<"$err"; then
-    grn "KIJITO_API_TOKEN_PREFER_ENV=1 keeps the inherited value, and says so"
-  else red "PREFER_ENV=1 did not keep the inherited value or was silent"; bad=1; fi
+  if [ "$(cat "$T/got")" = "$ENV_TOK" ] && grep -q "PREFER_ENV=1" <<<"$err" \
+     && ! grep -q "$ENV_TOK" <<<"$err" && ! grep -q "$FILE_TOK" <<<"$err"; then
+    grn "KIJITO_API_TOKEN_PREFER_ENV=1 keeps the inherited value, says so, and prints no full key"
+  else red "PREFER_ENV=1 did not keep the inherited value, was silent, or printed a full key"; bad=1; fi
+
+  # The review's gaps (m528-armed-token-review-1): a short non-kjt secret, a Windows-line-ending file,
+  # a file that is not one key, an empty file.
+  err=$(launch "$armed" KIJITO_API_TOKEN="s3cr3t")
+  if [ "$(cat "$T/got")" = "$FILE_TOK" ] && ! grep -q "s3cr3t" <<<"$err" && grep -q "non-kjt value, 6 chars" <<<"$err"; then
+    grn "a short non-kjt inherited value is described by length, never printed"
+  else red "a short non-kjt value was printed or mishandled: $err"; bad=1; fi
+  printf '%s\r\n' "$FILE_TOK" > "$T/home/.claude/.kijito_api_token"
+  err=$(launch "$armed" KIJITO_API_TOKEN="$ENV_TOK")
+  [ "$(cat "$T/got")" = "$FILE_TOK" ] && grn "a CRLF token file yields the bare key" \
+    || { red "a CRLF token file passed a stray character: $(od -c "$T/got" | tail -2 | head -1)"; bad=1; }
+  printf 'line one\nline two\n' > "$T/home/.claude/.kijito_api_token"
+  err=$(launch "$armed" KIJITO_API_TOKEN="$ENV_TOK")
+  if [ "$(cat "$T/got")" = "$ENV_TOK" ] && grep -q "does not hold a single kjt_ key" <<<"$err"; then
+    grn "a file that is not one kjt_ key never displaces a set value"
+  else red "a malformed file displaced a working inherited key"; bad=1; fi
+  : > "$T/home/.claude/.kijito_api_token"
+  err=$(launch "$armed" KIJITO_API_TOKEN="$ENV_TOK")
+  if [ "$(cat "$T/got")" = "$ENV_TOK" ] && [ -z "$err" ]; then grn "an empty file leaves a set value alone, silently"
+  else red "an empty file disturbed a set value: got '$(cut -c1-12 "$T/got")' err '$err'"; bad=1; fi
+  printf '%s\n' "$FILE_TOK" > "$T/home/.claude/.kijito_api_token"
 
   err=$(launch "$armed" KIJITO_API_TOKEN="$FILE_TOK")
   if [ "$(cat "$T/got")" = "$FILE_TOK" ] && ! grep -q "differs" <<<"$err"; then grn "matching values → no warning"
@@ -78,13 +100,15 @@ import re, sys
 s = open(sys.argv[1]).read()
 old = ('if [ -z "${KIJITO_API_TOKEN:-}" ] && [ -r "${KIJITO_API_TOKEN_FILE:-$HOME/.claude/.kijito_api_token}" ]; then\n'
        '  export KIJITO_API_TOKEN="$(cat "${KIJITO_API_TOKEN_FILE:-$HOME/.claude/.kijito_api_token}" 2>/dev/null)"\nfi\n')
-s2 = re.sub(r'_kjt_file="\$\{KIJITO_API_TOKEN_FILE.*?\nunset _kjt_file\n', lambda m: old, s, flags=re.S)
+s2 = re.sub(r'_kjt_shape\(\) \{.*?\nunset _kjt_file; unset -f _kjt_shape _kjt_show\n', lambda m: old, s, flags=re.S)
 assert s2 != s, "mutation anchor not found"
 open(sys.argv[2], "w").write(s2)
 EOF
   cp "$(dirname "$ARMED_DEFAULT")/lifecycle-lib.sh" "$T/" 2>/dev/null
   p0=$pass f0=$fail
-  if check "$T/armed-old.sh" >/dev/null; then red "mutation SURVIVED — the checks pass on the old rule"
+  # A mutant that was never written must not read as killed: a missing launcher fails every check.
+  if [ ! -s "$T/armed-old.sh" ]; then red "mutation NOT BUILT — its anchor no longer matches claude-armed.sh"
+  elif check "$T/armed-old.sh" >/dev/null; then red "mutation SURVIVED — the checks pass on the old rule"
   else pass=$p0; fail=$f0; grn "mutation killed — the old rule fails the checks"; fi
 fi
 

@@ -53,22 +53,30 @@ trap 'rm -f "$marker"; [ -n "$hb_pid" ] && kill "$hb_pid" 2>/dev/null' EXIT INT 
 # connection on that date, with nothing pointing at the cause. A renewed key lands in the file, so trust
 # the file. KIJITO_API_TOKEN_PREFER_ENV=1 keeps an inherited value set on purpose. Either way, a mismatch
 # is announced by key prefix, never the key itself.
+# Only a kjt_-shaped value gets a printed prefix (kjt_ + 8, the key's public id). Anything else, e.g. a short
+# legacy token, is described by length, so no part of a secret that is not a kjt_ key is ever printed.
+_kjt_shape() { [[ $1 =~ ^kjt_[A-Za-z0-9_-]{9,}$ ]]; }
+_kjt_show() { if _kjt_shape "$1"; then printf '%s…' "${1:0:12}"; else printf 'a non-kjt value, %s chars' "${#1}"; fi; }
 _kjt_file="${KIJITO_API_TOKEN_FILE:-$HOME/.claude/.kijito_api_token}"
 if [ -r "$_kjt_file" ]; then
   _kjt_ftok="$(tr -d '[:space:]' < "$_kjt_file" 2>/dev/null)"
-  if [ -n "$_kjt_ftok" ] && [ -z "${KIJITO_API_TOKEN:-}" ]; then
+  _kjt_etok="$(printf '%s' "${KIJITO_API_TOKEN:-}" | tr -d '[:space:]')"
+  if [ -n "$_kjt_ftok" ] && [ -z "$_kjt_etok" ]; then
     export KIJITO_API_TOKEN="$_kjt_ftok"
-  elif [ -n "$_kjt_ftok" ] && [ "$KIJITO_API_TOKEN" != "$_kjt_ftok" ]; then
-    if [ "${KIJITO_API_TOKEN_PREFER_ENV:-0}" = "1" ]; then
-      echo "claude-armed: KIJITO_API_TOKEN (${KIJITO_API_TOKEN:0:12}…) differs from $_kjt_file (${_kjt_ftok:0:12}…); keeping the inherited value because KIJITO_API_TOKEN_PREFER_ENV=1." >&2
+  elif [ -n "$_kjt_ftok" ] && [ "$_kjt_etok" != "$_kjt_ftok" ]; then
+    if ! _kjt_shape "$_kjt_ftok"; then
+      # A file that does not hold one kjt_ key never displaces a value that is already set.
+      echo "claude-armed: $_kjt_file does not hold a single kjt_ key ($(_kjt_show "$_kjt_ftok")); keeping the inherited KIJITO_API_TOKEN." >&2
+    elif [ "${KIJITO_API_TOKEN_PREFER_ENV:-0}" = "1" ]; then
+      echo "claude-armed: KIJITO_API_TOKEN ($(_kjt_show "$_kjt_etok")) differs from $_kjt_file ($(_kjt_show "$_kjt_ftok")); keeping the inherited value because KIJITO_API_TOKEN_PREFER_ENV=1." >&2
     else
-      echo "claude-armed: the inherited KIJITO_API_TOKEN (${KIJITO_API_TOKEN:0:12}…) differs from $_kjt_file (${_kjt_ftok:0:12}…); using the file, which is where a renewed key lands. Set KIJITO_API_TOKEN_PREFER_ENV=1 to keep the inherited value." >&2
+      echo "claude-armed: the inherited KIJITO_API_TOKEN ($(_kjt_show "$_kjt_etok")) differs from $_kjt_file ($(_kjt_show "$_kjt_ftok")); using the file, which is where a renewed key lands. Set KIJITO_API_TOKEN_PREFER_ENV=1 to keep the inherited value." >&2
       export KIJITO_API_TOKEN="$_kjt_ftok"
     fi
   fi
-  unset _kjt_ftok
+  unset _kjt_ftok _kjt_etok
 fi
-unset _kjt_file
+unset _kjt_file; unset -f _kjt_shape _kjt_show
 
 # Remote Control lets you check an unattended session from a phone. RC is a per-PROCESS feature — it
 # survives /clear but NOT a fresh launch, and an agent cannot self-invoke a slash command, so it has to be
