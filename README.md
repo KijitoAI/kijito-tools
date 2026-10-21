@@ -102,6 +102,12 @@ payload and run `install.sh`, which defaults to the Claude provider. They need `
 run them inside WSL (see Platform support). Pass provider flags straight through, e.g.
 `npx kijito-tools --provider codex --skills-only`.
 
+To name the persona for a project folder at the same time, run the installer from that folder with
+`--persona <name>` (0.2.20+), e.g. `npx kijito-tools --persona coldrun`. It writes the folder's
+`.kijito_persona` marker (the first line is the name) and refuses, without installing anything, if a
+marker there already names a different persona. Without a persona the installer skips the inbox
+check and says how to set the inbox up later; that is the normal state on a first install.
+
 **One exception: `redeem-key`** (0.2.17+). When an agent mints an API key with the key pickup, the reply
 gives one command that pipes a single-use pickup code into a local helper, which collects the key and saves
 it to its key file, so the key never passes through the conversation:
@@ -228,7 +234,10 @@ Arming is per pane.
 
 To arm a pane, launch it with `~/.claude/claude-armed.sh`, or tell the agent to go autonomous
 mid-session and it runs `~/.claude/arm-session.sh on` (`off` turns it back off). A plain `claude`
-session stays under your control.
+session stays under your control. `~/.claude/arm-session.sh status` is read-only and answers for the
+session that runs it, from its own shell: `in_tmux=yes pane=%N` or `in_tmux=no`, then whether the pane
+is armed. To decide whether a session is in tmux, use that or `$TMUX_PANE`, never a line in
+`~/.claude/.lifecycle/lifecycle.log`: every session on the machine writes to that log.
 
 What can type into an armed pane: you; the SessionStart hook's catch-up prompt after a launch or
 `/clear` (from the pane's own session only); the self-clear loop's own `/clear` (sent by

@@ -54,12 +54,28 @@ fi
 # 4. ⭐ THE INSTALLER'S OWN BEHAVIOUR, end to end, with the real install.sh: a hard wake-path failure
 #    must make the INSTALL exit non-zero. This is the regression that matters — an installer that
 #    prints the bad verdict and still exits 0 has changed nothing about what automation believes.
-out="$(HOME="$H" SELFTEST_PERSONA=nobody-here bash "$REPO/providers/claude/install.sh" 2>&1)"; rc=$?
+#    The inbox add-on must be PRESENT for this to be a broken wake path rather than one never set up
+#    (row N43, below), so a stub monitor stands in for it: installed, but collecting nothing.
+STUB="$H/stub-bin"; mkdir -p "$STUB"; printf '#!/bin/sh\nexit 1\n' > "$STUB/kijito-inbox-monitor"; chmod +x "$STUB/kijito-inbox-monitor"
+out="$(HOME="$H" KIJITOMON_BIN="$STUB/kijito-inbox-monitor" SELFTEST_PERSONA=nobody-here bash "$REPO/providers/claude/install.sh" 2>&1)"; rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "THE INBOX WAKE PATH IS BROKEN"; then
   grn "install with a broken wake path exits non-zero and says so"
 else
   red "install with a broken wake path gave rc=$rc: $(printf '%s' "$out" | tail -5)"
 fi
+# 4b. row N43: the same persona with the inbox add-on NOT on the machine has no wake path to break yet.
+#     That is the normal first install; it must not be called broken, and must still say mail will not
+#     arrive and name the step that sets the inbox up.
+H2="$(mktemp -d)"
+out="$(HOME="$H2" SELFTEST_PERSONA=nobody-here bash "$REPO/providers/claude/install.sh" 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && ! printf '%s' "$out" | grep -q "IS BROKEN" \
+   && printf '%s' "$out" | grep -q "Inbox not set up yet for 'nobody-here'" \
+   && printf '%s' "$out" | grep -q "kijito-inbox-start.sh --persona nobody-here"; then
+  grn "no inbox add-on installed => 'not set up yet' with the next command, exit 0, not 'broken'"
+else
+  red "no-monitor install gave rc=$rc: $(printf '%s' "$out" | tail -5)"
+fi
+rm -rf "$H2"
 
 # 5. and the restart line must be printed plainly — the first external install lost its skills to
 #    exactly this, and the old wording buried it inside a sentence about something else.

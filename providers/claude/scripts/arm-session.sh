@@ -10,7 +10,19 @@ _kjt_lib="${KIJITO_LC_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lifecyc
 . "$_kjt_lib"
 action="${1:-on}"
 # A tmux pane, or a wtmux pane on native Windows (see lc_self_pane in lifecycle-lib.sh).
-PANE=$(lc_self_pane) || { echo "not in tmux or wtmux — autonomy needs a multiplexer pane; nothing armed."; exit 1; }
+# ⛔ `status` ANSWERS FOR THIS SESSION ONLY, FROM THIS SHELL'S OWN ENVIRONMENT (row N42). The M312 r11
+# agent could not read $TMUX, so it read the shared lifecycle.log instead, took ANOTHER session's
+# `tmux=y pane=%0` line for its own, and told the human "you are in tmux" when they were not. So
+# status must give a plain answer outside a pane too, exit 0 like every other status, and never
+# consult the log: every Claude Code session on the machine writes to that log.
+if ! PANE=$(lc_self_pane); then
+  if [ "$action" = status ]; then
+    echo "in_tmux=no — this session is not running inside tmux or wtmux (its own shell has no TMUX_PANE)."
+    echo "not armed (human-managed) — arming needs a tmux or wtmux pane."
+    exit 0
+  fi
+  echo "not in tmux or wtmux — autonomy needs a multiplexer pane; nothing armed."; exit 1
+fi
 marker="$KIJITO_LC_DIR/arm.$PANE"
 case "$action" in
   # The marker carries PROVENANCE (session name + #{session_created}) and is validated against the
@@ -55,6 +67,7 @@ EOF
               session — it was left by a DIFFERENT session that had this pane id. Re-arm to claim it.)"
             fi
           fi
+          echo "in_tmux=yes pane=$PANE — from this session's own shell, not from any log."
           echo "pane=$PANE marker=$m (arm.$PANE) env=$e (KIJITO_AUTOCATCHUP=${KIJITO_AUTOCATCHUP:-unset})"
           if lc_is_armed "$PANE"; then
             echo "armed (autonomous) — armed by: $( [ "$m" = yes ] && printf 'marker '; [ "$e" = yes ] && printf 'env')"
