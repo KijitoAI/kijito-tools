@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.2.20 (2026-10-21)
+- **`--persona <name>` names the folder's persona at install time** (N43, from M312 cold run #11). The installer used
+  to look for `.kijito_persona` before the agent could write it and print "COULD NOT MEASURE: no persona … The inbox
+  is NOT set up yet"; the agent's own write of the marker was then refused by its client, and the human had to run a
+  `printf` by hand. `npx kijito-tools --persona <name>` now writes the marker in the folder it runs from (the first
+  line is the name). The name is checked before anything is installed: blank, flag-like, multi-line and
+  control-character names are refused, and a marker that already names a different persona is left unchanged and the
+  install stops. With no persona the inbox check is skipped and the next step is named. With a persona but no inbox
+  add-on on the machine, the installer says the inbox is not set up yet, that mail will not arrive, and names
+  `kijito-inbox-start.sh --persona <name>`, instead of "THE INBOX WAKE PATH IS BROKEN" and exit 1. Once the monitor is
+  installed, a dead wake path still fails the install (M304). `tests/persona_flag_test.sh` (new, in CI).
+- **`arm-session.sh status` answers "am I in tmux?" for the session that runs it** (N42, same run). The agent could
+  not read `$TMUX`, read the shared `~/.claude/.lifecycle/lifecycle.log` instead, took another session's
+  `tmux=y pane=%0` line for its own, and told the human they were in tmux when they were not. `status` now answers
+  outside a pane too (`in_tmux=no`, exit 0; it used to exit 1 with the same error as `on`), prints
+  `in_tmux=yes pane=%N` inside one, and never reads the log. `tests/arm_status_self_test.sh` (new, in CI).
+
 ## 0.2.19 (2026-10-16)
 - **The vendored kijito-inbox-monitor moves to v0.6.1** (docs only): its README gains "What it does on your
   machine, and how to remove it". It says the monitor is opt-in and per-user, never updates itself, talks only to
