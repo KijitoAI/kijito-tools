@@ -45,7 +45,9 @@ else red "token present but not named: $(grep -i tighten <<<"$out")"; fi
 if grep -q 'SECRETVALUE' <<<"$out"; then red "the installer printed a credential VALUE"; else grn "the credential's value is never printed"; fi
 
 # ── M383: an installer that could not prove the wake names the one command that does ─────────────
-if grep -q 'kijito-inbox-start.sh --persona <name>' <<<"$out" && grep -q 'installed is not the same as working' <<<"$out"; then
+# (Row N43 changed the copy: with no persona the check is SKIPPED, not reported as COULD NOT MEASURE,
+# but it must still name the command that sets the inbox up and say it is not set up.)
+if grep -q 'kijito-inbox-start.sh --persona <name>' <<<"$out" && grep -q 'Inbox check skipped: no persona is set' <<<"$out"; then
   grn "no persona yet: the installer ends by naming the start-and-prove command"
 else red "the installer does not name the start-and-prove step: $(grep -iA3 'wake path\|inbox' <<<"$out" | tail -5)"; fi
 

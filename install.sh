@@ -55,6 +55,7 @@ usage() {
   list_providers | sed 's/^/  /'
   echo
   echo "default provider: claude"
+  echo "  claude provider args:  --persona <name>   name this folder's persona (writes .kijito_persona)"
   echo
   echo "rollout safety (git checkouts only):"
   echo "  --from-main       install the stable main bytes via a detached worktree (recommended)"

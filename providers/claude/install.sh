@@ -9,6 +9,49 @@
 set -euo pipefail
 PROVIDER_ROOT="$(cd "$(dirname "$0")" && pwd)"
 DEST="$HOME/.claude"
+
+# ── --persona <name>: write THIS folder's persona marker (row N43) ───────────────────────────────
+# The M312 r11 cold run: the agent had to write .kijito_persona itself, its client refused the write,
+# and by then the installer had already looked for the marker, found none and printed an alarming
+# "COULD NOT MEASURE". The human already said yes to running the installer, so the installer writes
+# the marker. Validated BEFORE anything is installed, so a bad name or a conflicting marker leaves
+# nothing half-done. Other arguments are ignored here, as they always were.
+PERSONA_ARG=""; PERSONA_GIVEN=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --persona)   [ $# -ge 2 ] || { echo "ERROR: --persona needs a name. Nothing was installed." >&2; exit 2; }
+                 PERSONA_ARG="$2"; PERSONA_GIVEN=1; shift 2 ;;
+    --persona=*) PERSONA_ARG="${1#*=}"; PERSONA_GIVEN=1; shift ;;
+    *)           shift ;;
+  esac
+done
+MARKER="$PWD/.kijito_persona"
+if [ "$PERSONA_GIVEN" = 1 ]; then
+  # The marker rule (kijito-persona-lib.sh): the payload is the first line with the ENDS trimmed.
+  # So trim the ends here too, and refuse anything that rule would read back differently.
+  case "$PERSONA_ARG" in
+    *$'\n'*|*$'\r'*) echo "ERROR: --persona must be one line of text. Nothing was installed." >&2; exit 2 ;;
+  esac
+  if [ "$(printf '%s' "$PERSONA_ARG" | LC_ALL=C tr -d '[:cntrl:]')" != "$PERSONA_ARG" ]; then
+    echo "ERROR: --persona must be plain text (it contains a control character). Nothing was installed." >&2; exit 2
+  fi
+  p="${PERSONA_ARG#"${PERSONA_ARG%%[![:space:]]*}"}"; p="${p%"${p##*[![:space:]]}"}"
+  case "$p" in
+    '')  echo "ERROR: --persona needs a name (it was blank). Nothing was installed." >&2; exit 2 ;;
+    -*)  echo "ERROR: --persona '$p' starts with '-', so it looks like a flag that was taken as the name. Nothing was installed." >&2; exit 2 ;;
+  esac
+  if [ -f "$MARKER" ]; then
+    have=$(head -n1 "$MARKER" 2>/dev/null | tr -d '\r\n')
+    have="${have#"${have%%[![:space:]]*}"}"; have="${have%"${have##*[![:space:]]}"}"
+    if [ -n "$have" ] && [ "$have" != "$p" ]; then
+      echo "ERROR: $MARKER already names the persona '$have', not '$p'." >&2
+      echo "       It was left unchanged and nothing was installed. If '$p' is right, delete that file and run again." >&2
+      exit 2
+    fi
+  fi
+  PERSONA_ARG="$p"
+fi
+
 command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is required."; exit 1; }
 command -v tmux >/dev/null 2>&1 || echo "note: tmux not found — only the OPTIONAL armed-pane autonomy needs it. Memory, the inbox and the context self-check work without it."
 
@@ -164,9 +207,55 @@ echo "Verify context self-check now:  ~/.claude/myctx.sh"
 # mode: it fails as SILENCE. Measured on the first external install - the inbox did not arm, the
 # first real message never woke anyone, and the HUMAN had to notice the quiet and ask for a
 # diagnosis. Every ✓ printed above was true at the time.
+if [ -n "$PERSONA_ARG" ]; then
+  if [ -f "$MARKER" ]; then
+    echo "✓ persona '$PERSONA_ARG' was already set for this folder ($MARKER)"
+  else
+    printf '%s\n' "$PERSONA_ARG" > "$MARKER.tmp.$$" && chmod 0644 "$MARKER.tmp.$$" && mv "$MARKER.tmp.$$" "$MARKER"
+    echo "✓ persona '$PERSONA_ARG' set for this folder → $MARKER"
+  fi
+fi
+# The persona the inbox check is about: --persona, else the marker the SessionStart hook reads.
+SELFTEST_PERSONA="${SELFTEST_PERSONA:-$PERSONA_ARG}"
+INBOX_STREAM=""
+if [ -r "$DEST/kijito-persona-lib.sh" ]; then
+  # shellcheck source=/dev/null
+  . "$DEST/kijito-persona-lib.sh"
+  [ -n "$SELFTEST_PERSONA" ] || SELFTEST_PERSONA="$(kijito_persona_from_marker || true)"
+  [ -z "$SELFTEST_PERSONA" ] || INBOX_STREAM="$(kijito_stream_for_persona "$SELFTEST_PERSONA" || true)"
+fi
+# Is the inbox add-on (kijito-inbox-monitor) on this machine at all? Same candidates the persona lib
+# asks, so the two cannot disagree about where the monitor lives.
+MONITOR_INSTALLED=0
+for c in "${KIJITOMON_BIN:-}" "$(command -v kijito-inbox-monitor 2>/dev/null || true)" \
+         "$HOME/.local/bin/kijito-inbox-monitor" "/usr/local/bin/kijito-inbox-monitor"; do
+  if [ -n "$c" ] && [ -x "$c" ]; then MONITOR_INSTALLED=1; break; fi
+done
+
 echo
 echo "── inbox wake path ────────────────────────────────────────────────────────────────────────"
-if [ -x "$DEST/inbox-selftest.sh" ]; then
+if [ -z "$SELFTEST_PERSONA" ]; then
+  # ⛔ NO PERSONA IS NOT A FAILURE (row N43). On a first install the persona usually does not exist
+  # yet, and r11's "COULD NOT MEASURE … NOT set up" read as an install problem. There is no inbox to
+  # check until a persona is named, so say that, and name the step that sets it up (row M383).
+  echo "→ Inbox check skipped: no persona is set for this folder yet, so there is no inbox to check."
+  echo "  That is expected on a first install. Once you have picked a persona name, either run the"
+  echo "  installer again with --persona <name>, or start and prove the inbox directly:"
+  echo "      $DEST/kijito-inbox-start.sh --persona <name>"
+elif [ -z "$INBOX_STREAM" ] && [ "$MONITOR_INSTALLED" = 0 ]; then
+  # ⛔ AN INBOX THAT WAS NEVER SET UP IS NOT A BROKEN ONE (row N43). The inbox is a separate, optional
+  # add-on (kijito-inbox-monitor). When it is not on this machine and no stream exists for the
+  # persona, nothing was ever set up to collect this persona's mail, so the self-test would print
+  # "THE INBOX WAKE PATH IS BROKEN" and exit 1 on every first install that named a persona.
+  # ⚠️ ONLY THAT CASE. Once the monitor is installed, a missing stream is a real fault and the
+  # self-test below still fails the install for it (row M304: never exit 0 over a dead wake path
+  # the user set up).
+  echo "→ Inbox not set up yet for '$SELFTEST_PERSONA': the inbox add-on (kijito-inbox-monitor) is not on"
+  echo "  this machine, so messages to it will NOT reach your agent until you run this. It names anything"
+  echo "  still missing (the monitor, an API key), starts the inbox, and is not done until a message you"
+  echo "  send yourself wakes your agent:"
+  echo "      $DEST/kijito-inbox-start.sh --persona $SELFTEST_PERSONA"
+elif [ -x "$DEST/inbox-selftest.sh" ]; then
   set +e
   "$DEST/inbox-selftest.sh" ${SELFTEST_PERSONA:+--persona "$SELFTEST_PERSONA"}
   st=$?

@@ -95,9 +95,10 @@ jobs:
         run: |
           ./install.sh --allow-branch
           bash tests/drift_test.sh
-      - name: the stranger path - installer output and the inbox start helper (rows M383 M385 M386)
+      - name: the stranger path - installer output, --persona and the inbox start helper (rows M383 M385 M386 N43)
         run: |
           bash tests/install_stranger_path_test.sh
+          bash tests/persona_flag_test.sh
           bash tests/inbox_start_test.sh
           bash tests/no_operator_endpoints_test.sh
 
@@ -116,6 +117,7 @@ jobs:
         run: |
           bash tests/lc_test.sh
           bash tests/wtmux_lifecycle_test.sh
+          bash tests/arm_status_self_test.sh
           bash tests/autosend_owner_test.sh
           bash tests/remote_control_optin_test.sh
       - name: heartbeat, inbox self-test and status-line suites (rows M290 M304 M309 M291)
