@@ -239,6 +239,14 @@ session that runs it, from its own shell: `in_tmux=yes pane=%N` or `in_tmux=no`,
 is armed. To decide whether a session is in tmux, use that or `$TMUX_PANE`, never a line in
 `~/.claude/.lifecycle/lifecycle.log`: every session on the machine writes to that log.
 
+In Claude Code's auto mode, the permission classifier may refuse `arm-session.sh on` or the self-clear
+scripts, and it refuses an agent editing its own permissions. If you want the loop to run without a
+prompt each time, run the installer yourself with `--allow-self-clear` (0.2.21+). It adds exact,
+wildcard-free allow rules for `~/.claude/arm-session.sh on|off|status`, `~/.claude/kijito-qa-pass.sh` and
+`~/.claude/self-clear.sh` (also with the path written out in full), prints them, and changes nothing
+else. `--disallow-self-clear` removes exactly those rules. Without the flag the installer writes no
+permission rule.
+
 What can type into an armed pane: you; the SessionStart hook's catch-up prompt after a launch or
 `/clear` (from the pane's own session only); the self-clear loop's own `/clear` (sent by
 `self-clear.sh`); the backup heartbeat's idle nudge; and, only if you opt in with
