@@ -16,12 +16,14 @@ DEST="$HOME/.claude"
 # "COULD NOT MEASURE". The human already said yes to running the installer, so the installer writes
 # the marker. Validated BEFORE anything is installed, so a bad name or a conflicting marker leaves
 # nothing half-done. Other arguments are ignored here, as they always were.
-PERSONA_ARG=""; PERSONA_GIVEN=0
+PERSONA_ARG=""; PERSONA_GIVEN=0; SELF_CLEAR_RULES=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --persona)   [ $# -ge 2 ] || { echo "ERROR: --persona needs a name. Nothing was installed." >&2; exit 2; }
                  PERSONA_ARG="$2"; PERSONA_GIVEN=1; shift 2 ;;
     --persona=*) PERSONA_ARG="${1#*=}"; PERSONA_GIVEN=1; shift ;;
+    --allow-self-clear)    SELF_CLEAR_RULES=add; shift ;;
+    --disallow-self-clear) SELF_CLEAR_RULES=remove; shift ;;
     *)           shift ;;
   esac
 done
@@ -178,6 +180,42 @@ if [ "$FRESH" = 1 ]; then
   echo "✓ settings.json created, mode 0600"
 else
   echo "✓ settings.json merged, mode 0600 (backup: $BAK)"
+fi
+
+# ── --allow-self-clear: pre-allow the self-clear scripts (row M410) ──────────────────────────────
+# ⛔ OPT-IN ONLY. Without the flag this installer writes no permission rule at all. M312 runs on Opus
+# (r10, r11) saw Claude Code's auto-mode classifier refuse `arm-session.sh on` ("Tmux Self Drive"),
+# then refuse the agent adding allow rules for it ("Self-Modification"), so a human who had said yes
+# to the self-clear loop had to leave auto mode and approve 11 prompts. This flag is the human's own
+# install adding the rules; the agent grants itself nothing.
+# The rules are EXACT and wildcard-free: auto mode drops broad code-execution allow rules, and a Bash
+# rule without `*` matches one command as typed. So each command is listed as the shipped skills
+# write it (~/.claude/...) and with the path expanded. Whether exact rules clear the classifier is
+# measured by the next cold run, not assumed here.
+if [ -n "$SELF_CLEAR_RULES" ]; then
+  RULES=$(jq -n --arg h "$DEST" '[
+    "~/.claude/arm-session.sh on", "~/.claude/arm-session.sh off", "~/.claude/arm-session.sh status",
+    "~/.claude/kijito-qa-pass.sh", "~/.claude/self-clear.sh",
+    ($h + "/arm-session.sh on"), ($h + "/arm-session.sh off"), ($h + "/arm-session.sh status"),
+    ($h + "/kijito-qa-pass.sh"), ($h + "/self-clear.sh")
+  ] | map("Bash(" + . + ")")')
+  if [ "$SELF_CLEAR_RULES" = add ]; then
+    FILTER='.permissions = (.permissions // {}) | .permissions.allow = ((.permissions.allow // []) as $a | $a + ($r - $a))'
+  else
+    FILTER='if (.permissions.allow? | type) == "array" then .permissions.allow -= $r else . end'
+  fi
+  jq --argjson r "$RULES" "$FILTER" "$SET_REAL" > "$SET_REAL.tmp"
+  jq -e . "$SET_REAL.tmp" >/dev/null
+  chmod 0600 "$SET_REAL.tmp"
+  mv "$SET_REAL.tmp" "$SET_REAL"
+  if [ "$SELF_CLEAR_RULES" = add ]; then
+    echo "✓ self-clear allowed without a prompt: these exact commands were added to permissions.allow:"
+    jq -r '.[]' <<<"$RULES" | sed 's/^/      /'
+    echo "  They let an agent arm this pane and clear its own context without asking each time."
+    echo "  Undo: run the installer again with --disallow-self-clear (removes exactly these rules)."
+  else
+    echo "✓ self-clear rules removed from permissions.allow (other rules were left as they were)."
+  fi
 fi
 
 echo

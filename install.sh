@@ -56,6 +56,8 @@ usage() {
   echo
   echo "default provider: claude"
   echo "  claude provider args:  --persona <name>   name this folder's persona (writes .kijito_persona)"
+  echo "                         --allow-self-clear  pre-allow the self-clear scripts (opt-in; exact rules)"
+  echo "                         --disallow-self-clear  remove exactly those rules again"
   echo
   echo "rollout safety (git checkouts only):"
   echo "  --from-main       install the stable main bytes via a detached worktree (recommended)"
