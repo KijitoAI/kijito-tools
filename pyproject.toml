@@ -1,0 +1,77 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kijito-tools"
+version = "0.2.21"
+description = "Installer for kijito-tools: context tracking, session catch-up, and self-clear scripts plus the Kijito skills, deployed into ~/.claude."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Arcada Labs", email = "jason@arcadalabs.com" }]
+keywords = ["kijito", "claude", "claude-code", "anthropic", "installer", "cli", "skills"]
+dependencies = []
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Operating System :: POSIX",
+  "Operating System :: MacOS",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Software Development :: Build Tools",
+]
+
+[project.urls]
+Homepage = "https://github.com/KijitoAI/kijito-tools"
+Repository = "https://github.com/KijitoAI/kijito-tools"
+"Bug Tracker" = "https://github.com/KijitoAI/kijito-tools/issues"
+
+[project.scripts]
+kijito-tools = "kijito_tools.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kijito_tools"]
+
+# The per-provider payloads (bash scripts, skills, each provider's own installer) and the
+# repo-root dispatcher live outside src/ so the tree doubles as the git-clone install path. Pull
+# them into the wheel under the package so importlib.resources can find them at runtime.
+#
+# ⚠️ providers/ MUST be included WHOLESALE, not enumerated per provider: an enumerated list is a
+# fifth place to forget when a provider is added, and this repo already carries four. (Every file
+# the codex installer hash-gates lives under providers/codex/wake-helper/ and providers/_shared/.)
+# hatch_build.py force-includes providers/ file by file: it walks the tree wholesale and drops
+# only the maintainer-material paths in PAYLOAD_EXCLUDE, which a static force-include cannot do.
+[tool.hatch.build.targets.wheel.hooks.custom]
+
+[tool.hatch.build.targets.wheel.force-include]
+"install.sh" = "kijito_tools/_assets/install.sh"
+
+# Every include is ANCHORED with a leading "/": an unanchored "README.md" or "LICENSE" is a gitignore-
+# style pattern that matches the file at ANY depth, which pulls nested files from outside the listed
+# directories into the sdist.
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src/",
+  "/hatch_build.py",
+  "/providers/",
+  "/install.sh",
+  "/README.md",
+  "/LICENSE",
+  "/NOTICE",
+]
+# The same maintainer material the wheel hook (hatch_build.py PAYLOAD_EXCLUDE) and package.json
+# files[] leave out: the vendored monitor's history, tests and release tooling (no installer uses them).
+exclude = [
+  "providers/monitor/.github/",
+  "providers/monitor/CHANGELOG.md",
+  "providers/monitor/docs/",
+  "providers/monitor/IMPORT-PROVENANCE.md",
+  "providers/monitor/OPAQUE-OUTPUT-ENFORCEMENT.md",
+  "providers/monitor/RELEASING.md",
+  "providers/monitor/scripts/mutation-check.py",
+  "providers/monitor/scripts/prepublish-gate.sh",
+  "providers/monitor/test_kijito_monitor.py",
+]

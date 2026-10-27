@@ -1,0 +1,33 @@
+name: publish-pypi
+
+# Publishes kijito-tools to PyPI on a version tag, using Trusted Publishing (OIDC).
+# No PyPI API token is stored — PyPI exchanges a short-lived OIDC credential and the
+# publish action attaches PEP 740 attestations automatically. Configure the trusted
+# publisher once on pypi.org first: pypi.org -> the project -> Publishing -> add this
+# repo + workflow + the "pypi" environment.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # required for Trusted Publishing
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/kijito-tools
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # The package must not ship a vendored monitor that differs from the upstream release
+      # providers/monitor/UPSTREAM names. Fails the build on any drift.
+      - run: bash tests/vendored_monitor_test.sh
+      - run: pipx run build          # builds sdist + wheel into dist/
+      - run: pipx run twine check dist/*
+      - uses: pypa/gh-action-pypi-publish@release/v1   # v1.11+ attaches attestations by default

@@ -1,0 +1,52 @@
+name: publish-npm
+
+# Publishes kijito-tools to npm using Trusted Publishing (OIDC) — no NPM_TOKEN stored;
+# npm exchanges a short-lived workflow credential and attaches provenance automatically.
+#
+# A brand-new package cannot be OIDC-published, so the first version was published manually; the
+# trusted publisher is configured on npmjs.com (KijitoAI/kijito-tools + publish-npm.yml).
+#
+# ⛔ DO NOT ADD `registry-url` TO setup-node HERE. It is the thing that breaks OIDC.
+# setup-node with registry-url writes an .npmrc containing
+# `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}` and points NPM_CONFIG_USERCONFIG at it.
+# With no NODE_AUTH_TOKEN secret, npm sends the literal placeholder `XXXXX-XXXXX-XXXXX-XXXXX` as a
+# bearer token, so it never attempts the OIDC exchange at all and the registry answers
+# `E404 Not Found - PUT` — which reads like "package missing" but means "not authorized".
+#
+# Two ingredients are both required and neither is registry-url: `id-token: write`, and
+# npm >= 11.5.1 (Node 22 bundles npm 10.x, hence the explicit upgrade step).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # required for Trusted Publishing
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # NO registry-url: see the block at the top of this file. It shadows OIDC with a placeholder
+      # auth token, and adding it back will reproduce the E404 on the next tag.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"        # Trusted Publishing needs Node >=22.14 on the runner
+      # Node 22 bundles npm 10.x, but OIDC Trusted Publishing needs npm >=11.5.1.
+      - run: npm install -g npm@latest
+      # Fail loudly if an auth token is configured, rather than silently falling back to a
+      # placeholder-token publish that 404s in a way that looks like a missing package.
+      - name: assert no auth token is shadowing OIDC
+        run: |
+          npm --version
+          if npm config get //registry.npmjs.org/:_authToken 2>/dev/null | grep -qv '^undefined$'; then
+            echo "An npm auth token is configured; OIDC Trusted Publishing will be bypassed." >&2
+            npm config get //registry.npmjs.org/:_authToken >&2
+            exit 1
+          fi
+      # The vendored monitor must match its recorded upstream release (also enforced by
+      # prepublishOnly, so a manual `npm publish` checks it too).
+      - run: bash tests/vendored_monitor_test.sh
+      - run: npm publish --access public

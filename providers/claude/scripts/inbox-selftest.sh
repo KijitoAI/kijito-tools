@@ -1,0 +1,310 @@
+#!/usr/bin/env bash
+# ── THE WARNING WHERE THE READER ACTUALLY IS ─────────────────────────────────────────────────────
+# This check's EXIT STATUS is its answer. Pipe it to `tail`/`head`/`grep` and `$?` becomes the
+# PIPE's status, not this script's — a NOT WORKING then reads as a pass. Emitted at RUN time on
+# STDERR (which does not travel down the pipe) so it still reaches a terminal.
+if [ ! -t 1 ]; then
+  printf '%s\n' "note: stdout is not a terminal. If you piped this, \$? is the LAST pipeline stage's status, NOT this check's answer. Run it unpiped." >&2
+fi
+
+# PROVE THE WAKE PATH, END TO END, BEFORE ANYONE BELIEVES THE INSTALL.
+#
+# WHY THIS EXISTS. An installer can print its ✓ lines and exit 0 while the inbox never armed: the
+# first real message does not wake the agent, and the HUMAN has to notice the silence, ask for a
+# diagnosis, ask for a repair, and only then does the agent think to mail itself as a test.
+# Everything the installer measured is true. None of it is the thing that matters.
+#
+# ⚠️ THE FAILURE MODE IS SILENCE, WHICH IS WHY "IT INSTALLED FINE" IS NOT EVIDENCE. A wake path that
+# is broken looks exactly like a wake path with no mail on it: no error, no log line, nothing to
+# notice. The only way to tell them apart is to PUT A KNOWN MESSAGE THROUGH IT and watch each hop.
+# That is this script. It is not a status report; it is an experiment with a control.
+#
+# THE THREE HOPS, each independently observable, each named in the verdict when it is the one that
+# broke — because "your inbox isn't working" sends a new user to read all three, and two of them are
+# fine:
+#   1. PRODUCER   a producer process is running AND it covers THIS persona (not a sibling's).
+#   2. STREAM     a message sent to this persona actually LANDS in this persona's event stream.
+#   3. CONSUMER   something wake-capable is attached to that stream and would be re-invoked by it.
+#
+# ⛔ HOP 3 IS THE SESSION'S JOB, NOT THE INSTALLER'S, AND IT IS STILL PART OF THE VERDICT. A fresh
+# install legitimately has no consumer yet — no session has armed one. Reporting WORKING at that
+# point would be the exact lie this check exists to remove ("the install declared success with a
+# dead inbox"), so the verdict says PARTIAL, names the consumer hop, and prints what to run. The install
+# is then honestly described: proven as far as your stream file, not yet proven to wake you.
+#
+# EXIT: 0 WORKING · 1 NOT WORKING or PARTIAL (a hop failed — the verdict names it) · 2 COULD NOT
+# MEASURE (no token, no resolvable persona/stream: the check could not be run at all, which is not
+# the same as a failure and must never be reported as one).
+# ⚠️ RUN IT UNPIPED.
+set -eu
+
+PERSONA=""
+TIMEOUT=90
+DO_SEND=1
+CANARY=0
+# TWO CALLERS, TWO CONTRACTS, ONE VERDICT FUNCTION.
+# The INSTALL-TIME run legitimately has no consumer — no agent session exists yet — so a missing
+# consumer there is PARTIAL with the next step, not a failed install. The AGENT-DRIVEN ONBOARDING
+# flow runs this same check AFTER the agent has armed its consumer and must report a machine-readable
+# verdict to the server; that caller needs "WORKING means all three hops" with no PARTIAL wording to
+# misread. --require-consumer selects the second contract. The HOPS are measured identically either
+# way — only what counts as passing changes, which is the only difference that should ever be
+# configurable in a check.
+REQUIRE_CONSUMER=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --persona)  PERSONA="${2:-}"; [ -n "$PERSONA" ] || { echo "ABORT: --persona needs a value" >&2; exit 2; }; shift 2 ;;
+    --timeout)  TIMEOUT="${2:-}"; shift 2 ;;
+    --no-send)  DO_SEND=0; shift ;;      # observe the hops without putting a message through
+    --require-consumer) REQUIRE_CONSUMER=1; shift ;;
+    --canary)   CANARY=1; shift ;;
+    -h|--help)  sed -n '1,40p' "$0"; exit 0 ;;
+    *)          echo "ABORT: unknown option $1" >&2; exit 2 ;;
+  esac
+done
+
+KIJITO_BASE=${KIJITO_BASE:-https://api.kijito.ai}
+# Cloudflare 403s the default python-urllib UA; a named UA is cheap insurance for any client here.
+UA=${KIJITOMON_UA:-kijito-inbox-selftest/1.0}
+
+# ── THE VERDICT IS A PURE FUNCTION OF THE THREE HOPS ─────────────────────────────────────────────
+# Kept pure so the canary can drive every combination offline, including the ones that are hard to
+# stage on a real host. A verdict that could only be produced by the live path would be a verdict
+# nobody had ever seen fail.
+verdict() {   # $1=producer_ok $2=stream_ok $3=consumer_ok (each 1/0) -> prints, returns 0/1
+  _p=$1; _s=$2; _c=$3
+  if [ "$_p" = 0 ]; then
+    printf '%s\n' "VERDICT: NOT WORKING — failing hop: PRODUCER"
+    printf '%s\n' "  Nothing is collecting ${PERSONA:-this persona}'s mail, so no message can reach you."
+    printf '%s\n' "  Run: $(restart_hint)"
+    return 1
+  fi
+  if [ "$_s" = 0 ]; then
+    printf '%s\n' "VERDICT: NOT WORKING — failing hop: STREAM FILE"
+    printf '%s\n' "  A producer is running, but the test message did not appear in this persona's"
+    printf '%s\n' "  event stream within ${TIMEOUT}s. The producer may be covering a DIFFERENT persona,"
+    printf '%s\n' "  or writing somewhere other than where this check is looking."
+    printf '%s\n' "  Run: producer-health.sh --persona ${PERSONA:-<persona>}   (unpiped)"
+    return 1
+  fi
+  if [ "$_c" = 0 ] && [ "$REQUIRE_CONSUMER" = 1 ]; then
+    printf '%s\n' "VERDICT: NOT WORKING — failing hop: CONSUMER"
+    printf '%s\n' "  Mail reaches the stream, but nothing is READING it, so nothing will wake this"
+    printf '%s\n' "  session. --require-consumer was passed, so a missing consumer is a FAILURE here"
+    printf '%s\n' "  rather than the expected state of a fresh install."
+    printf '%s\n' "  Arm a wake-capable consumer on: ${EVENTS:-<your events file>}"
+    return 1
+  fi
+  if [ "$_c" = 0 ]; then
+    printf '%s\n' "VERDICT: PARTIAL — failing hop: CONSUMER"
+    printf '%s\n' "  Mail reaches your event stream, but nothing is READING it, so nothing will wake"
+    printf '%s\n' "  you. This is the normal state immediately after an install: a session arms the"
+    printf '%s\n' "  consumer, the installer cannot. The install is proven as far as your stream file"
+    printf '%s\n' "  and NOT yet proven to wake you."
+    printf '%s\n' "  In your agent session, arm a wake-capable consumer on:"
+    printf '%s\n' "    ${EVENTS:-<your events file>}"
+    printf '%s\n' "  then re-run this check. A background \`tail\` that only writes to a file is NOT a"
+    printf '%s\n' "  consumer: it captures without re-invoking you, which is indistinguishable from"
+    printf '%s\n' "  silence for as long as it lasts."
+    return 1
+  fi
+  printf '%s\n' "VERDICT: WORKING — a message sent to ${PERSONA} reached the stream and a consumer is attached."
+  return 0
+}
+
+restart_hint() {
+  # Name the supervisor that is actually installed (never a launchctl hint on Linux).
+  if command -v kijito_supervisor_for >/dev/null 2>&1; then
+    kijito_restart_hint "$(kijito_supervisor_for "${PERSONA:-}")" "${PERSONA:-<persona>}"
+  elif command -v kijito_host_is_windows >/dev/null 2>&1 && kijito_host_is_windows; then
+    kijito_restart_hint task "${PERSONA:-<persona>}"
+  elif [ -d "$HOME/.kijito-monitor" ] || command -v systemctl >/dev/null 2>&1; then
+    printf 'systemctl --user enable --now kijito-inbox-monitor@%s' "${PERSONA:-<persona>}"
+  else
+    printf 'launchctl kickstart -k gui/$(id -u)/com.kijito.inbox-monitor'
+  fi
+}
+
+# ── CANARY: prove each hop is NAMED when it is the one that broke ────────────────────────────────
+# ⛔ The point is not that a broken pipe produces SOME error — it is that the verdict points at the
+# right hop. A check that said "not working" for all three would pass a naive test and send every
+# new user to read all three sections of the docs.
+if [ "$CANARY" = 1 ]; then
+  fail=0
+  PERSONA="canary"; EVENTS="/tmp/canary-events"
+  expect() {   # $1=label $2=expected-substring $3..=hop states
+    _lbl=$1; _want=$2; shift 2
+    out=$(verdict "$@" || true)
+    if printf '%s' "$out" | grep -q "$_want"; then
+      printf '  ok    %s\n' "$_lbl"
+    else
+      printf '  FAIL  %s: verdict did not name it\n%s\n' "$_lbl" "$out"; fail=1
+    fi
+  }
+  expect "producer down names PRODUCER"            "failing hop: PRODUCER"     0 0 0
+  expect "producer down outranks the later hops"   "failing hop: PRODUCER"     0 1 1
+  expect "stream silent names STREAM FILE"         "failing hop: STREAM FILE"  1 0 0
+  expect "stream silent outranks the consumer hop" "failing hop: STREAM FILE"  1 0 1
+  expect "no consumer names CONSUMER"              "failing hop: CONSUMER"     1 1 0
+  expect "no consumer is PARTIAL by default"       "VERDICT: PARTIAL"          1 1 0
+  # ...and the SECOND CONTRACT: the same missing hop must read as a flat failure for the caller that
+  # has already armed a consumer. Both are asserted, because a mode that silently behaved like the
+  # default would be worse than no mode at all — the onboarding flow would report verified=true on a
+  # session that cannot be woken.
+  REQUIRE_CONSUMER=1
+  expect "with --require-consumer it is NOT WORKING" "VERDICT: NOT WORKING"     1 1 0
+  expect "and it still names the CONSUMER hop"       "failing hop: CONSUMER"    1 1 0
+  if verdict 1 1 1 | grep -q "VERDICT: WORKING"; then
+    printf '  ok    --require-consumer still says WORKING when all three are green\n'
+  else
+    printf '  FAIL  --require-consumer broke the all-green verdict\n'; fail=1
+  fi
+  REQUIRE_CONSUMER=0
+  expect "all three green says WORKING"            "VERDICT: WORKING"          1 1 1
+  # ⛔ AND THE DIRECTION THAT MATTERS MOST: WORKING must require ALL THREE. A verdict that said
+  # WORKING with a dead hop is the defect this check exists for, stated exactly.
+  for combo in "0 0 0" "0 0 1" "0 1 0" "0 1 1" "1 0 0" "1 0 1" "1 1 0"; do
+    # shellcheck disable=SC2086
+    if verdict $combo 2>/dev/null | grep -q "VERDICT: WORKING"; then
+      printf '  FAIL  a dead hop (%s) still reported WORKING\n' "$combo"; fail=1
+    fi
+  done
+  [ "$fail" = 0 ] && printf '  ok    WORKING is never reported with a dead hop\n'
+  # exit codes are part of the contract: a failing verdict must be non-zero, or a caller that tests
+  # $? (the installer does) treats a dead inbox as a success.
+  if verdict 1 1 0 >/dev/null 2>&1; then printf '  FAIL  a PARTIAL verdict exited 0\n'; fail=1
+  else printf '  ok    a failing verdict exits non-zero\n'; fi
+  [ "$fail" = 0 ] && { printf '%s\n' "CANARY CLEAN - each broken hop is named, and WORKING needs all three."; exit 0; }
+  printf '%s\n' "CANARY FAILED"; exit 2
+fi
+
+# ── LIVE PATH ────────────────────────────────────────────────────────────────────────────────────
+# Resolve the persona from the same marker the SessionStart hook uses, so the check and the hook can
+# never disagree about WHO this session is.
+if [ -z "$PERSONA" ]; then
+  for d in "${CLAUDE_PROJECT_DIR:-}" "$PWD"; do
+    if [ -n "$d" ] && [ -f "$d/.kijito_persona" ]; then
+      PERSONA=$(head -n1 "$d/.kijito_persona" | tr -d '\r\n')
+      # trim the ENDS only — deleting interior spaces renames the user's persona.
+      PERSONA="${PERSONA#"${PERSONA%%[![:space:]]*}"}"
+      PERSONA="${PERSONA%"${PERSONA##*[![:space:]]}"}"
+      [ -n "$PERSONA" ] && break
+    fi
+  done
+fi
+[ -n "$PERSONA" ] || { echo "COULD NOT MEASURE: no persona (pass --persona, or add a .kijito_persona marker)."; exit 2; }
+
+# The producer publishes the persona->filename rule; asking it is the only way to be sure this check
+# looks where the producer writes (hand-written copies of the rule drift). Resolved through the
+# SHARED helper in kijito-persona-lib.sh, so the heartbeat watchdog and this check cannot disagree
+# about where a persona's stream lives.
+_st_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/kijito-persona-lib.sh"
+[ -r "$_st_lib" ] || _st_lib="$HOME/.claude/kijito-persona-lib.sh"
+# shellcheck source=/dev/null
+. "$_st_lib" || { echo "COULD NOT MEASURE: cannot source kijito-persona-lib.sh"; exit 2; }
+EVENTS=$(kijito_stream_for_persona "$PERSONA" || true)
+
+printf '%s\n' "kijito inbox self-test [persona=$PERSONA]"
+
+# ── HOP 1: PRODUCER ──────────────────────────────────────────────────────────────────────────────
+# ⚠️ "A producer is running" is a HOST-GLOBAL fact; "a producer covers ME" is a per-persona one, and
+# on a multi-persona machine they come apart routinely. The second is the one that matters here.
+producer_ok=0
+if [ -n "$EVENTS" ] && [ -e "$EVENTS" ]; then
+  producer_ok=1
+  printf '  ok    producer: covers %s (stream: %s)\n' "$PERSONA" "$EVENTS"
+else
+  # Only the DIAGNOSIS depends on the process probe; the hop already failed (no stream). A host where
+  # we cannot look (no pgrep, no PowerShell) must not be told "no producer is running".
+  _prc=0; kijito_producer_running || _prc=$?   # `|| rc=$?`, never `; rc=$?`: this script runs under set -e
+  if [ "$_prc" = 0 ]; then
+    printf '  FAIL  producer: a producer is running, but none of it is writing a stream for %s\n' "$PERSONA"
+  elif [ "$_prc" = 2 ]; then
+    printf '  FAIL  producer: no stream for %s (whether a producer process is running could NOT be checked on this host)\n' "$PERSONA"
+  else
+    printf '  FAIL  producer: no producer process is running on this host\n'
+  fi
+fi
+
+# ── HOP 2: STREAM ────────────────────────────────────────────────────────────────────────────────
+stream_ok=0
+if [ "$producer_ok" = 1 ]; then
+  if [ "$DO_SEND" = 0 ]; then
+    stream_ok=1
+    printf '  --    stream: not exercised (--no-send); the verdict below is about the OTHER hops only\n'
+  else
+    TOKEN=""
+    for tf in "${KIJITOMON_TOKEN_FILE:-}" "$HOME/.claude/.kijito_api_token.$PERSONA" \
+              "$HOME/.claude/.kijito_api_token" "$HOME/.config/kijito-inbox-monitor/token"; do
+      [ -n "$tf" ] && [ -r "$tf" ] && { TOKEN=$(tr -d ' \t\r\n' < "$tf"); break; }
+    done
+    if [ -z "$TOKEN" ]; then
+      printf '  ????  stream: COULD NOT MEASURE - no API token found, so no test message can be sent\n'
+      printf '%s\n' "COULD NOT MEASURE: the wake path was not exercised. This is not a pass."
+      exit 2
+    fi
+    before=$(wc -c < "$EVENTS" 2>/dev/null || echo 0)
+    stamp="kijito-inbox-selftest $(date -u +%FT%TZ) $$"
+    # Send to SELF. A self-addressed message is the only test message that cannot bother anyone else,
+    # and it exercises exactly the path a real sender uses.
+    code=$(curl -sS -o /dev/null -w '%{http_code}' -m 20 -A "$UA" -H "Authorization: Bearer $TOKEN" \
+         -H 'Content-Type: application/json' -X POST "$KIJITO_BASE/api/send" \
+         -d "{\"to\":\"$PERSONA\",\"persona\":\"$PERSONA\",\"content\":\"$stamp — automated install self-test; safe to ignore and to delete.\"}" \
+         2>/dev/null) || code=000
+    case "$code" in
+      2??) : ;;
+      401|403)
+        # ⚠️ A READ-ONLY KEY IS NOT A BROKEN MONITOR. The monitor needs only memory.read, but SENDING
+        # the test message is a hive write, which needs memory.write. Reporting this as "not working"
+        # would send a new user hunting for a fault that does not exist.
+        printf '  ????  stream: COULD NOT MEASURE - the key refused to SEND the test message (HTTP %s)\n' "$code"
+        cat <<EOF
+
+COULD NOT MEASURE: the key the monitor uses is fine for WATCHING mail (memory.read), but it cannot SEND
+the self-test message: sending is a hive write, which needs memory.write. The monitor may be working.
+Prove the wake from your agent instead - send yourself one message:
+  kijito_hive_send(persona="$PERSONA", to="$PERSONA", content="inbox test")
+and check that it wakes your agent. The monitor needs no other key.
+EOF
+        exit 2 ;;
+      *)
+        printf '  ????  stream: COULD NOT MEASURE - the test message could not be SENT (HTTP %s: API unreachable or rejected)\n' "$code"
+        printf '%s\n' "COULD NOT MEASURE: the wake path was not exercised. This is not a pass."
+        exit 2 ;;
+    esac
+    printf '  ..    stream: test message sent; waiting up to %ss for it to appear in the stream\n' "$TIMEOUT"
+    waited=0
+    while [ "$waited" -lt "$TIMEOUT" ]; do
+      now=$(wc -c < "$EVENTS" 2>/dev/null || echo 0)
+      if [ "$now" -gt "$before" ] && tail -c $((now - before + 1)) "$EVENTS" 2>/dev/null \
+           | grep -q '"event": *"new"'; then
+        stream_ok=1; break
+      fi
+      sleep 3; waited=$((waited + 3))
+    done
+    if [ "$stream_ok" = 1 ]; then
+      printf '  ok    stream: the message reached %s after ~%ss\n' "$EVENTS" "$waited"
+    else
+      printf '  FAIL  stream: nothing new arrived in %s within %ss\n' "$EVENTS" "$TIMEOUT"
+    fi
+  fi
+fi
+
+# ── HOP 3: CONSUMER ──────────────────────────────────────────────────────────────────────────────
+# ⚠️ ANCHOR THE PATTERN. An unanchored pgrep on the events path SELF-MATCHES the producer (its own
+# argv contains that path) and reports a consumer where there is none — armed-looking and deaf.
+consumer_ok=0; _crc=1
+if [ -n "$EVENTS" ]; then _crc=0; kijito_stream_consumed "$EVENTS" || _crc=$?; fi
+if [ "$_crc" = 0 ]; then
+  consumer_ok=1
+  printf '  ok    consumer: a wake-capable consumer is attached to the stream\n'
+elif [ "$_crc" = 2 ]; then
+  printf '  ????  consumer: COULD NOT MEASURE - this host offers no way to list processes (no pgrep, no PowerShell)\n'
+  printf '\n%s\n' "COULD NOT MEASURE: whether anything reads ${EVENTS} is unknown here. This is not a pass."
+  exit 2
+else
+  printf '  FAIL  consumer: nothing is reading the stream\n'
+fi
+
+printf '\n'
+verdict "$producer_ok" "$stream_ok" "$consumer_ok"

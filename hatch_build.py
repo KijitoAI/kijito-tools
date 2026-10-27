@@ -1,0 +1,46 @@
+"""Wheel build hook: pull providers/ into the wheel under kijito_tools/_assets/, minus maintainer material.
+
+providers/ is walked WHOLESALE (never enumerated per provider; see pyproject.toml) and each file is
+force-included, except the paths in PAYLOAD_EXCLUDE. A static `force-include` of the directory
+cannot do this: hatch's `exclude` does not apply to force-included paths.
+
+PAYLOAD_EXCLUDE: maintainer material that no installer runs. The installer's hash-gated set
+(providers/codex/wake-helper/ and providers/_shared/wake-core.mjs) is untouched. Mirrored in
+package.json files[] and the sdist exclude; CI asserts all three built payloads.
+"""
+from fnmatch import fnmatch
+from pathlib import Path
+
+from hatchling.builders.hooks.plugin.interface import BuildHookInterface
+
+PAYLOAD_EXCLUDE = (
+    # The vendored monitor's maintainer history, tests and release tooling. The monitor program,
+    # its README, templates, migrate script and package metadata still ship.
+    "providers/monitor/.github/*",
+    "providers/monitor/CHANGELOG.md",
+    "providers/monitor/docs/*",
+    "providers/monitor/IMPORT-PROVENANCE.md",
+    "providers/monitor/OPAQUE-OUTPUT-ENFORCEMENT.md",
+    "providers/monitor/RELEASING.md",
+    "providers/monitor/scripts/mutation-check.py",
+    "providers/monitor/scripts/prepublish-gate.sh",
+    "providers/monitor/test_kijito_monitor.py",
+)
+
+
+def excluded(rel: str) -> bool:
+    return any(fnmatch(rel, pat) for pat in PAYLOAD_EXCLUDE)
+
+
+class ProviderAssetsHook(BuildHookInterface):
+    PLUGIN_NAME = "custom"
+
+    def initialize(self, version, build_data):
+        root = Path(self.root)
+        for path in sorted((root / "providers").rglob("*")):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(root).as_posix()
+            if "__pycache__" in rel.split("/") or excluded(rel):
+                continue
+            build_data["force_include"][str(path)] = f"kijito_tools/_assets/{rel}"

@@ -1,0 +1,49 @@
+{
+  "name": "kijito-tools",
+  "version": "0.2.21",
+  "description": "Installer for kijito-tools: copies the context-tracking, session catch-up, and self-clear scripts plus the Kijito skills into ~/.claude.",
+  "license": "Apache-2.0",
+  "type": "commonjs",
+  "bin": {
+    "kijito-tools": "bin/cli.js"
+  },
+  "files": [
+    "bin/",
+    "providers/",
+    "install.sh",
+    "NOTICE",
+    "!providers/monitor/.github/",
+    "!providers/monitor/CHANGELOG.md",
+    "!providers/monitor/docs/",
+    "!providers/monitor/IMPORT-PROVENANCE.md",
+    "!providers/monitor/OPAQUE-OUTPUT-ENFORCEMENT.md",
+    "!providers/monitor/RELEASING.md",
+    "!providers/monitor/scripts/mutation-check.py",
+    "!providers/monitor/scripts/prepublish-gate.sh",
+    "!providers/monitor/test_kijito_monitor.py"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KijitoAI/kijito-tools.git"
+  },
+  "bugs": {
+    "url": "https://github.com/KijitoAI/kijito-tools/issues"
+  },
+  "homepage": "https://github.com/KijitoAI/kijito-tools#readme",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "anthropic",
+    "skills",
+    "cli",
+    "installer",
+    "context-window",
+    "kijito"
+  ],
+  "scripts": {
+    "prepublishOnly": "bash tests/vendored_monitor_test.sh && bash tests/redeem_key_test.sh && npm pack --dry-run"
+  }
+}

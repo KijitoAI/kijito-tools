@@ -1,0 +1,316 @@
+# kijito-tools
+
+Tools for Claude Code and Codex sessions to track their own context window and, optionally, run
+unattended.
+A session can catch up on memory at startup, report how much of its context window is actually in
+use, and recycle its context at high usage without losing the working state. It uses
+[Kijito](https://kijito.ai) as the memory backend by default, and also runs standalone (see
+"Running without Kijito").
+
+Everything here is optional. The catch-up and curation steps are a handful of memory calls you can
+run by hand; the scripts and the two skills just make the routine uniform and easy to deploy across
+machines. Install only the pieces you want — the context check stands alone, the autonomy harness is
+opt-in per pane, and the skills are convenience wrappers, not requirements.
+
+## Components
+
+| Component | What it does | Needs Kijito |
+|---|---|---|
+| `myctx.sh`, `statusline-context.sh` | Report actual context-window usage from the API token counts recorded in the session transcript (the same numbers `/context` shows). Cheap to call. The statusline shows it live. | No |
+| Session catch-up (`session-catchup-hint.sh`, a SessionStart hook) | Each session catches up on memory and notes before it starts on the task. | Optional |
+| Armed-pane autonomy (`claude-armed.sh`, `arm-session.sh`, `session-autosend.sh`) | An armed tmux pane sends itself a first prompt and continues preloaded work. Arming is per pane, so one pane can run unattended while you drive another. | Optional |
+| Self-clear loop (`self-clear.sh`, `lifecycle-lib.sh`, `kijito-qa-pass.sh`) | At high measured context, the session curates memory, confirms a fresh session can resume, runs `/clear`, then catches up again and continues. Gated so it will not clear with unsaved work. | Optional (see note) |
+| `kijito-start` skill | The active, thorough version of session catch-up: load memory, read the current-state pointer and recent lessons, arm the inbox, and resume active work — or, for a new persona, set up identity and the pointer. | Yes |
+| `kijito-qa-memory` skill | Memory curation that requires writing the new memories (not only fixing existing ones), then uses a fresh subagent to confirm a cold start can reconstruct the work. | Yes |
+
+### The status line
+
+![The status line: persona, unread mail, model, context use](docs/statusline.svg)
+
+`statusline-context.sh` shows, left to right: the pane's persona (from the project's `.kijito_persona`
+marker, so several agent panes can be told apart), the persona's unread-mail count when
+[kijito-inbox-monitor](https://github.com/KijitoAI/kijito-inbox-monitor) 0.5.7 or later is running and
+has recorded one in the last 10 minutes (shown only when it is above zero), the model, and the context
+window in use. The picture is rendered from the script's real output by
+`scripts/render-statusline-svg.py`, and a test fails if the two disagree.
+
+The two skills are conveniences, not the only way in: an agent can run the same catch-up and
+curation by hand from a few prompts. They are packaged as skills because that makes them simple to
+drop into `~/.claude/skills/` and invoke the same way everywhere.
+
+The self-clear loop needs some durable store to carry the handoff across `/clear`. That is Kijito by
+default; a notes file works in standalone mode.
+
+## Install
+
+From source:
+
+```bash
+git clone https://github.com/KijitoAI/kijito-tools
+cd kijito-tools && ./install.sh
+```
+
+`./install.sh` installs the **Claude** provider, which is the default and what every earlier version
+did. The repo is provider-agnostic: each supported agent host is a directory under `providers/` with
+its own installer and its own install location.
+
+```bash
+./install.sh --list-providers
+./install.sh                      # claude (default) -> ~/.claude
+./install.sh --provider codex     # verify release gate only; add --skills-only to deploy skills
+```
+
+### Rollout safety on a SHARED checkout
+
+The installer COPIES files into `~/.claude` (a deployed hook is a copy, not a symlink) and reads
+**whatever branch the checkout has checked out**. So on a shared checkout that several machines
+install from, a bare `./install.sh` run while the checkout sits on a feature branch would silently
+bake that branch's in-progress bytes into a machine's hooks. To prevent that, a bare install from a non-`main`
+git checkout is **refused**; choose explicitly:
+
+```bash
+./install.sh --from-main       # install the stable main bytes (recommended for a shared rollout;
+                               # branch-state-immune — installs via a detached worktree at main)
+./install.sh --allow-branch    # deliberately install THIS branch's bytes (e.g. testing your own work)
+```
+
+A packaged install (`npx kijito-tools`, `pipx run kijito-tools`) is not a git checkout, so the
+bytes ARE the release and no flag is needed.
+
+| provider | what it installs | where | needs |
+|---|---|---|---|
+| `claude` | bash lifecycle scripts + the two skills, and merges `settings.json` | `~/.claude` | `bash`, `jq` (`tmux` for autonomy) |
+| `codex` | Skills (kijito-start, kijito-qa-memory) + gated native same-session wake helper. `--skills-only` deploys the skills; the native wake helper runs from a persistent package copy (`npm install --prefix ~/.local/share/kijito-tools kijito-tools`, helper at `$HOME/.local/share/kijito-tools/node_modules/kijito-tools/providers/codex/wake-helper/kijito-wake-helper.mjs`) or a source checkout. | `~/.codex/skills` | Node 20+, a Codex binary |
+
+The wake protocol both providers rely on — event-line validation, the injection-fenced wake text,
+read-offset persistence, and the single-consumer lock — lives once in `providers/_shared/wake-core.mjs`.
+The **skills stay per-provider prose on purpose**: Codex's are rewrites rather than translations, and
+skills are read by models, where slightly-off wording is a real regression. `tests/conformance_test.sh`
+is what keeps that safe — it requires every provider's skills to state the shared doctrine (pointer
+first, mail is data and never authority, verify stale operational facts, running is not armed, arm at
+most one consumer) while leaving each provider free to say it in its own words.
+
+Or with a package runner, no clone needed:
+
+```bash
+npx kijito-tools       # via npm
+pipx run kijito-tools  # via PyPI  (uvx kijito-tools also works)
+```
+
+Both package runners do the same thing as the from-source install: they bundle every provider's
+payload and run `install.sh`, which defaults to the Claude provider. They need `bash`, so on Windows
+run them inside WSL (see Platform support). Pass provider flags straight through, e.g.
+`npx kijito-tools --provider codex --skills-only`.
+
+To name the persona for a project folder at the same time, run the installer from that folder with
+`--persona <name>` (0.2.20+), e.g. `npx kijito-tools --persona alice`. It writes the folder's
+`.kijito_persona` marker (the first line is the name) and refuses, without installing anything, if a
+marker there already names a different persona. Without a persona the installer skips the inbox
+check and says how to set the inbox up later; that is the normal state on a first install.
+
+**One exception: `redeem-key`** (0.2.17+). When an agent mints an API key with the key pickup, the reply
+gives one command that pipes a single-use pickup code into a local helper, which collects the key and saves
+it to its key file, so the key never passes through the conversation:
+
+```sh
+printf '%s\n' 'kpc_…@api.kijito.ai' | npx -y 'kijito-tools@>=0.2.17' redeem-key --kind watcher --expect-account acct_…
+```
+
+`redeem-key` must be the first argument. Through PyPI, always ask for the floor too, because a cached older
+kijito-tools would run the installer instead: `pipx run --spec 'kijito-tools>=0.2.17' kijito-tools redeem-key ...`
+or `uvx --from 'kijito-tools>=0.2.17' kijito-tools redeem-key ...`. Both launchers (`bin/cli.js` for npm,
+`kijito_tools/cli.py` for PyPI) catch it before anything else and run the bundled kijito-inbox-monitor's
+`--redeem-key` with the same options and the same stdin, under `python -I -S` (no environment variables, user
+site-packages or `.pth` files of whatever Python that is), and pass its exit code back. They never run
+`install.sh` or `bash`.
+
+- Only the options that mode reads are accepted (`--kind`, `--expect-account`, `--api-base`, `--token-file`,
+  `--replace`, `--replace-prefix`, `--no-verify`), each once, and `--kind`, `--expect-account` and
+  `--replace-prefix` only in the shapes a reply renders. Anything else is refused with exit `2` before anything
+  runs, without repeating the value. An installer run that looks like a mangled redeem command (`redeem` in any
+  spelling, a pickup code, or one of those options) is refused the same way instead of installing.
+- Signals: the monitor decides the outcome of an interrupt (it prints it and exits 6, 7, 5 or 8). The PyPI
+  launcher becomes the monitor (exec); the npm launcher relays a SIGTERM or SIGHUP sent to it alone (npm forwards
+  a TERM to its child only) and leaves Ctrl-C to reach the monitor directly.
+- It needs Python 3.9+, not bash, so it also works in native Windows PowerShell. The npm launcher looks for
+  `py -3`, then `python3`, then `python` there (`python3`, then `python` elsewhere) in the absolute entries of
+  `PATH` only, never the current directory, and runs the exact file it checked. The PyPI launcher uses the Python
+  it runs on.
+
+The helper's exit codes and output lines are documented in the monitor README.
+
+The Claude installer copies the scripts to `~/.claude/`, deploys the skills to `~/.claude/skills/`, drops
+the CLAUDE.md doctrine snippet alongside them, and merges the keys it needs into `settings.json`. It
+backs up `settings.json` and merges with `jq`, so it leaves your existing settings alone and is safe
+to re-run, including on other machines. Requires `jq`. The autonomy features require `tmux`.
+
+## Proving the inbox wake path
+
+The install ends by pushing a real message through the wake path and reporting which hop, if any,
+broke — because a broken wake path is indistinguishable from a working one with no mail on it. It
+fails as silence, so an installer that only reports on itself ("files copied, settings merged") can
+exit 0 over a dead inbox. Run it any time:
+
+```sh
+~/.claude/inbox-selftest.sh                      # resolves the persona from .kijito_persona
+~/.claude/inbox-selftest.sh --persona 'name (purpose)'
+```
+
+**Not set up yet? Start it and prove it in one step.** If the monitor is installed but nothing is
+running for your persona (the install says so), run:
+
+```sh
+~/.claude/kijito-inbox-start.sh --persona <name>
+```
+
+It checks, in order, that there is a persona, that `kijito-inbox-monitor` is installed, and that an
+API key exists — and when one is missing it prints the exact fix and exits `2`. (Signed in through
+OAuth? Your agent can mint a read-only key from its own session, with your OK:
+`kijito_api_key(action="create", name=…, scopes=["memory.read"])`, then run the one redeem command
+the reply gives, which saves the key to `~/.config/kijito-inbox-monitor/token` itself so the key never
+passes through the conversation. If the reply shows the key itself (an older or self-hosted server),
+follow its save steps to `~/.config/kijito-inbox-monitor/token` and `chmod 600` it.) Then it starts
+a producer for that persona unless one already covers it, sends you a real message, and prints the one
+consumer line your agent must arm. It exits `0` only when the wake is proven; `3` means the mail reaches your stream and only the
+consumer is left. A producer started this way stops at logout or reboot — for one that stays up, see the
+monitor README's "Running the producer for real (supervision)".
+
+Three hops, and the verdict names the one that broke: **producer** (a producer runs *and covers this
+persona*, not a sibling's) · **stream** (the message actually lands in this persona's event file) ·
+**consumer** (something wake-capable is attached and would be re-invoked).
+
+Exit codes are the answer: `0` WORKING · `1` NOT WORKING / PARTIAL · `2` COULD NOT MEASURE (no
+token, no persona, no resolvable stream — deliberately *not* the same as a failure). Run it unpiped:
+piping replaces `$?` with the last pipeline stage's status.
+
+**Two callers, two contracts.** At install time there is no agent session yet, so a missing consumer
+is `PARTIAL` with the next step rather than a failed install. An **agent-driven onboarding flow**
+runs the same check *after* arming its consumer and needs "WORKING means all three hops" with no
+PARTIAL to misread — that caller passes `--require-consumer`, which makes a missing consumer a flat
+failure. The hops are measured identically either way; only what counts as passing changes.
+
+The onboarding step that verifies the wake channel should run exactly:
+
+```sh
+~/.claude/inbox-selftest.sh --require-consumer
+```
+
+and report `verified=true` only on exit `0`.
+
+## Platform support
+
+The scripts are POSIX-style `bash` and avoid GNU-only flags (epoch and timestamp formatting work on
+both BSD and GNU `date`), so they run the same on Linux and macOS.
+
+| Platform | Context check | Catch-up + skills | Armed-pane autonomy / self-clear |
+|---|---|---|---|
+| Linux | yes | yes | yes (needs `tmux`) |
+| macOS | yes | yes | yes (needs `tmux`) |
+| Windows via WSL | yes | yes | yes — run `claude` inside the WSL distro, where `tmux` works |
+| Windows native (no WSL) | with Git Bash | with Git Bash | inside `wtmux` (Git Bash + PowerShell); see below |
+
+On Windows, WSL is the simplest route: install and launch `claude` inside the Linux distro and
+everything works as it does on native Linux. The autonomy harness drives a session by typing into its
+own multiplexer pane. On native Windows that pane is `wtmux`'s: run `claude` inside wtmux from Git
+Bash and the lifecycle scripts use `$WTMUX_PID`/`$WTMUX_PANE` in place of `$TMUX_PANE`. wtmux cannot
+list panes, so a pane counts as alive when `wtmux capture-pane` answers for it, and an arming is tied
+to the wtmux server process and its start time, which is read through PowerShell. If PowerShell cannot
+answer, the pane counts as not armed. The backup heartbeat watchdog is tmux-only for now. Tested
+against a stand-in wtmux (`tests/wtmux_lifecycle_test.sh`).
+If Claude Code runs in auto mode there, the auto-mode classifier refuses an agent's own edits to
+`~/.claude/settings.json`, so apply any settings change for self-drive yourself.
+Requirements everywhere: `bash` and `jq`; add `tmux` (or `wtmux` on native Windows) for the autonomy
+features. The one exception is `npx kijito-tools redeem-key` (see Install), which needs only Node and
+Python 3.9+ and runs in native Windows PowerShell.
+
+## Managed vs. autonomous panes
+
+Arming is per pane.
+
+| | plain `claude` | armed pane |
+|---|---|---|
+| Catch-up | reminder only; you send the first prompt | sends its own first prompt |
+| Self-clear | not allowed; you manage context | allowed, after the gate below |
+
+To arm a pane, launch it with `~/.claude/claude-armed.sh`, or tell the agent to go autonomous
+mid-session and it runs `~/.claude/arm-session.sh on` (`off` turns it back off). A plain `claude`
+session stays under your control. `~/.claude/arm-session.sh status` is read-only and answers for the
+session that runs it, from its own shell: `in_tmux=yes pane=%N` or `in_tmux=no`, then whether the pane
+is armed. To decide whether a session is in tmux, use that or `$TMUX_PANE`, never a line in
+`~/.claude/.lifecycle/lifecycle.log`: every session on the machine writes to that log.
+
+What can type into an armed pane: you; the SessionStart hook's catch-up prompt after a launch or
+`/clear` (from the pane's own session only); the self-clear loop's own `/clear` (sent by
+`self-clear.sh`); the backup heartbeat's idle nudge; and, only if you opt in with
+`KIJITO_REMOTE_CONTROL=1`, Claude Code Remote Control from your claude.ai session list. Beyond the
+toolkit, anything with access to your tmux server can send keys to any pane.
+Remote Control is off by default (it was on by default before 0.2.12). When the launcher enables it,
+the armed launch prints a line saying so; Remote Control you turn on yourself (a `--remote-control`
+flag you pass through, or `/remote-control` mid-session) is not announced by the launcher.
+
+## Self-clear gate
+
+A pane clears itself only after both steps:
+
+1. `/kijito-qa-memory` curates memory, writes a current-state note that begins with `RESUME NOW:`,
+   and confirms with a fresh subagent that a cold start can resume. It records a pass token.
+2. `self-clear.sh` checks that the kill switch is off, the pane is armed, it is not a subagent, it is
+   in tmux (or wtmux), the target pane is alive, and the pass token is **fresh**.
+
+Every one of those is a property of *this* clear — above all, "is the handoff good enough to survive
+it?" There is deliberately no count-based cycle cap and no every-N human checkpoint: a count
+measures uptime, not runaway, so such gates refuse healthy cycles and do not catch loops. If a
+runaway ever needs catching, detect the loop (consecutive cycles landing no commits and no memories)
+rather than the count.
+
+It then runs `/clear`. The SessionStart hook catches the new session up and it resumes from the note.
+Only the pane's own interactive Claude Code session sends that first prompt. A headless `claude -p` /
+`--print`, or any claude without the pane's terminal (for example one a subagent starts from a tool shell),
+inherits the pane's `TMUX_PANE` but does not send. The lifecycle log records it as
+`autosend=SKIPPED reason=not-pane-owner`. When the hook cannot tell (no `ps`, a wtmux pane, or a claude
+under its own pty such as `screen`), it sends as before.
+To stop all autonomous sending and clearing, create the file `~/.claude/.lifecycle/STOP`.
+
+## Running without Kijito
+
+The context check (`myctx.sh`) has no dependencies; install and run it.
+
+For the autonomy harness, set `KIJITO_MODE=off` for a generic catch-up prompt, or set your own with
+`KIJITO_AUTOCATCHUP_PROMPT`. The self-clear gate only requires that some curation step write the pass
+token (`~/.claude/kijito-qa-pass.sh`). Kijito is the default backend, not a requirement.
+
+## Tests
+
+```bash
+bash tests/lc_test.sh
+```
+
+Covers arming, the token gate (both directions — a stale handoff refuses, a fresh one fires), the
+kill switch, auto-send, and a regression guard that the removed count gates stay removed.
+
+By default this exercises the scripts **in this repo** — the ones that actually ship. Set
+`KIJITO_TEST_TARGET=installed` to run it against `~/.claude` instead, and `bash tests/drift_test.sh`
+to report when those two disagree.
+
+The rest of the suite:
+
+```bash
+bash tests/drift_test.sh                     # does this machine RUN what the repo SHIPS?
+bash tests/conformance_test.sh --selftest    # every provider states the shared doctrine
+bash tests/key_locations_coverage_test.sh    # every documented key location is one the key helper scans
+bash tests/redeem_key_test.sh                # redeem-key runs only the monitor, never the installer
+node --test providers/codex/wake-helper/kijito-wake-helper.test.mjs \
+            providers/codex/wake-helper/integration.test.mjs  # codex wake helper
+node providers/codex/tools/refresh-manifest.mjs --check       # codex gated hashes are current
+node providers/codex/install.mjs                              # codex release verify
+```
+
+`drift_test.sh` covers both providers — `providers/claude/` against `~/.claude`, and
+`providers/codex/skills/` against `~/.codex/skills`. A deployed script or skill is a copy, so this is
+the check that tells you an installed copy no longer matches the repo. `conformance_test.sh
+--selftest` first proves none of its own matchers can match an empty document, because a prose check
+that accepts anything reports green forever.
+
+## License
+
+Apache 2.0. Copyright 2026 Arcada Labs. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+# Launch an ARMED Claude Code session: when in tmux it auto-sends the catch-up prompt (instigating
+# its own first turn) and continues preloaded work. Use for orchestrator/unattended panes + the
+# self-clear loop. Plain `claude` is NOT armed → never collides with you typing.
+#
+# Arming is a per-pane MARKER file (robust; doesn't depend on env reaching the hook). The marker is
+# removed when claude exits (trap). KIJITO_AUTOCATCHUP=1 is also exported as a belt-and-suspenders.
+# Resolve the shared lib NEXT TO THIS SCRIPT so the repo copy is runnable/testable in place, and
+# fall back to the installed location for a stray single-file copy. KIJITO_LC_LIB overrides both.
+_kjt_lib="${KIJITO_LC_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lifecycle-lib.sh}"
+[ -f "$_kjt_lib" ] || _kjt_lib="$HOME/.claude/lifecycle-lib.sh"
+. "$_kjt_lib" 2>/dev/null
+# The pane is tmux's or (native Windows) wtmux's — lc_self_pane in lifecycle-lib.sh answers for both.
+_pane=""; command -v lc_self_pane >/dev/null 2>&1 && _pane=$(lc_self_pane 2>/dev/null)
+marker="${KIJITO_LC_DIR:-$HOME/.claude/.lifecycle}/arm.${_pane:-nopane}"
+mkdir -p "$(dirname "$marker")" 2>/dev/null
+# ⛔ NOT `touch`. A zero-byte marker cannot prove it belongs to THIS session, and tmux pane ids
+# restart at %0 and recycle — so a bare touch is how a future session inherits an arming it never
+# performed, on the gate that authorises an irreversible /clear. lc_marker_write stamps the live
+# session fingerprint into the file and lc_marker_armed re-validates it on every read.
+if command -v lc_marker_write >/dev/null 2>&1 && [ -n "$_pane" ]; then
+  lc_marker_write "$_pane" || echo "claude-armed: could not stamp an arm marker for $_pane (not a live tmux/wtmux pane?) — relying on KIJITO_AUTOCATCHUP" >&2
+fi
+# ── THE BACKUP HEARTBEAT STARTS WITH THE SESSION ────────────────────────────────────────────────
+# As a separate, manual step (wiring/README.md) most armed panes would run without one — and the
+# heartbeat is the only thing that recovers a session whose inbox loop a usage-limit outage ended
+# silently. Idempotent: if a watchdog already watches this pane (a systemd/launchd unit, or an earlier
+# launch), it is left alone and NOT stopped on exit — only the one started here is ours to stop.
+# Opt out with KIJITO_HEARTBEAT=0.
+hb_pid=""
+# tmux ONLY, for now: the watchdog finds itself with pgrep, which Git Bash lacks, and it has not been run
+# on wtmux. A wtmux pane runs without the backup heartbeat (self-clear and the post-/clear resume work).
+if [ "${KIJITO_HEARTBEAT:-1}" != "0" ] && [ -n "${TMUX_PANE:-}" ]; then
+  hb_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/heartbeat-watchdog.sh"
+  [ -f "$hb_script" ] || hb_script="$HOME/.claude/heartbeat-watchdog.sh"
+  if [ ! -f "$hb_script" ]; then
+    echo "claude-armed: no heartbeat-watchdog.sh next to this script or in ~/.claude — running without the backup heartbeat" >&2
+  elif command -v lc_heartbeat_running >/dev/null 2>&1 && lc_heartbeat_running "$TMUX_PANE"; then
+    :   # already watched — by a supervisor unit or a previous launch
+  else
+    nohup bash "$hb_script" "$TMUX_PANE" >/dev/null 2>&1 &
+    hb_pid=$!
+  fi
+fi
+trap 'rm -f "$marker"; [ -n "$hb_pid" ] && kill "$hb_pid" 2>/dev/null' EXIT INT TERM
+
+# Hosted Kijito MCP bearer token for .mcp.json's ${KIJITO_API_TOKEN} — read from a file so it is
+# reliable inside the armed loop regardless of which shell profile did (or didn't) load.
+# ⛔ THE FILE WINS OVER AN INHERITED VALUE. Setting the var only when it is empty means a launch from a
+# long-lived tmux server inherits whatever the server's global env held when it started: a key renewed
+# into the file days ago is ignored, the pane carries the OLD key, and every pane launched that way
+# loses its MCP connection the day that key expires, with nothing pointing at the cause. A renewed key
+# lands in the file, so trust the file. KIJITO_API_TOKEN_PREFER_ENV=1 keeps an inherited value set on purpose. Either way, a mismatch
+# is announced by key prefix, never the key itself.
+# Only a kjt_-shaped value gets a printed prefix (kjt_ + 8, the key's public id). Anything else, e.g. a short
+# legacy token, is described by length, so no part of a secret that is not a kjt_ key is ever printed.
+_kjt_shape() { [[ $1 =~ ^kjt_[A-Za-z0-9_-]{9,}$ ]]; }
+_kjt_show() { if _kjt_shape "$1"; then printf '%s…' "${1:0:12}"; else printf 'a non-kjt value, %s chars' "${#1}"; fi; }
+_kjt_file="${KIJITO_API_TOKEN_FILE:-$HOME/.claude/.kijito_api_token}"
+if [ -r "$_kjt_file" ]; then
+  _kjt_ftok="$(tr -d '[:space:]' < "$_kjt_file" 2>/dev/null)"
+  _kjt_etok="$(printf '%s' "${KIJITO_API_TOKEN:-}" | tr -d '[:space:]')"
+  if [ -n "$_kjt_ftok" ] && [ -z "$_kjt_etok" ]; then
+    export KIJITO_API_TOKEN="$_kjt_ftok"
+  elif [ -n "$_kjt_ftok" ] && [ "$_kjt_etok" != "$_kjt_ftok" ]; then
+    if ! _kjt_shape "$_kjt_ftok"; then
+      # A file that does not hold one kjt_ key never displaces a value that is already set.
+      echo "claude-armed: $_kjt_file does not hold a single kjt_ key ($(_kjt_show "$_kjt_ftok")); keeping the inherited KIJITO_API_TOKEN." >&2
+    elif [ "${KIJITO_API_TOKEN_PREFER_ENV:-0}" = "1" ]; then
+      echo "claude-armed: KIJITO_API_TOKEN ($(_kjt_show "$_kjt_etok")) differs from $_kjt_file ($(_kjt_show "$_kjt_ftok")); keeping the inherited value because KIJITO_API_TOKEN_PREFER_ENV=1." >&2
+    else
+      echo "claude-armed: the inherited KIJITO_API_TOKEN ($(_kjt_show "$_kjt_etok")) differs from $_kjt_file ($(_kjt_show "$_kjt_ftok")); using the file, which is where a renewed key lands. Set KIJITO_API_TOKEN_PREFER_ENV=1 to keep the inherited value." >&2
+      export KIJITO_API_TOKEN="$_kjt_ftok"
+    fi
+  fi
+  unset _kjt_ftok _kjt_etok
+fi
+unset _kjt_file; unset -f _kjt_shape _kjt_show
+
+# Remote Control lets you check an unattended session from a phone. RC is a per-PROCESS feature — it
+# survives /clear but NOT a fresh launch, and an agent cannot self-invoke a slash command, so it has to be
+# set here at start.
+# ⛔ OPT-IN. Remote Control is one more thing that can type into this pane (an answer the human never
+# gave could reach it), so it is on only when you ask, and the launch says so when it is:
+#   KIJITO_REMOTE_CONTROL=1   → enable remote control (anything else, or unset: off)
+#   KIJITO_RC_PREFIX=<name>   → session-name prefix; makes the pane easy to spot in the session list.
+# The prefix defaults to this project's persona (the `.kijito_persona` marker, same file the
+# SessionStart hook reads), so an armed pane is named "<persona>-*" without anyone hardcoding a name.
+# No marker → no prefix, rather than someone else's persona.
+rc_args=()
+if [ "${KIJITO_REMOTE_CONTROL:-0}" = "1" ]; then
+  rc_args+=(--remote-control)
+  echo "claude-armed: Remote Control is ON (KIJITO_REMOTE_CONTROL=1): your claude.ai sessions list can read and type into this pane. Unset it to launch without." >&2
+  rc_prefix="${KIJITO_RC_PREFIX:-}"
+  if [ -z "$rc_prefix" ]; then
+    for d in "${CLAUDE_PROJECT_DIR:-}" "$PWD"; do
+      if [ -n "$d" ] && [ -f "$d/.kijito_persona" ]; then
+        rc_prefix=$(head -n1 "$d/.kijito_persona" | tr -d '[:space:]')
+        [ -n "$rc_prefix" ] && break
+      fi
+    done
+  fi
+  [ -n "$rc_prefix" ] && rc_args+=(--remote-control-session-name-prefix "$rc_prefix")
+fi
+# Session provenance. The Claude Code MCP client forwards ONLY the Authorization header from
+# .mcp.json `headers` (as of Claude Code 2.1.265 — every other header, literal or not, is dropped) and expands `${VAR}` in a server URL from the LAUNCHING environment only; it never
+# injects its own session id there. So the id is minted HERE, exported for the URL
+# (`https://api.kijito.ai/mcp/?session=${CLAUDE_CODE_SESSION_ID}`) and passed as --session-id, so the
+# transcript, the hooks and the server all name the same session. Per LAUNCH: /clear rotates the
+# harness's own id (children still see the rotated one — the harness overrides an inherited value),
+# but the MCP URL was resolved at launch, so writes after a /clear carry the launch id. An explicit
+# --session-id from the caller is honoured; an INHERITED value is ignored (a nested launch would
+# otherwise reuse a live id, which `claude` refuses as "already in use").
+kjt_sid=""
+kjt_prev=""
+for kjt_arg in "$@"; do                       # an explicit --session-id X / --session-id=X wins
+  case "$kjt_prev" in --session-id) kjt_sid="$kjt_arg";; esac
+  case "$kjt_arg" in --session-id=*) kjt_sid="${kjt_arg#--session-id=}";; esac
+  kjt_prev="$kjt_arg"
+done
+if [ -z "$kjt_sid" ]; then
+  kjt_sid=$( (uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null \
+             || python3 -c 'import uuid;print(uuid.uuid4())' 2>/dev/null) | tr 'A-Z' 'a-z' | tr -d '[:space:]')
+  if [ -n "$kjt_sid" ]; then
+    set -- --session-id "$kjt_sid" "$@"
+  else
+    echo "claude-armed: no uuid source (uuidgen / /proc / python3) — launching without a minted session id; MCP writes will carry no Session:" >&2
+  fi
+fi
+[ -n "$kjt_sid" ] && export CLAUDE_CODE_SESSION_ID="$kjt_sid"   # the URL's ${CLAUDE_CODE_SESSION_ID}
+KIJITO_AUTOCATCHUP=1 claude "${rc_args[@]+"${rc_args[@]}"}" "$@"

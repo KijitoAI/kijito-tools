@@ -1,0 +1,15 @@
+# runtime state (created by the scripts at ~/.claude/.lifecycle; never committed)
+.lifecycle/
+*.bak
+*.bak.*
+__pycache__/
+*.pyc
+.DS_Store
+
+# build artifacts (npm + python packaging)
+node_modules/
+*.tgz
+dist/
+build/
+*.egg-info/
+.venv/

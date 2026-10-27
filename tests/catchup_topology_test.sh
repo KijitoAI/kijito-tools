@@ -1,0 +1,454 @@
+#!/usr/bin/env bash
+# Does session-catchup-hint.sh point the agent at the producer path THIS host actually uses?
+#
+# WHY THIS EXISTS. A hook that hardcodes the macOS topology gets five things wrong: a pgrep for
+# "kijito_inbox_monitor.py" (the Linux entry point is `kijito-inbox-monitor`, no .py), a `launchctl`
+# restart hint (meaningless under systemd), Monitor templates naming
+# ~/.cache/kijito-inbox-monitor/events.<p>.ndjson (the Linux producer writes ~/.kijito-monitor/<p>.jsonl),
+# and a duplicate-consumer check keyed on the macOS filename.
+#
+# ⚠️ ALL FIVE FAIL TOWARD FALSE CALM, WHICH IS WHY THEY ARE EASY TO MISS. An agent that obeys the hint
+# tails a file that never appears; "no events" then reads exactly like "no mail", with no error,
+# forever. An agent may be told "producer: DOWN" while it is up, or give up and hand-build a REST
+# poller.
+#
+# ⚠️ AND THE SUBTLER ONE THIS ALSO COVERS: a producer check that asks a HOST-GLOBAL question
+# ("is any producer running?") and prints a PER-PERSONA answer ("your producer is UP"). On a
+# multi-persona machine those come apart routinely — a sibling's producer would make the hook report
+# green for a persona whose events file does not exist.
+#
+# HOW IT TESTS THE REAL SCRIPT. Process state is the input we must control and cannot fake with
+# files, so `pgrep` is shimmed on PATH rather than the script being refactored for testability:
+# the shipped script runs BYTE-FOR-BYTE as installed. The shim answers by inspecting the pattern it
+# is handed, so the producer probe and the duplicate-consumer probe stay independently controllable.
+#
+#   bash tests/catchup_topology_test.sh              # run the checks
+#   bash tests/catchup_topology_test.sh --mutation   # ALSO prove the checks can fail
+set -u
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+HOOK_DEFAULT="$REPO/providers/claude/scripts/session-catchup-hint.sh"
+pass=0; fail=0
+red() { printf "  FAIL  %s\n" "$1"; fail=$((fail+1)); }
+grn() { printf "  ok    %s\n" "$1"; pass=$((pass+1)); }
+
+command -v jq >/dev/null 2>&1 || { echo "SKIP: jq not installed — the hook parses its stdin with jq."; exit 0; }
+
+# ⛔ EVERY TEMP DIRECTORY THIS TEST MAKES LIVES UNDER ONE ROOT, AND THE ROOT IS TRAPPED. Cleaning up
+# per-fixture was what leaked: the S-block and the parity loop both bind $proj2, the mutants make
+# their own dirs, and any early `exit` skips whatever rm came after it. Pointing TMPDIR at a single
+# run-scoped root makes cleanup total and exit-path-independent — a test that litters /tmp is a test
+# whose own hygiene nobody is asserting.
+_RUNTMP="$(mktemp -d)"; export TMPDIR="$_RUNTMP"
+trap 'rm -rf "$_RUNTMP"' EXIT INT TERM
+
+SHIMDIR="$(mktemp -d)"
+# ── THE PRODUCER ITSELF, ON PATH ──────────────────────────────────────────────────────────────────
+# Not a stand-in: this execs the producer this repo vendors, which is where the persona->filename rule
+# lives. That is the whole point of the parity checks below — if the oracle were a second copy of the
+# rule written here, the test could only prove the test agrees with itself, which is exactly how
+# hand-written copies of the rule drift apart while each stays confident.
+cat > "$SHIMDIR/kijito-inbox-monitor" <<SHIM
+#!/usr/bin/env bash
+exec python3 "$REPO/providers/monitor/kijito_inbox_monitor.py" "\$@"
+SHIM
+chmod +x "$SHIMDIR/kijito-inbox-monitor"
+
+cat > "$SHIMDIR/pgrep" <<'SHIM'
+#!/usr/bin/env bash
+# Fake pgrep. The hook probes twice with different patterns; answer each from the environment so a
+# test can say "a producer is running but nothing is armed" and other combinations the real host
+# cannot be made to reproduce on demand.
+pat="$*"
+case "$pat" in
+  # 4241 stands in for the harness's `bash -c … eval` WRAPPER, whose argv carries the same pipeline;
+  # only 4242 is the real tail (see the ps shim below).
+  *"tail -n 0 -F"*) [ "${FAKE_ARMED:-0}" = 1 ] && { printf '4241\n4242\n'; exit 0; }; exit 1 ;;
+  *)
+    [ "${FAKE_PRODUCER:-0}" = 1 ] || exit 1
+    # ⛔ THE -af FORM MUST CARRY AN ARGV, NOT JUST A PID. The hook asks a running
+    # producer WHICH persona it covers, and it can only ask by reading the command line. A shim that
+    # answers every probe with a bare pid makes "a producer is running" and "a producer is running
+    # FOR ME" indistinguishable — which is exactly the conflation that would let a stale stream file
+    # report UP. FAKE_PRODUCER_PERSONA says who the running producer actually covers; unset means "nobody in
+    # particular", i.e. a sibling's.
+    case "$pat" in
+      *-af*|*-a\ *)
+        _who=${FAKE_PRODUCER_PERSONA:-someone-else}
+        echo "1111 /usr/bin/python3 /home/u/.local/bin/kijito-inbox-monitor --persona $_who --state-file $HOME/.kijito-monitor/$_who.state --events-file $HOME/.kijito-monitor/$_who.jsonl --heartbeat 900"
+        exit 0 ;;
+      *) echo 1111; exit 0 ;;
+    esac ;;
+esac
+SHIM
+chmod 0755 "$SHIMDIR/pgrep"
+
+cat > "$SHIMDIR/systemctl" <<'SHIM'
+#!/usr/bin/env bash
+# Fake systemctl: a kijito-inbox-monitor USER unit is installed only when FAKE_SYSTEMD_UNIT=1. Without it
+# this answers like a box with no user units (the hook must not say "systemd" there).
+case "$*" in
+  *list-unit-files*kijito-inbox-monitor*) [ "${FAKE_SYSTEMD_UNIT:-0}" = 1 ] && echo "kijito-inbox-monitor@.service indirect enabled"; exit 0 ;;
+esac
+exit 1
+SHIM
+chmod 0755 "$SHIMDIR/systemctl"
+# Fake launchctl: the kijito job is loaded only when FAKE_LAUNCHD=1. Without this a test run ON A MAC sees
+# the machine's real launchd job and reports "launchd" where the fixture means "no supervisor".
+printf '#!/usr/bin/env bash\n[ "${FAKE_LAUNCHD:-0}" = 1 ] && exit 0; exit 1\n' > "$SHIMDIR/launchctl"
+chmod 0755 "$SHIMDIR/launchctl"
+
+cat > "$SHIMDIR/ps" <<'SHIM'
+#!/usr/bin/env bash
+# Fake ps for the consumer probe: `ps -o comm= -p N` and `ps -o etime= -p N`. 4241 is the wrapper
+# shell, 4242 the tail; FAKE_ARMED_AGE is the tail's etime (default 05:00 = a live Monitor's age).
+# Anything else goes to the real ps.
+if [ "${1:-}" = -o ] && [ "${3:-}" = -p ]; then
+  case "$2:$4" in
+    comm=:4241) echo bash ;; comm=:4242) echo tail ;;
+    # 1111 is the fake PRODUCER the pgrep shim names: its argv carries the persona it covers.
+    command=:1111) [ "${FAKE_PRODUCER:-0}" = 1 ] || exit 1
+                   echo "/usr/bin/python3 /home/u/.local/bin/kijito-inbox-monitor --persona ${FAKE_PRODUCER_PERSONA:-someone-else} --heartbeat 900" ;;
+    etime=:4241|etime=:4242) echo "${FAKE_ARMED_AGE:-05:00}" ;;
+    *) exit 1 ;;
+  esac
+  exit 0
+fi
+exec /bin/ps "$@"
+SHIM
+chmod 0755 "$SHIMDIR/ps"
+# A PATH with NO systemctl at all: this suite's shims minus systemctl, then a mirror of the real
+# PATH minus systemctl, so a machine that HAS systemd cannot leak its own binary into the case.
+NOSYSD="$(mktemp -d)"
+( for f in "$SHIMDIR"/*; do [ "${f##*/}" = systemctl ] || ln -s "$f" "$NOSYSD/${f##*/}"; done
+  IFS=:; for d in $PATH; do [ -d "$d" ] || continue; for f in "$d"/*; do n=${f##*/}
+    [ "$n" = systemctl ] && continue; [ -x "$f" ] && [ ! -e "$NOSYSD/$n" ] && ln -s "$f" "$NOSYSD/$n"; done; done )
+trap 'rm -rf "$SHIMDIR" "$NOSYSD"' EXIT
+
+# Run the hook with a synthetic HOME + project. Echoes its combined output.
+# $1=hook  $2=HOME  $3=project dir  (FAKE_PRODUCER / FAKE_ARMED come from the caller's env)
+run_hook() {
+  printf '{"source":"%s","cwd":"%s"}' "${HOOK_SRC:-startup}" "$3" \
+    | env -u TMUX -u TMUX_PANE -u KIJITO_AUTOCATCHUP PATH="${HOOK_PATH:-$SHIMDIR:$PATH}" HOME="$2" CLAUDE_PROJECT_DIR="$3" bash "$1" 2>/dev/null
+}
+
+# Build a synthetic machine. $1=layout (linux|mac|none), $2=persona, $3=create events file? (yes|no)
+# Echoes the HOME path.
+make_home() {
+  local layout="$1" persona="$2" mkev="$3" h
+  h="$(mktemp -d)"
+  case "$layout" in
+    linux) mkdir -p "$h/.kijito-monitor"
+           [ "$mkev" = yes ] && : > "$h/.kijito-monitor/$persona.jsonl" ;;
+    mac)   mkdir -p "$h/.cache/kijito-inbox-monitor"
+           [ "$mkev" = yes ] && : > "$h/.cache/kijito-inbox-monitor/events.$persona.ndjson" ;;
+  esac
+  echo "$h"
+}
+make_proj() { local p; p="$(mktemp -d)"; echo "$1" > "$p/.kijito_persona"; echo "$p"; }
+
+# All assertions for one hook build. Return 0 if every one held.
+check_hook() {
+  local hook="$1" label="$2" bad=0 out h proj
+  proj="$(make_proj dave)"
+
+  # ---- A: Linux machine, this persona's producer running and its events file present ----
+  h="$(make_home linux dave yes)"
+  out="$(FAKE_PRODUCER=1 FAKE_ARMED=0 run_hook "$hook" "$h" "$proj")"
+  if grep -q "$h/.kijito-monitor/dave.jsonl" <<<"$out"; then
+    grn "$label: linux machine → Monitor template names the .kijito-monitor/<p>.jsonl path"
+  else red "$label: linux machine → template does not name the Linux events path"; bad=1; fi
+  if grep -q "producer: UP for 'dave'" <<<"$out"; then
+    grn "$label: linux machine → producer reported UP for the persona"
+  else red "$label: linux machine → producer not reported UP"; bad=1; fi
+  # A Mac path leaking into a Linux machine's instructions is the original defect verbatim.
+  if grep -q ".cache/kijito-inbox-monitor" <<<"$out"; then
+    red "$label: linux machine → macOS events path still present in the agent-facing output"; bad=1
+  else grn "$label: linux machine → no macOS path in the agent-facing output"; fi
+  if grep -q "launchctl" <<<"$out"; then
+    red "$label: linux machine → launchctl hint offered on a systemd host"; bad=1
+  else grn "$label: linux machine → no launchctl hint"; fi
+  rm -rf "$h"
+
+  # ---- B: a producer runs, but NOT for this persona (no events file) ----
+  # The multi-persona case. A host-global check calls this UP and sends the agent to tail a file
+  # that will never exist — the exact false-calm failure, and the one hardest to notice.
+  h="$(make_home linux dave no)"
+  out="$(FAKE_PRODUCER=1 FAKE_ARMED=0 run_hook "$hook" "$h" "$proj")"
+  if grep -q "NOT for 'dave'" <<<"$out"; then
+    grn "$label: sibling-only producer → reported as NOT covering this persona"
+  else red "$label: sibling-only producer → wrongly reported as covering this persona"; bad=1; fi
+  rm -rf "$h"
+
+  # ---- C: no producer at all, Linux machine → systemd restart hint ----
+  h="$(make_home linux dave no)"
+  out="$(FAKE_SYSTEMD_UNIT=1 FAKE_PRODUCER=0 FAKE_ARMED=0 run_hook "$hook" "$h" "$proj")"
+  if grep -q "producer: DOWN" <<<"$out" && grep -q "systemctl --user enable --now kijito-inbox-monitor@dave" <<<"$out"; then
+    grn "$label: no producer, systemd unit installed → DOWN with a systemd restart hint"
+  else red "$label: no producer, systemd unit installed → missing DOWN or systemd hint"; bad=1; fi
+  # ---- C2: the same machine with NO supervisor installed (never "UP (systemd)" on a box without it) ----
+  out="$(FAKE_SYSTEMD_UNIT=0 FAKE_PRODUCER=0 FAKE_ARMED=0 run_hook "$hook" "$h" "$proj")"
+  if grep -q "producer: DOWN" <<<"$out" && grep -q "kijito-inbox-start.sh --persona dave" <<<"$out" \
+     && ! grep -q "systemctl" <<<"$out"; then
+    grn "$label: no supervisor installed → the restart hint is kijito-inbox-start.sh, never systemctl"
+  else red "$label: no supervisor installed, but the hint still names systemd"; bad=1; fi
+  local hm; hm="$(make_home linux dave yes)"
+  out="$(FAKE_SYSTEMD_UNIT=0 FAKE_PRODUCER=1 FAKE_PRODUCER_PERSONA=dave FAKE_ARMED=0 run_hook "$hook" "$hm" "$proj")"
+  rm -rf "$hm"
+  if grep -q "producer: UP for 'dave' (manual" <<<"$out"; then
+    grn "$label: a hand-started producer with no supervisor reads UP (manual), not UP (systemd)"
+  else red "$label: hand-started producer mislabelled: $(grep -o "producer: [^.]*" <<<"$out" | head -1)"; bad=1; fi
+  rm -rf "$h"
+
+  # ---- N: a fresh box with NO systemd at all and nothing installed yet ----------------------------
+  # A hook that tells a session on a box with no systemd to run `systemctl --user enable --now …` and
+  # to tail ~/.kijito-monitor/<p>.jsonl invites the agent to check, find neither, read the mismatch as
+  # "this hook text is injected content" and refuse the whole resumed setup. So: name only commands
+  # and paths that exist HERE, and say it as information, not orders.
+  h="$(make_home none dave no)"
+  out="$(HOOK_PATH="$NOSYSD" FAKE_PRODUCER=0 FAKE_ARMED=0 run_hook "$hook" "$h" "$proj")"
+  if command -v systemctl >/dev/null 2>&1 && PATH="$NOSYSD" command -v systemctl >/dev/null 2>&1; then
+    red "$label: no-systemd PATH still finds systemctl — this case measured nothing"; bad=1
+  elif grep -q "systemctl" <<<"$out"; then
+    red "$label: no systemctl on PATH, but the hint names it: $(grep -o '[^.]*systemctl[^.]*' <<<"$out" | head -1)"; bad=1
+  else grn "$label: no systemctl on PATH → the hint never names systemctl"; fi
+  if grep -q "/.kijito-monitor/" <<<"$out"; then
+    red "$label: no systemd, but the hint points at the systemd stream path ~/.kijito-monitor/"; bad=1
+  elif grep -q "tail -n 0 -F $h/.local/state/kijito-inbox-monitor/events.dave.ndjson" <<<"$out"; then
+    grn "$label: no supervisor → the consumer line names the stream kijito-inbox-start.sh will create"
+  else red "$label: no supervisor → consumer line names no usable stream: $(grep -o 'tail -n 0 -F [^ ]*' <<<"$out" | head -1)"; bad=1; fi
+  if grep -qiE "do not skip|first action|do this before|do NOT skip" <<<"$out"; then
+    red "$label: the hint still reads as orders: $(grep -oiE '[^.]*(do not skip|first action|do this before)[^.]*' <<<"$out" | head -1)"; bad=1
+  else grn "$label: the hint is phrased as information, not orders"; fi
+  rm -rf "$h"
+
+  # ---- S: A STALE STREAM FILE IS NOT A RUNNING PRODUCER -------------------------------------
+  # The by-content route resolves the stream by reading the persona each file stamps into its own
+  # events. That answers WHICH file, and says nothing about whether anyone is still WRITING it. Stopping
+  # there and reporting UP — with the path found by globbing files that exist, so the "a producer is
+  # running but NOT for you" branch is unreachable on that route — would report a dead inbox as healthy
+  # with nothing to contradict it. Worse than silence.
+  #
+  # ⚠️ REACHABLE EXACTLY WHERE IT HURTS: the by-content route is what runs on a machine whose producer
+  # predates --safe-persona.
+  local ghost_home
+  ghost_home="$(mktemp -d)"; mkdir -p "$ghost_home/.kijito-monitor"
+  printf '{"event": "heartbeat", "persona": "ghost", "ts": "2026-08-01T00:00:00+00:00"}\n' \
+    > "$ghost_home/.kijito-monitor/ghost.jsonl"
+  proj2="$(make_proj ghost)"
+  # KIJITOMON_BIN points at something that cannot answer --safe-persona, forcing the by-content route.
+  out="$(printf '{"source":"startup","cwd":"%s"}' "$proj2" \
+        | env -u TMUX -u TMUX_PANE -u KIJITO_AUTOCATCHUP PATH="$SHIMDIR:$PATH" HOME="$ghost_home" CLAUDE_PROJECT_DIR="$proj2" \
+          KIJITOMON_BIN="$(type -P false)" FAKE_PRODUCER=1 FAKE_ARMED=0 \
+          bash "$hook" 2>/dev/null)"
+  if grep -q "UP for 'ghost'" <<<"$out"; then
+    red "$label: stale stream → reported UP with no producer writing it (stale-stream regression)"; bad=1
+  else grn "$label: stale stream → not reported UP"; fi
+  if grep -qE "STALE|NOT running for 'ghost'" <<<"$out"; then
+    grn "$label: stale stream → named as stale, not as a generic absence"
+  else red "$label: stale stream → the verdict does not say the file is stale"; bad=1; fi
+
+  # ...and the CONTROL, without which the check above is satisfied by a script that never says UP:
+  # same fixture, but the running producer's argv names THIS persona.
+  out="$(printf '{"source":"startup","cwd":"%s"}' "$proj2" \
+        | env -u TMUX -u TMUX_PANE -u KIJITO_AUTOCATCHUP PATH="$SHIMDIR:$PATH" HOME="$ghost_home" CLAUDE_PROJECT_DIR="$proj2" \
+          KIJITOMON_BIN="$(type -P false)" FAKE_PRODUCER=1 FAKE_PRODUCER_PERSONA=ghost FAKE_ARMED=0 \
+          bash "$hook" 2>/dev/null)"
+  if grep -q "UP for 'ghost'" <<<"$out"; then
+    grn "$label: live producer for this persona → by-content route still reports UP"
+  else red "$label: live producer for this persona → by-content route no longer reports UP"; bad=1; fi
+  # A producer for a persona whose name merely STARTS with ours is not ours: "--persona ghostly" must not
+  # satisfy "--persona ghost" (an inline grep -F matches it as a substring).
+  out="$(printf '{"source":"startup","cwd":"%s"}' "$proj2" \
+        | env -u TMUX -u TMUX_PANE -u KIJITO_AUTOCATCHUP PATH="$SHIMDIR:$PATH" HOME="$ghost_home" CLAUDE_PROJECT_DIR="$proj2" \
+          KIJITOMON_BIN="$(type -P false)" FAKE_PRODUCER=1 FAKE_PRODUCER_PERSONA=ghostly FAKE_ARMED=0 \
+          bash "$hook" 2>/dev/null)"
+  if ! grep -q "UP for 'ghost'" <<<"$out" && grep -qE "STALE|NOT running for 'ghost'" <<<"$out"; then
+    grn "$label: a producer for 'ghostly' does not count as covering 'ghost' (whole-argument match)"
+  else red "$label: a producer for 'ghostly' was taken as covering 'ghost'"; bad=1; fi
+  rm -rf "$ghost_home" "$proj2"
+
+  # ---- P: PERSONA-NAME PARITY ---------------------------------------------------------------
+  # The defect this guards: a hook that derives the events filename with its own
+  # `sed 's/[^A-Za-z0-9._-]/_/g'` while the producer's rule CASEFOLDS and accepts any Unicode
+  # alphanumeric. A persona named `Judy` would be sent to tail Judy.jsonl while its mail went to
+  # judy.jsonl — "not being collected", forever, with no error.
+  # ⚠️ WHY THE ASSERTION IS SHAPED AS "== WHAT THE PRODUCER SAYS" AND NOT "== <expected string>":
+  # a literal expectation here would be one more copy of the rule, and would pass happily on the day
+  # the producer's rule changes. The producer is asked, every time, for every name.
+  # ⚠️ AND WHY THE EVENTS FILE IS CREATED FROM THE PRODUCER'S ANSWER: on macOS the filesystem is
+  # case-INSENSITIVE, so a test that merely asked "did the hook find a file?" would pass on a Mac
+  # even with the bug present. These check the STRING the agent is told to tail.
+  local name safe evf
+  for name in "dave" "Judy" "UPPER" "Claude-Chat" "name (purpose)" "spaced name" "a/b" "café" "Ωmega"; do
+    safe="$(PATH="$SHIMDIR:$PATH" kijito-inbox-monitor --safe-persona "$name" 2>/dev/null)"
+    if [ -z "$safe" ]; then
+      red "$label: parity → the producer would not answer --safe-persona for '$name'"; bad=1; continue
+    fi
+    h="$(mktemp -d)"; mkdir -p "$h/.kijito-monitor"
+    evf="$h/.kijito-monitor/$safe.jsonl"
+    : > "$evf"
+    proj2="$(make_proj "$name")"
+    out="$(FAKE_PRODUCER=1 FAKE_ARMED=0 run_hook "$hook" "$h" "$proj2")"
+    if grep -qF "$evf" <<<"$out"; then
+      grn "$label: parity → '$name' → the hook names the producer's own path ($safe)"
+    else
+      red "$label: parity → '$name' → hook does NOT name $evf (the producer's path)"; bad=1
+    fi
+    rm -rf "$h" "$proj2"
+  done
+  # ⚠️ The S-block above and the parity loop both bind $proj2; without this the S-block's directory
+  # is orphaned when the loop rebinds it. A test that litters /tmp is a test whose own hygiene nobody
+  # is asserting.
+  unset proj2
+
+  # ---- D: macOS machine still works — this is a portability fix, not a platform swap ----
+  # ⚠️ Without this direction, deleting the macOS branch entirely would pass every other check while
+  # breaking every existing user. The fix must be additive.
+  h="$(make_home mac dave yes)"
+  out="$(FAKE_PRODUCER=1 FAKE_ARMED=0 run_hook "$hook" "$h" "$proj")"
+  if grep -q "$h/.cache/kijito-inbox-monitor/events.dave.ndjson" <<<"$out"; then
+    grn "$label: mac machine → Monitor template still names the events.<p>.ndjson path"
+  else red "$label: mac machine → macOS layout regressed"; bad=1; fi
+  if grep -q "launchctl kickstart" <<<"$out" || grep -q "producer: UP" <<<"$out"; then
+    grn "$label: mac machine → launchd vocabulary retained"
+  else red "$label: mac machine → launchd hint lost"; bad=1; fi
+  rm -rf "$h"
+
+  # ---- E: duplicate-consumer detection fires on a Linux machine ----
+  # A pattern keyed on the macOS filename makes this branch DEAD on Linux, so a returning session is
+  # always told to arm again — re-creating the duplicate-monitor bug the branch exists to prevent, on
+  # exactly the hosts where nobody is watching for it.
+  h="$(make_home linux dave yes)"
+  out="$(FAKE_PRODUCER=1 FAKE_ARMED=1 run_hook "$hook" "$h" "$proj")"
+  if grep -q "your inbox is ALREADY WATCHED" <<<"$out"; then
+    grn "$label: linux machine → existing consumer detected (no duplicate-arm advice)"
+  else red "$label: linux machine → duplicate-consumer detection did not fire"; bad=1; fi
+  # A live consumer in ANY session means the inbox is watched. Handing a session with no Monitor of its own
+  # a Monitor line and "arm exactly one for yourself" leads an agent to do exactly that next to another
+  # session's live tail, then ask the human to approve it.
+  if ! grep -q "Monitor(command=" <<<"$out" && ! grep -qi "arm exactly one for yourself\|arm one for yourself" <<<"$out" \
+     && grep -q "Do NOT ask the human to approve" <<<"$out" \
+     && grep -q 'kijito_hive_inbox(persona="dave", unread_only=true, mark_read=false)' <<<"$out"; then
+    grn "$label: live consumer in another session → watched: no Monitor line, no approval ask, peek named"
+  else red "$label: live consumer still invites a second Monitor or an approval ask: $(grep -iE 'Monitor\(|for yourself|approve' <<<"$out" | head -2)"; bad=1; fi
+  # The harness's wrapper shell carries the same argv; counting it made one Monitor read as several.
+  if grep -q "4242 (up 5 min)" <<<"$out" && ! grep -q "4241" <<<"$out"; then
+    grn "$label: consumer list names only the real tail, with its age (wrapper shell excluded)"
+  else red "$label: consumer list counted the wrapper shell or lost the age"; bad=1; fi
+  if ! grep -q "LEAKED ORPHANS" <<<"$out"; then
+    grn "$label: a 5-min-old tail is not called an orphan"
+  else red "$label: a live-aged tail was called an orphan"; bad=1; fi
+
+  # ---- F: only tails older than the 30-min Monitor cap → say they may be leaked orphans ----
+  out="$(FAKE_PRODUCER=1 FAKE_ARMED=1 FAKE_ARMED_AGE=1-02:03:04 run_hook "$hook" "$h" "$proj")"
+  # ⛔ NOT AN ORPHAN ON LINUX/macOS: only Windows leaks a tail when its
+  # Monitor expires, so here a >30-min tail is a persistent Monitor - possibly a sibling's LIVE consumer -
+  # and the hook must never advise killing it. (The Windows wording is pinned in windows_detect_test.sh.)
+  if grep -q "4242 (up 1563 min)" <<<"$out" && grep -q 'belongs to a "persistent" Monitor' <<<"$out" \
+     && ! grep -q "LEAKED ORPHANS" <<<"$out" && ! grep -q "kill <pid>" <<<"$out"; then
+    grn "$label: tails older than 30 min on POSIX → named as persistent Monitors (with the age), never 'kill by pid'"
+  else red "$label: a >30-min POSIX tail is called an orphan or a kill is advised: $(grep -iE 'orphan|kill|persistent' <<<"$out" | head -2)"; bad=1; fi
+  if ! grep -q "YOUR OWN pre-reset Monitor" <<<"$out"; then
+    grn "$label: on a fresh startup the old tails are not suggested to be your own"
+  else red "$label: a fresh startup was told an old tail may be its own pre-reset Monitor"; bad=1; fi
+  # After /clear the agent cannot see its own arming result: an old tail may be its persistent Monitor.
+  out="$(HOOK_SRC=clear FAKE_PRODUCER=1 FAKE_ARMED=1 FAKE_ARMED_AGE=1-02:03:04 run_hook "$hook" "$h" "$proj")"
+  if grep -q "YOUR OWN pre-reset Monitor" <<<"$out" && grep -q 'belongs to a "persistent" Monitor' <<<"$out"; then
+    grn "$label: after /clear, a >30-min tail is flagged AND named as possibly your own pre-clear Monitor"
+  else red "$label: after /clear the old-tail warning lacks the may-be-your-own caveat"; bad=1; fi
+  rm -rf "$h" "$proj"
+
+  return $bad
+}
+
+echo "catch-up hook topology checks:"
+check_hook "$HOOK_DEFAULT" "hook"
+
+# --- mutation: prove the checks can fail --------------------------------------------------------
+# Restore the ORIGINAL hardcoded macOS topology in a copy and require the checks to fail. This
+# mutates toward a real defect shape rather than toward an invented one, so a green mutation line
+# means "these checks catch the hardcoded topology", not merely "these checks can fail somehow".
+if [ "${1:-}" = "--mutation" ]; then
+  echo
+  echo "mutation (hook with the hardcoded macOS topology MUST fail the checks above):"
+  mut="$(mktemp -d)/session-catchup-hint.sh"
+  mkdir -p "$(dirname "$mut")"
+  sed -e 's|_events="\$_lnx_events"; _sup="systemd"|_events="$_mac_events"; _sup="launchd"|g' \
+      "$HOOK_DEFAULT" > "$mut"
+  if ! grep -q '_events="\$_mac_events"; _sup="launchd"' "$mut"; then
+    red "mutation did not apply — the sed no longer matches, so this direction proves nothing"
+  else
+    # The mutant's deliberate failures must not reach the suite tally; take the verdict from the
+    # return code and restore the counters (otherwise a fully-green run would report failures).
+    _p=$pass; _f=$fail
+    check_hook "$mut" "MUTANT" >/dev/null 2>&1; mrc=$?
+    pass=$_p; fail=$_f
+    if [ "$mrc" -eq 0 ]; then
+      red "mutation SURVIVED — the checks pass with the macOS topology forced, so they test nothing"
+    else
+      grn "mutation killed — the checks fail when the topology is hardcoded to macOS"
+    fi
+  fi
+  rm -rf "$(dirname "$mut")"
+
+  # ── The two persona-name defects, each restored on its own ─────────────────────────────────────
+  # Restoring them SEPARATELY matters: they produced the same user-visible symptom ("your mail is not
+  # being collected") from different causes, and a single combined mutant could be killed by either
+  # check while the other silently tested nothing.
+  #
+  # ⛔ THE MUTATOR VERIFIES ITS OWN MUTANT BEFORE BELIEVING THE KILL. A `sed` expression that ERRORS on
+  # its own quoting writes nothing; the empty file differs from the original, every check fails, and
+  # every mutation reports "killed". A mutation harness whose mutant-builder can fail reports a FALSE GREEN in the one
+  # direction that matters — it says the checks work when they were never exercised. So a mutant is
+  # only accepted if it (a) changed exactly the intended text, (b) still PARSES as a shell script,
+  # and (c) actually contains the restored defect.
+  mutate_and_expect_red() {   # $1=label  $2=anchor  $3=replacement
+    local label="$1" anchor="$2" repl="$3"
+    local m; m="$(mktemp -d)/session-catchup-hint.sh"
+    mkdir -p "$(dirname "$m")"
+    if ! MUT_SRC="$HOOK_DEFAULT" MUT_DST="$m" MUT_A="$anchor" MUT_B="$repl" python3 - <<'PYMUT'
+import os, sys
+src = open(os.environ["MUT_SRC"], encoding="utf-8").read()
+a, b = os.environ["MUT_A"], os.environ["MUT_B"]
+if src.count(a) != 1:
+    sys.stderr.write("anchor matched %d times\n" % src.count(a)); sys.exit(1)
+open(os.environ["MUT_DST"], "w", encoding="utf-8").write(src.replace(a, b, 1))
+PYMUT
+    then
+      red "mutation '$label': the mutant could not be BUILT (anchor missing?) — proves nothing"
+      rm -rf "$(dirname "$m")"; return
+    fi
+    if ! bash -n "$m" 2>/dev/null; then
+      red "mutation '$label': the mutant does not PARSE — a broken file fails every check for the wrong reason"
+      rm -rf "$(dirname "$m")"; return
+    fi
+    if ! grep -qF "$repl" "$m"; then
+      red "mutation '$label': the restored defect is not present in the mutant"
+      rm -rf "$(dirname "$m")"; return
+    fi
+    local _p=$pass _f=$fail mrc
+    check_hook "$m" "MUTANT" >/dev/null 2>&1; mrc=$?
+    pass=$_p; fail=$_f
+    if [ "$mrc" -eq 0 ]; then
+      red "mutation SURVIVED — '$label' passes every check, so the parity checks test nothing"
+    else
+      grn "mutation killed — '$label'"
+    fi
+    rm -rf "$(dirname "$m")"
+  }
+
+  # (1) a marker read that deletes EVERY space, so `name (purpose)` becomes `name(purpose)` before
+  #     any sanitizer runs.
+  mutate_and_expect_red "marker read strips interior spaces" \
+    "tr -d '\\r\\n')" \
+    "tr -d '[:space:]')"
+
+  # (2) a hand-written sanitizer that neither casefolds nor understands Unicode.
+  mutate_and_expect_red "hook re-implements the filename rule (the old sed)" \
+    'if [ -n "$_km_bin" ] && _safe=$("$_km_bin" --safe-persona "$_persona" 2>/dev/null) && [ -n "$_safe" ]; then' \
+    'if _safe=$(printf "%s" "$_persona" | sed "s/[^A-Za-z0-9._-]/_/g") && [ -n "$_safe" ]; then'
+fi
+
+echo
+echo "passed: $pass   failed: $fail"
+[ "$fail" -eq 0 ] || exit 1

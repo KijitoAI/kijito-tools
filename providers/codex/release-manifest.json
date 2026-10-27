@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "product": "codex-kijito-hive",
+  "version": "1.0.0",
+  "origin": {
+    "package": "kijito-tools",
+    "packageVersion": "0.2.21",
+    "repository": "https://github.com/KijitoAI/kijito-tools"
+  },
+  "live": {
+    "surface": "skills (deployed to ~/.codex/skills via install.mjs --skills-only) + native session wake helper (run from the checkout by kijito-start's arm step; never installed)",
+    "verify": "node providers/codex/install.mjs   (default action; also runs before any skills deploy)"
+  },
+  "artifacts": {
+    "wakeCoreSha256": "7a29b9b50d9940705a4261f56a3c9147ed27058455a48cc705017803252508da",
+    "workflowSha256": "528c7b1e364ea11963fd792f374329b9e783edd554e2ff859a80ae14fb467f0c",
+    "wakeHelperSha256": "73e9ad165e44a732ec380be9c391246a5da8026982e0c2b14083fa09c2dc24a1",
+    "wsUdsSha256": "4da13eef89b572fb735e756cb06846a021919dec7f91c6d07989377944cc776c",
+    "wakeHelperTestsSha256": "c04fd373dd12ba7f2edceacf06720c421016ba4bfb211b6700bcb3987ea03d65",
+    "wakeHelperIntegrationTestsSha256": "c49f2ebd3621bdeb65650de1edabbb93d1927b38d0b053affbc640c7b524342f",
+    "wakeHelperMockDaemonSha256": "a8c66409a34eb47844d34e48289de26d79d45f3bdac5c6446700c881cc80a623"
+  },
+  "forbiddenMechanisms": [
+    "lifecycle hooks",
+    "LaunchAgent",
+    "KeepAlive",
+    "current user thread mutation",
+    "message body injection"
+  ]
+}

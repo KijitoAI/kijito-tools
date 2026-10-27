@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+# Does kijito-inbox-start.sh take a new user from "installed" to "proven", and refuse honestly when it can't?
+#
+# WHY THIS EXISTS. Installing the monitor does not start it: without a last step nothing starts it, the
+# self-test says "COULD NOT MEASURE: no persona", and no message is sent. The helper is that last step.
+# What must hold:
+#   - no persona / no monitor / no token -> exit 2 with the exact fix, and never a secret on screen;
+#   - otherwise it STARTS a producer for the persona and waits for its `armed` row;
+#   - a second run does not start a second producer;
+#   - it never exits 0 before the wake is proven (3 = stream proven, consumer left; 1 = a hop failed).
+# The monitor and the self-test are shimmed (no network); the helper runs byte-for-byte.
+#
+#   bash tests/inbox_start_test.sh
+set -u
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+START="$REPO/providers/claude/scripts/kijito-inbox-start.sh"
+pass=0; fail=0
+red() { printf "  FAIL  %s\n" "$1"; fail=$((fail+1)); }
+grn() { printf "  ok    %s\n" "$1"; pass=$((pass+1)); }
+
+T="$(mktemp -d)"
+cleanup() { pkill -f "$T/bin/kijito-inbox-monitor" 2>/dev/null; rm -rf "$T"; }
+trap cleanup EXIT INT TERM
+BIN="$T/bin"; mkdir -p "$BIN" "$T/proj"
+# Fake monitor: --safe-persona names the file; a run appends an `armed` row to --events-file and stays up.
+cat > "$BIN/kijito-inbox-monitor" <<'SHIM'
+#!/usr/bin/env bash
+[ "${1:-}" = --safe-persona ] && { printf '%s' "$2"; exit 0; }
+[ -n "${KM_ARGS_LOG:-}" ] && echo "$*" >> "$KM_ARGS_LOG"      # what the producer was started with
+ev=""; p=""
+while [ $# -gt 0 ]; do case "$1" in --events-file) ev=$2; shift 2 ;; --persona) p=$2; shift 2 ;; *) shift ;; esac; done
+echo "fake monitor starting for $p" >&2
+printf '{"event": "armed", "persona": "%s", "cursor": 1}\n' "$p" >> "$ev"
+sleep 300 & wait
+SHIM
+# Fake self-test: FAKE_ST picks the verdict the real one would print.
+cat > "$BIN/selftest" <<'SHIM'
+#!/usr/bin/env bash
+echo "kijito inbox self-test [persona=$2] base=${KIJITO_BASE:-unset}"
+case "${FAKE_ST:-consumer}" in
+  all)      echo "  ok    stream: the message reached x after ~1s"; echo "  ok    consumer: armed"; exit 0 ;;
+  consumer) echo "  ok    stream: the message reached x after ~1s"; echo "  FAIL  consumer: nothing reads x"; exit 1 ;;
+  stream)   echo "  FAIL  stream: nothing new arrived in x within 20s"; exit 1 ;;
+  cantsend) echo "  ????  stream: COULD NOT MEASURE - the key refused to SEND the test message (HTTP 403)"; exit 2 ;;
+esac
+SHIM
+chmod +x "$BIN/kijito-inbox-monitor" "$BIN/selftest"
+H="$T/home"; mkdir -p "$H"
+run() {  # env overrides as args, then runs the helper from the project dir; prints output + "rc=N"
+  ( cd "$T/proj" && env -u KIJITOMON_TOKEN_FILE -u CLAUDE_PROJECT_DIR -u KIJITO_BASE HOME="$H" PATH="$BIN:/usr/bin:/bin" \
+      KIJITO_SELFTEST="$BIN/selftest" KM_ARGS_LOG="$T/km_args" "$@" bash "$START" ${ARGS:-} 2>&1; echo "rc=$?" )
+}
+
+# How many fake producers run for "tester". Not `pgrep -c`: macOS pgrep has no -c (it prints usage and
+# exits 2), so the count would read 0 there and this test would fail on every Mac.
+_nprod() { pgrep -f "$BIN/kijito-inbox-monitor .*--persona tester" 2>/dev/null | wc -l | tr -d ' '; }
+
+echo "kijito-inbox-start checks:"
+out=$(run); rc=${out##*rc=}
+[ "$rc" = 2 ] && grep -q 'COULD NOT RUN: no persona' <<<"$out" && grep -q 'kijito-inbox-start.sh --persona <name>' <<<"$out" \
+  && grn "no persona: exit 2 with the exact command" || red "no persona: rc=$rc $out"
+
+out=$(ARGS="--persona tester" run PATH="/usr/bin:/bin"); rc=${out##*rc=}
+[ "$rc" = 2 ] && grep -q 'uv tool install kijito-inbox-monitor' <<<"$out" \
+  && grn "no monitor installed: exit 2 with the install line" || red "no monitor: rc=$rc $out"
+
+out=$(ARGS="--persona tester" run); rc=${out##*rc=}
+# The inbox step promises a READ-ONLY key, and an agent mints the first scopes it is shown. So the mint is
+# memory.read alone. (The self-test then asks the agent to send the test message: a read-only key cannot.)
+# chmod 600 stays in the text: an older or self-hosted server still shows the key itself.
+first_scopes=$(grep -o 'scopes=\[[^]]*\]' <<<"$out" | head -1)
+[ "$rc" = 2 ] && grep -q 'kijito_api_key(action="create"' <<<"$out" && grep -q 'chmod 600' <<<"$out" \
+  && [ "$first_scopes" = 'scopes=["memory.read"]' ] \
+  && grn "no token: exit 2, and the mint suggested is read-only" || red "no token: rc=$rc first=$first_scopes $out"
+# No write-scope branch. Under key pickup a memory.read+memory.write key is a REST key and lands in
+# ~/.config/kijito/api_token, which this script never reads, so offering it only produced a key nothing used.
+# Every scope list in the text is memory.read alone, and there is no "explicit yes" alternative left to offer.
+other_scopes=$(grep -o 'scopes=\[[^]]*\]' <<<"$out" | grep -vx 'scopes=\["memory.read"\]')
+if grep -q 'memory.write' <<<"$out" || [ -n "$other_scopes" ]; then
+  red "no token: a write scope is still offered: ${other_scopes:-memory.write named} $out"
+elif grep -qi 'explicitly say yes\|without that yes' <<<"$out"; then
+  red "no token: the explicit-yes write branch is still there: $out"
+else grn "no token: no memory.write and no explicit-yes branch (memory.read only)"; fi
+# Both reply shapes. A pickup reply carries one redeem command that saves the key to the watcher file itself;
+# an older or self-hosted server shows the key, and its save steps end in the same file. Both must reach the file
+# this script reads (the watcher file), never ~/.config/kijito/api_token.
+if grep -q 'run the one redeem command the reply gives' <<<"$out" \
+   && grep -q 'If the reply shows the key itself' <<<"$out" \
+   && grep -q 'follow its save steps to ~/.config/kijito-inbox-monitor/token' <<<"$out" \
+   && ! grep -q 'kijito/api_token' <<<"$out"; then
+  grn "no token: names the redeem command and the key-in-reply save steps, both to the watcher file"
+else red "no token: the both-reply-shapes text is missing or names another file: $out"; fi
+
+mkdir -p "$H/.config/kijito-inbox-monitor"; printf 'kjt_SECRET_DO_NOT_PRINT' > "$H/.config/kijito-inbox-monitor/token"
+chmod 600 "$H/.config/kijito-inbox-monitor/token"
+echo tester > "$T/proj/.kijito_persona"      # the marker route this time, not --persona
+out=$(run); rc=${out##*rc=}
+EV="$H/.local/state/kijito-inbox-monitor/events.tester.ndjson"
+if [ "$rc" = 3 ] && grep -q 'producer armed for tester' <<<"$out" && [ -s "$EV" ]; then
+  grn "marker persona + token: a producer is STARTED and armed (stream $EV)"
+else red "start: rc=$rc $out"; fi
+grep -q "tail -n 0 -F $EV" <<<"$out" && grep -q 'Not done until' <<<"$out" \
+  && grn "stream proven, consumer left: exit 3 (never 0) and the exact consumer line" || red "consumer step text: $out"
+grep -q 'kjt_SECRET' <<<"$out" && red "a token VALUE was printed" || grn "the token value is never printed"
+n=$(_nprod)
+[ "$n" = 1 ] && grn "exactly one producer is running for the persona" || red "producers for tester: $n"
+
+out=$(run); rc=${out##*rc=}
+n=$(_nprod)
+grep -q 'already covers tester' <<<"$out" && [ "$n" = 1 ] \
+  && grn "a second run leaves the running producer alone (still one)" || red "second run: n=$n $out"
+
+# A stream written seconds ago is NOT a producer: trusting a 10-minute mtime window would let a producer
+# that had just died block its own restart for 10 minutes.
+pkill -f "$BIN/kijito-inbox-monitor .*--persona tester" 2>/dev/null; sleep 0.5
+touch "$EV"
+out=$(run); rc=${out##*rc=}
+n=$(_nprod)
+if ! grep -q 'already covers tester' <<<"$out" && grep -q 'producer armed for tester' <<<"$out" && [ "$n" = 1 ]; then
+  grn "a fresh stream with NO producer process is restarted at once (mtime is not a producer)"
+else red "dead producer + fresh stream: n=$n $out"; fi
+
+out=$(run FAKE_ST=all); rc=${out##*rc=}
+[ "$rc" = 0 ] && grep -q '✓ PROVEN' <<<"$out" && grn "a proven wake is the ONLY exit 0" || red "all-green: rc=$rc $out"
+out=$(run FAKE_ST=stream); rc=${out##*rc=}
+[ "$rc" = 1 ] && grep -q 'did NOT reach your stream' <<<"$out" && ! grep -q 'Not done until' <<<"$out" \
+  && grn "a message that never reached the stream is a FAILURE (1), not 'consumer left'" || red "stream fail: rc=$rc $out"
+# A self-test that could not RUN its test (a read-only key cannot send) is "something missing" (2), never
+# "the monitor is not working" (1) - that verdict would be false for a monitor that may be working.
+out=$(run FAKE_ST=cantsend); rc=${out##*rc=}
+[ "$rc" = 2 ] && grep -q 'NOT PROVEN YET' <<<"$out" && ! grep -q 'did NOT reach your stream' <<<"$out" \
+  && grn "a test that could not be sent is exit 2 (what is missing), not 'not working'" || red "cantsend: rc=$rc $out"
+
+# Key pickup has the human write ~/.config/kijito-inbox-monitor/api_base for a non-default server; ignoring
+# it would leave the producer polling api.kijito.ai. The base is
+# --api-base > $KIJITO_BASE > that file (the monitor's own order, plus the file), and it reaches BOTH the
+# producer (--api-base) and the self-test ($KIJITO_BASE). Each case uses a fresh persona so a producer starts.
+_started_with() { grep -- "--persona $1 " "$T/km_args" | tail -1; }
+if _started_with tester | grep -q -- '--api-base'; then red "no base configured: the producer was still given --api-base"
+else grn "no base configured: the producer gets no --api-base (the monitor's hosted default)"; fi
+printf 'http://127.0.0.1:7490/\n' > "$H/.config/kijito-inbox-monitor/api_base"
+out=$(ARGS="--persona apifile" run); rc=${out##*rc=}
+if [ "$rc" = 3 ] && _started_with apifile | grep -q -- '--api-base http://127.0.0.1:7490 ' \
+   && grep -q 'base=http://127.0.0.1:7490$' <<<"$out" && grep -q 'api   http://127.0.0.1:7490 (from ~/.config/kijito-inbox-monitor/api_base)' <<<"$out"; then
+  grn "the api_base file reaches the producer and the self-test (trailing slash dropped)"
+else red "api_base file: rc=$rc started=[$(_started_with apifile)] $out"; fi
+out=$(ARGS="--persona apienv" run KIJITO_BASE=https://env.example.org); rc=${out##*rc=}
+_started_with apienv | grep -q -- '--api-base https://env.example.org ' && grep -q 'base=https://env.example.org$' <<<"$out" \
+  && grn "\$KIJITO_BASE beats the file" || red "env over file: started=[$(_started_with apienv)] $out"
+out=$(ARGS="--persona apiflag --api-base https://flag.example.org" run KIJITO_BASE=https://env.example.org); rc=${out##*rc=}
+_started_with apiflag | grep -q -- '--api-base https://flag.example.org ' && grep -q 'base=https://flag.example.org$' <<<"$out" \
+  && grn "--api-base beats \$KIJITO_BASE" || red "flag over env: started=[$(_started_with apiflag)] $out"
+printf 'kijito.example.org\n' > "$H/.config/kijito-inbox-monitor/api_base"
+out=$(ARGS="--persona apibad" run); rc=${out##*rc=}
+[ "$rc" = 2 ] && grep -q 'is not an http(s) URL' <<<"$out" && [ -z "$(_started_with apibad)" ] \
+  && grn "a base that is not an http(s) URL is exit 2 with the fix, and nothing starts" || red "bad base: rc=$rc $out"
+rm -f "$H/.config/kijito-inbox-monitor/api_base"
+
+echo
+echo "passed: $pass   failed: $fail"
+[ "$fail" = 0 ]

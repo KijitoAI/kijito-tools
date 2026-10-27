@@ -1,0 +1,26 @@
+# providers/monitor is a byte-exact copy of this upstream release.
+# Written by scripts/import-monitor.sh; verified by tests/vendored_monitor_test.sh. Never hand-edit.
+repo=KijitoAI/kijito-inbox-monitor
+sha=8d9bd0207fd0590267e81bc8536960d91fe7b5fb
+tree=f4aa2563c1596807107d77710af01b0ba9d11069
+tag=v0.6.2
+file=100644 227263e902ad71115e044b052e5ca262639d5740 .github/workflows/authorship.yml
+file=100644 8d88ccb0fd09b9144505f985b4f882db278fac1f .github/workflows/publish-npm.yml
+file=100644 19ce3471a2cffa689be9d261049c1e74e3e7a25e .github/workflows/publish-pypi.yml
+file=100644 29091501bec8a082d8e1ff366c803b78916b1180 .gitignore
+file=100644 2fbe3c3bd90b6c666b68bbd6ca1626670bc32606 CHANGELOG.md
+file=100644 d645695673349e3947e8e5ae42332d0ac3164cd7 LICENSE
+file=100644 f6b0e5634f3fd4156c1c000efb31578bfb068cf3 NOTICE
+file=100644 9aabde97b3ab3a0236d1a2797d8bbfcc4cd3b2fb README.md
+file=100644 8b53d05d29d87f0fa9c49d04543dc12164ea1b27 RELEASING.md
+file=100755 e103abfc51db9a3060802184741eb7594eae1cb6 arm-hive-monitor.sh
+file=100755 bbe3f07de13dab8a8a7a4798481156ae4a46ab8f bin/cli.js
+file=100644 650c0667e13a10aaa0c9a5d960c5e3bf4805cdfc com.kijito.inbox-monitor.plist.template
+file=100644 f179a44885d202c2ffa02c800aaf783bd2fea5bf kijito-inbox-monitor@.service.template
+file=100644 4943db7f0be3d40a89a3a67527fabc45f57569af kijito_inbox_monitor.py
+file=100644 820e01f8dd157ae8b141d690d4f958cf4b120f69 package.json
+file=100644 11fd17c27476afe610bcd04bac2d8ba655d28293 pyproject.toml
+file=100755 971180d5e1c61384b9e75c7b3f104004142edb11 scripts/migrate-systemd-unit.sh
+file=100755 280336d6ce77711ffea3b97fb141938ed6444556 scripts/prepublish-gate.sh
+file=100755 9c95573b2a96614d808d78f39ffe0ab46edeafda scripts/render-service.sh
+file=100644 2e4be6c979e36fee1b3c0ea6cc2f286eea685a70 test_kijito_monitor.py
