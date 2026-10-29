@@ -246,10 +246,12 @@ if [ "$producer_ok" = 1 ]; then
     before=$(wc -c < "$EVENTS" 2>/dev/null || echo 0)
     stamp="kijito-inbox-selftest $(date -u +%FT%TZ) $$"
     # Send to SELF. A self-addressed message is the only test message that cannot bother anyone else,
-    # and it exercises exactly the path a real sender uses.
+    # and it exercises exactly the path a real sender uses. force:true is required: since 2026-10-28 the
+    # service refuses a send whose sender is its own recipient with 409 self_send_refused unless force
+    # is true, because that pair is usually a typo; here it is the point.
     code=$(curl -sS -o /dev/null -w '%{http_code}' -m 20 -A "$UA" -H "Authorization: Bearer $TOKEN" \
          -H 'Content-Type: application/json' -X POST "$KIJITO_BASE/api/send" \
-         -d "{\"to\":\"$PERSONA\",\"persona\":\"$PERSONA\",\"content\":\"$stamp — automated install self-test; safe to ignore and to delete.\"}" \
+         -d "{\"to\":\"$PERSONA\",\"persona\":\"$PERSONA\",\"force\":true,\"content\":\"$stamp — automated install self-test; safe to ignore and to delete.\"}" \
          2>/dev/null) || code=000
     case "$code" in
       2??) : ;;
@@ -263,7 +265,7 @@ if [ "$producer_ok" = 1 ]; then
 COULD NOT MEASURE: the key the monitor uses is fine for WATCHING mail (memory.read), but it cannot SEND
 the self-test message: sending is a hive write, which needs memory.write. The monitor may be working.
 Prove the wake from your agent instead - send yourself one message:
-  kijito_hive_send(persona="$PERSONA", to="$PERSONA", content="inbox test")
+  kijito_hive_send(persona="$PERSONA", to="$PERSONA", content="inbox test", force=true)
 and check that it wakes your agent. The monitor needs no other key.
 EOF
         exit 2 ;;

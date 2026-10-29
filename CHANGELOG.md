@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.22
+
+- **Fix: the inbox self-test reported a working wake path as unmeasured.** Since Kijito's change of
+  2026-10-28, a hive message whose sender is its own recipient is refused (409 `self_send_refused`)
+  unless it carries `force: true`, because that pair is usually a mistyped sender. The install
+  self-test sends one message to the agent's own persona on purpose, so it now sends `force: true`;
+  before this fix every new install printed "COULD NOT MEASURE ... HTTP 409". The fallback hint for a
+  read-only key now shows `force=true` as well.
+
 ## 0.2.21
 
 kijito-tools installs a session toolkit for Claude Code and Codex agents, with

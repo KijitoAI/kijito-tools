@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "origin": {
     "package": "kijito-tools",
-    "packageVersion": "0.2.21",
+    "packageVersion": "0.2.22",
     "repository": "https://github.com/KijitoAI/kijito-tools"
   },
   "live": {

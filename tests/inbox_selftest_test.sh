@@ -126,6 +126,30 @@ else
 fi
 rm -rf "$H" "$SH"
 
+# 8. the self-test message is a deliberate note to SELF, so it must carry force:true. Since 2026-10-28
+#    the service answers a self-send without it with 409 self_send_refused, and the install then reports
+#    COULD NOT MEASURE for a wake path that works. The shim behaves like the service and records the body.
+H="$(mktemp -d)"; SH="$(mktemp -d)"
+mkdir -p "$H/.kijito-monitor"
+printf '{"event": "armed", "persona": "selfsend", "cursor": 1}\n' > "$H/.kijito-monitor/selfsend.jsonl"
+printf 'kjt_test' > "$H/.claude_token"; chmod 600 "$H/.claude_token"
+cat > "$SH/curl" <<SHIM
+#!/usr/bin/env bash
+printf '%s\\n' "\$@" > "$H/curl-args"
+case "\$*" in *'"force":true'*) printf '200' ;; *) printf '409' ;; esac
+exit 0
+SHIM
+chmod +x "$SH/curl"
+out="$(HOME="$H" KIJITOMON_TOKEN_FILE="$H/.claude_token" KIJITOMON_BIN="$(type -P false)" PATH="$SH:$PATH" \
+        "$SELFTEST" --persona selfsend --timeout 2 2>&1)"; rc=$?
+if grep -q '"to":"selfsend","persona":"selfsend","force":true' "$H/curl-args" 2>/dev/null \
+   && ! printf '%s' "$out" | grep -q "HTTP 409"; then
+  grn "the self-test send to self carries force:true (no 409 self_send_refused)"
+else
+  red "self-test send without force:true (rc=$rc): $(cat "$H/curl-args" 2>/dev/null | tr '\n' ' ') :: $out"
+fi
+rm -rf "$H" "$SH"
+
 echo
 echo "passed: $pass   failed: $fail"
 [ "$fail" -eq 0 ] || exit 1
