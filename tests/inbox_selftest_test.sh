@@ -126,7 +126,7 @@ else
 fi
 rm -rf "$H" "$SH"
 
-# 8. the self-test message is a deliberate note to SELF, so it must carry force:true. Since Kijito M556
+# 8. the self-test message is a deliberate note to SELF, so it must carry force:true. Since 2026-10-28
 #    the service answers a self-send without it with 409 self_send_refused, and the install then reports
 #    COULD NOT MEASURE for a wake path that works. The shim behaves like the service and records the body.
 H="$(mktemp -d)"; SH="$(mktemp -d)"

@@ -246,9 +246,9 @@ if [ "$producer_ok" = 1 ]; then
     before=$(wc -c < "$EVENTS" 2>/dev/null || echo 0)
     stamp="kijito-inbox-selftest $(date -u +%FT%TZ) $$"
     # Send to SELF. A self-addressed message is the only test message that cannot bother anyone else,
-    # and it exercises exactly the path a real sender uses. force:true is required: since Kijito M556
-    # (2026-10-28) the service refuses a send whose sender is its own recipient with 409
-    # self_send_refused unless force is true, because that pair is usually a typo; here it is the point.
+    # and it exercises exactly the path a real sender uses. force:true is required: since 2026-10-28 the
+    # service refuses a send whose sender is its own recipient with 409 self_send_refused unless force
+    # is true, because that pair is usually a typo; here it is the point.
     code=$(curl -sS -o /dev/null -w '%{http_code}' -m 20 -A "$UA" -H "Authorization: Bearer $TOKEN" \
          -H 'Content-Type: application/json' -X POST "$KIJITO_BASE/api/send" \
          -d "{\"to\":\"$PERSONA\",\"persona\":\"$PERSONA\",\"force\":true,\"content\":\"$stamp — automated install self-test; safe to ignore and to delete.\"}" \
