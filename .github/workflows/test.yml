@@ -91,6 +91,7 @@ jobs:
           bash tests/heartbeat_nonce_test.sh
           bash tests/heartbeat_watchdog_test.sh
           bash tests/inbox_selftest_test.sh
+          bash tests/inbox_wait_test.sh
           bash tests/statusline_persona_test.sh
           bash tests/statusline_render_test.sh
           bash tests/stream_layouts_test.sh
@@ -129,6 +130,7 @@ jobs:
           for f in install.sh NOTICE \
                    providers/claude/install.sh \
                    providers/claude/scripts/self-clear.sh \
+                   providers/claude/scripts/kijito-inbox-wait.py \
                    providers/claude/skills/kijito-qa-memory/SKILL.md \
                    providers/codex/install.mjs \
                    providers/codex/release-manifest.json \
@@ -156,6 +158,7 @@ jobs:
           need = [
               "kijito_tools/_assets/install.sh",
               "kijito_tools/_assets/providers/claude/install.sh",
+              "kijito_tools/_assets/providers/claude/scripts/kijito-inbox-wait.py",
               "kijito_tools/_assets/providers/claude/skills/kijito-qa-memory/SKILL.md",
               "kijito_tools/_assets/providers/codex/install.mjs",
               "kijito_tools/_assets/providers/codex/release-manifest.json",
@@ -192,6 +195,7 @@ jobs:
           tar xzf "$TGZ" -C "$SMOKE/pkg" --strip-components=1
           HOME="$SMOKE/home" bash "$SMOKE/pkg/install.sh"
           test -f "$SMOKE/home/.claude/skills/kijito-qa-memory/SKILL.md"
+          test -x "$SMOKE/home/.claude/kijito-inbox-wait.py"
           HOME="$SMOKE/home" bash "$SMOKE/pkg/install.sh" --provider codex --skills-only \
             --skills-root "$SMOKE/home/.codex/skills"
           test -f "$SMOKE/home/.codex/skills/kijito-qa-memory/SKILL.md"

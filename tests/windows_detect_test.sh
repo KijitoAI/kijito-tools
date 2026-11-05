@@ -67,6 +67,8 @@ case "$*" in
   # The LIST query (kijito_stream_consumers) asks for "<pid> <age-seconds>" per tail.exe.
   *"-eq 'tail.exe'"*ForEach-Object*) [ "${FAKE_TAIL:-0}" -gt 0 ] && echo "9001 ${FAKE_TAIL_AGE:-300}" ;;
   *"-eq 'tail.exe'"*) echo "${FAKE_TAIL:-0}" ;;
+  # kijito_stream_waiter: is a kijito-inbox-wait.py (python) process waiting on this stream?
+  *kijito-inbox-wait*) echo "${FAKE_WAITER:-0}" ;;
   *)          echo "${FAKE_PROD:-0}" ;;
 esac
 SHIM
@@ -173,6 +175,21 @@ out=$(FAKE_PROD=1 FAKE_TAIL=1 FAKE_TAIL_AGE=7200 run_hook "$WIN" "$H" "$P")
 grep -q "LEAKED ORPHANS" <<<"$out" && grep -q "9001 (up 120 min)" <<<"$out" \
   && grn "hook: a 2-hour-old tail.exe is flagged as a possible leaked orphan" \
   || red "hook reported a 2-hour-old Windows tail as a plain live consumer"
+# ...unless an inbox WAITER names this stream: its tail has no time limit, so its age proves nothing, and
+# advising a kill by pid would cut a live consumer.
+out=$(FAKE_PROD=1 FAKE_TAIL=1 FAKE_TAIL_AGE=7200 FAKE_WAITER=1 run_hook "$WIN" "$H" "$P")
+grep -q "your inbox is ALREADY WATCHED" <<<"$out" && ! grep -q "LEAKED ORPHANS" <<<"$out" && ! grep -q "kill <pid>" <<<"$out" \
+  && grn "hook: a 2-hour-old tail.exe behind a live inbox waiter is a live consumer, not an orphan" \
+  || red "hook called a live waiter's old tail an orphan: $(grep -iE 'orphan|kill' <<<"$out" | head -2)"
+export PS_LOG="$_RUNTMP/ps-waiter.log"; : > "$PS_LOG"
+out=$(FAKE_WAITER=1 lib_call "$WIN" kijito_stream_waiter "/c/Users/j/.cache/kijito-inbox-monitor/events.frank.ndjson")
+if [ "$out" = "rc=0" ] && grep -q "python" "$PS_LOG" && grep -qxF "KIJITO_PS_ARG=events.frank.ndjson" "$PS_LOG" \
+   && ! grep -v '^KIJITO_PS_ARG=' "$PS_LOG" | grep -q "events.frank.ndjson"; then
+  grn "waiter probe: asks for a python kijito-inbox-wait process, the stream name passed as data"
+else red "waiter probe query wrong (got $out): $(cat "$PS_LOG")"; fi
+unset PS_LOG
+out=$(lib_call "$WIN_NOPS" kijito_stream_waiter "/x/events.frank.ndjson")
+[ "$out" = "rc=2" ] && grn "waiter probe: no PowerShell => COULD NOT MEASURE (2)" || red "no PowerShell waiter probe gave $out"
 
 # ── inbox-selftest ──────────────────────────────────────────────────────────────────────────────
 out=$(env PATH="$WIN_NOPS:$SYS" HOME="$H" bash "$SELFTEST" --persona frank --no-send 2>&1); rc=$?

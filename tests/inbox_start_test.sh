@@ -99,8 +99,12 @@ EV="$H/.local/state/kijito-inbox-monitor/events.tester.ndjson"
 if [ "$rc" = 3 ] && grep -q 'producer armed for tester' <<<"$out" && [ -s "$EV" ]; then
   grn "marker persona + token: a producer is STARTED and armed (stream $EV)"
 else red "start: rc=$rc $out"; fi
-grep -q "tail -n 0 -F $EV" <<<"$out" && grep -q 'Not done until' <<<"$out" \
-  && grn "stream proven, consumer left: exit 3 (never 0) and the exact consumer line" || red "consumer step text: $out"
+# The consumer line is the background-Bash WAITER (the Monitor tool stops every watch after 30 min), and
+# the waiter it names must exist.
+_wpy=$(grep -o 'python3 -I [^ ]*kijito-inbox-wait.py' <<<"$out" | head -1 | sed 's/^python3 -I //')
+grep -qF -- "kijito-inbox-wait.py --persona tester --events $EV" <<<"$out" && grep -q 'run_in_background=true' <<<"$out" \
+  && [ -n "$_wpy" ] && [ -f "$_wpy" ] && grep -q 'Not done until' <<<"$out" \
+  && grn "stream proven, consumer left: exit 3 (never 0) and the exact waiter line (an existing script)" || red "consumer step text: $out"
 grep -q 'kjt_SECRET' <<<"$out" && red "a token VALUE was printed" || grn "the token value is never printed"
 n=$(_nprod)
 [ "$n" = 1 ] && grn "exactly one producer is running for the persona" || red "producers for tester: $n"

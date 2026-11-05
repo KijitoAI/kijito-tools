@@ -169,6 +169,24 @@ check_hook() {
   else grn "$label: linux machine → no launchctl hint"; fi
   rm -rf "$h"
 
+  # ---- W: THE DEFAULT CONSUMER IS THE WAITER, NOT A MONITOR ----
+  # The Monitor tool caps every watch at 30 minutes and has no persistent option, so a hook that leads
+  # with `Monitor(..., persistent=true)` leaves every user deaf after half an hour. The arm line must be
+  # the background-Bash waiter, name a waiter that exists, carry the re-arm rule, and keep Monitor only
+  # as the capped fallback.
+  h="$(make_home linux dave yes)"
+  out="$(FAKE_PRODUCER=1 FAKE_ARMED=0 run_hook "$hook" "$h" "$proj")"
+  local wpy; wpy="$(grep -o "python3 -I '[^']*kijito-inbox-wait.py'" <<<"$out" | head -1 | sed "s/^python3 -I '//; s/'\$//")"
+  if grep -qF "Bash(command=\"python3 -I '" <<<"$out" && grep -qF -- "--events '$h/.kijito-monitor/dave.jsonl'\", run_in_background=true)" <<<"$out" \
+     && [ -n "$wpy" ] && [ -f "$wpy" ]; then
+    grn "$label: the arm line is the background-Bash waiter on this persona's stream, at a path that exists"
+  else red "$label: the arm line is not the waiter via run_in_background (or names a missing file): $(grep -E 'Bash\(|Monitor\(' <<<"$out" | head -2)"; bad=1; fi
+  if grep -q "RE-ARM IT FIRST" <<<"$out" && grep -q "CAPS EVERY WATCH AT 30 MINUTES" <<<"$out" \
+     && ! grep -q "persistent=true" <<<"$out"; then
+    grn "$label: re-arm rule stated, Monitor named as capped at 30 min, no persistent=true anywhere"
+  else red "$label: the waiter guidance lacks the re-arm rule / 30-min cap, or still offers persistent=true"; bad=1; fi
+  rm -rf "$h"
+
   # ---- B: a producer runs, but NOT for this persona (no events file) ----
   # The multi-persona case. A host-global check calls this UP and sends the agent to tail a file
   # that will never exist — the exact false-calm failure, and the one hardest to notice.
@@ -342,18 +360,19 @@ check_hook() {
   # ---- F: only tails older than the 30-min Monitor cap → say they may be leaked orphans ----
   out="$(FAKE_PRODUCER=1 FAKE_ARMED=1 FAKE_ARMED_AGE=1-02:03:04 run_hook "$hook" "$h" "$proj")"
   # ⛔ NOT AN ORPHAN ON LINUX/macOS: only Windows leaks a tail when its
-  # Monitor expires, so here a >30-min tail is a persistent Monitor - possibly a sibling's LIVE consumer -
+  # Monitor expires, so here a >30-min tail is a long-lived consumer (an inbox waiter, which has no time
+  # limit, or an older persistent Monitor) - possibly a sibling's LIVE consumer -
   # and the hook must never advise killing it. (The Windows wording is pinned in windows_detect_test.sh.)
-  if grep -q "4242 (up 1563 min)" <<<"$out" && grep -q 'belongs to a "persistent" Monitor' <<<"$out" \
+  if grep -q "4242 (up 1563 min)" <<<"$out" && grep -q 'belongs to a long-lived consumer' <<<"$out" \
      && ! grep -q "LEAKED ORPHANS" <<<"$out" && ! grep -q "kill <pid>" <<<"$out"; then
-    grn "$label: tails older than 30 min on POSIX → named as persistent Monitors (with the age), never 'kill by pid'"
+    grn "$label: tails older than 30 min on POSIX → named as long-lived consumers (with the age), never 'kill by pid'"
   else red "$label: a >30-min POSIX tail is called an orphan or a kill is advised: $(grep -iE 'orphan|kill|persistent' <<<"$out" | head -2)"; bad=1; fi
-  if ! grep -q "YOUR OWN pre-reset Monitor" <<<"$out"; then
+  if ! grep -q "YOUR OWN pre-reset waiter or Monitor" <<<"$out"; then
     grn "$label: on a fresh startup the old tails are not suggested to be your own"
   else red "$label: a fresh startup was told an old tail may be its own pre-reset Monitor"; bad=1; fi
   # After /clear the agent cannot see its own arming result: an old tail may be its persistent Monitor.
   out="$(HOOK_SRC=clear FAKE_PRODUCER=1 FAKE_ARMED=1 FAKE_ARMED_AGE=1-02:03:04 run_hook "$hook" "$h" "$proj")"
-  if grep -q "YOUR OWN pre-reset Monitor" <<<"$out" && grep -q 'belongs to a "persistent" Monitor' <<<"$out"; then
+  if grep -q "YOUR OWN pre-reset waiter or Monitor" <<<"$out" && grep -q 'belongs to a long-lived consumer' <<<"$out"; then
     grn "$label: after /clear, a >30-min tail is flagged AND named as possibly your own pre-clear Monitor"
   else red "$label: after /clear the old-tail warning lacks the may-be-your-own caveat"; bad=1; fi
   rm -rf "$h" "$proj"

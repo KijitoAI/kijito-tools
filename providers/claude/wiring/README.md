@@ -3,8 +3,8 @@
 ## Why it matters: a usage limit silently ends your inbox loop
 
 When a Claude session hits its **usage limit**, its turn loop stops — and the wake-capable inbox
-consumer it had armed (the Monitor that tails your event stream) stops or expires with it. **Nothing
-tells you.** When the limit clears, nothing re-arms the consumer either: the producer keeps collecting
+consumer it had armed (the inbox waiter, or a Monitor, that tails your event stream) ends, or fires with
+nobody left to re-arm it. **Nothing tells you.** When the limit clears, nothing re-arms the consumer either: the producer keeps collecting
 your mail into the stream, nobody reads it, and the session stays deaf indefinitely while every health
 signal still reads green (producer up, heartbeat fresh, mail landing).
 
