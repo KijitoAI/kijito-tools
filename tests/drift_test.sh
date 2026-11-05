@@ -74,7 +74,8 @@ newer() {
 }
 
 echo "== claude scripts: $REPO/providers/claude/scripts  vs  $DEST =="
-for s in "$REPO"/providers/claude/scripts/*.sh; do
+for s in "$REPO"/providers/claude/scripts/*.sh "$REPO"/providers/claude/scripts/*.py; do
+  [ -f "$s" ] || continue
   n=$(basename "$s"); i="$DEST/$n"
   if [ ! -f "$i" ]; then printf "  MISSING  %-26s not installed\n" "$n"; missing=$((missing+1)); continue; fi
   if [ "$(shasum -a 256 "$s" | cut -d' ' -f1)" = "$(shasum -a 256 "$i" | cut -d' ' -f1)" ]; then

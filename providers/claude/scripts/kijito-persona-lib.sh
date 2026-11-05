@@ -272,9 +272,11 @@ _kijito_etime_secs() {
 # consumer (same anchor as kijito_stream_consumed: only a real `tail` counts). Returns 0 if any, 1 if
 # none, 2 COULD NOT MEASURE.
 # ⚠️ WHY THE AGE: a consumer's EXISTENCE does not prove it can wake anyone. The Claude Code Monitor
-# tool caps a watch at 30 min on many sessions, and on Windows/Git Bash an expired Monitor LEAKS its
+# tool caps a watch at 30 min, and on Windows/Git Bash an expired Monitor LEAKS its
 # tail (dozens of live orphans can pile up) — so "a tail exists" would read as "armed"
 # forever. Callers compare the age with that cap; they cannot know ownership, so they report, not kill.
+# An inbox WAITER's tail (kijito-inbox-wait.py, the default consumer) has no cap and can be any age:
+# ask kijito_stream_waiter before reading an old tail as an orphan.
 kijito_stream_consumers() {
   local s=${1:-} p b psh out e found=1
   [ -n "$s" ] || return 1
@@ -299,4 +301,32 @@ kijito_stream_consumers() {
     echo "$p $(_kijito_etime_secs "$e")"; found=0
   done
   return $found
+}
+
+# kijito_stream_waiter <stream-path> -> 0 if a kijito-inbox-wait.py process is waiting on this stream,
+# 1 if none is, 2 COULD NOT MEASURE. The waiter follows the stream through a `tail -n 0 -F` child that
+# has NO time limit, so an old tail on a stream with a live waiter is that waiter's, not a leaked
+# Monitor orphan. Evidence is the waiter's own argv naming the stream (--events <path>); a waiter
+# started with only --persona cannot be tied to a stream here and is not counted.
+# ⛔ Only a python process counts: a shell or grep whose command line merely mentions the waiter is not one.
+kijito_stream_waiter() {
+  local s=${1:-} b n pid line
+  [ -n "$s" ] || return 1
+  b=$(basename "$s")
+  if kijito_host_is_windows; then
+    # The path spelling differs between Git Bash (/c/...) and Windows (C:\...), so match the basename,
+    # passed as data (never interpolated into the filter).
+    n=$(KIJITO_PS_ARG="$b" _kijito_win_count "\$_.Name -match 'python' -and \$_.CommandLine -match 'kijito-inbox-wait' -and \$_.CommandLine.Contains(\$env:KIJITO_PS_ARG)") || return 2
+    [ "$n" -gt 0 ] && return 0
+    return 1
+  fi
+  command -v pgrep >/dev/null 2>&1 || return 2
+  for pid in $(pgrep -f "kijito-inbox-wait" 2>/dev/null); do
+    # The EXECUTABLE must be python: the harness's wrapper shell carries the same command text (including
+    # "python3 -I …"), so testing the command line alone would count the shell too.
+    case "$(ps -o comm= -p "$pid" 2>/dev/null)" in *[Pp]ython*) ;; *) continue ;; esac
+    line=$(ps -o command= -p "$pid" 2>/dev/null) || continue
+    case "$line " in *" --events $s "*|*" --events=$s "*) return 0 ;; esac
+  done
+  return 1
 }

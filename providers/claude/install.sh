@@ -57,7 +57,11 @@ command -v tmux >/dev/null 2>&1 || echo "note: tmux not found — only the OPTIO
 mkdir -p "$DEST/skills" "$DEST/.lifecycle"
 
 # 1) scripts → ~/.claude (executable)
-for s in "$PROVIDER_ROOT"/scripts/*.sh; do install -m 0755 "$s" "$DEST/$(basename "$s")"; done
+# *.py too: kijito-inbox-wait.py is the inbox waiter the SessionStart hook names by this path.
+for s in "$PROVIDER_ROOT"/scripts/*.sh "$PROVIDER_ROOT"/scripts/*.py; do
+  [ -f "$s" ] || continue
+  install -m 0755 "$s" "$DEST/$(basename "$s")"
+done
 echo "✓ scripts installed → $DEST"
 
 # 2) skills (optional helpers — every skill in skills/ gets deployed)
