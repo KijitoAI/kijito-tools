@@ -36,7 +36,7 @@ It returns identity + recall + recent + goals, and reports whether your persona 
      - ⚠️ **"UNREAD" IS NOT "UNHANDLED".** A message you already acted on can still arrive looking new. Before a message becomes a task, check whether it is already done (for code, `git log -S '<the defect string>'`, and compare the message's timestamp to the commit's).
      - ✅ **CONSUME WHAT YOU HANDLED.** Peeking with `mark_read=false` lets acting precede consuming; once you have ACTED on a message (or something later superseded it), do a consuming read (`mark_read=true`) of exactly those messages, so handled mail cannot sit unread forever. A plain `kijito_hive_inbox` (which consumes) is fine when you are handling the mail in-session.
        - ⛔ **Never "consume what you SAW."** There are three dispositions: (1) **handled** (acted on or superseded) → consume; (2) **deliberately deferred** for the next session → leave unread AND name it in your current-state pointer; (3) **seen but neither** → leave unread. Never consume mail to quiet a staleness alarm: unread is the signal that something is still owed, and the alarm flagging it is the system working. Disposition, not eyeballs, decides.
-   - **(b) Arm a LIVE wake-capable consumer — IDEMPOTENTLY (at most one).** "Arm" means ongoing surfacing that re-invokes you per event, not a one-shot read. In Claude Code the wake-capable form is a persistent `Monitor` that streams each new event as a notification. `/clear` does NOT stop a monitor armed before it, so arming blindly stacks monitors and every message then wakes you several times. Always check, then arm only if none is live.
+   - **(b) Arm a LIVE wake-capable consumer — IDEMPOTENTLY (at most one).** "Arm" means a consumer that re-invokes you when an event arrives (and keeps doing so, because you re-arm it each time), not a one-shot inbox read. In Claude Code the wake-capable form is the **inbox waiter**, run with the Bash tool and `run_in_background: true`: `~/.claude/kijito-inbox-wait.py` blocks until the first wake-worthy event on your stream, prints it and exits, and that exit re-invokes you. Background Bash has no time limit. ⚠️ **Do not default to the Monitor tool: it caps every watch at 30 minutes and has no persistent option**, so a Monitor-based watch goes deaf after half an hour or wakes you every half hour only to be re-armed. `/clear` does NOT stop a consumer armed before it, so arming blindly stacks consumers and every message then wakes you several times. Always check, then arm only if none is live.
      - **Find your stream file — ask the filesystem, do not assume from the OS:**
        ```bash
        ls ~/.kijito-monitor/<P>.jsonl                              # systemd (Linux)
@@ -44,23 +44,29 @@ It returns identity + recall + recent + goals, and reports whether your persona 
        ls ~/.local/state/kijito-inbox-monitor/events.<P>.ndjson    # the monitor's own systemd template, or kijito-inbox-start.sh
        ```
        Use the one that exists as `$STREAM` below. ⛔ `tail -F` on a file that never appears waits forever without an error, and "no events" looks exactly like "no mail" — so if NONE exists, your producer is not running: see "Producer down" below.
-     - **Is a monitor already tailing it? Anchor the pattern:**
+     - **Is a consumer already tailing it? Anchor the pattern:**
        ```bash
-       pgrep -f "^tail -n 0 -F .*$STREAM"   # ONE line per live monitor
+       pgrep -f "^tail -n 0 -F .*$STREAM"   # ONE line per live consumer (a waiter's tail or a Monitor's)
        ```
-       An unanchored `pgrep -f` also matches the parent shell whose command line contains the pipeline, so one healthy monitor would print two pids.
-       - **prints nothing →** arm exactly ONE via the Monitor tool (persistent):
-         `Monitor(command="tail -n 0 -F $STREAM | grep --line-buffered -E '\"event\": ?\"(new|alert|recovered|state_corrupt|baseline_skipped|seed_ahead|replay_capped|persona_added|still_unread)\"'", persistent=true)`
+       An unanchored `pgrep -f` also matches the parent process whose command line names the stream, so one healthy consumer would print two pids.
+       - **prints nothing →** arm exactly ONE waiter with the Bash tool and `run_in_background: true`:
+         ```bash
+         python3 -I ~/.claude/kijito-inbox-wait.py --persona <P> --events "$STREAM"
+         ```
+         **Each time it wakes you, re-arm it FIRST (the same command), THEN read the inbox** with `kijito_hive_inbox(persona="<P>", unread_only=true, mark_read=false)`. Mail that lands between the wake and the re-arm is in that read, so nothing falls in the gap. Its exit code says what woke you: `0` an event (the line it printed) · `2` NO STREAM: the producer is not running, and the line names the command that starts it · `3` only with `--max-wait`, the bound ran out · `4` another waiter already waits on this stream, so the inbox is watched: arm nothing. It sleeps through network blips: a "source is DOWN" alert that recovers within 10 minutes wakes nobody, one that does not recover wakes you with the alert (`--grace 0` wakes on every alert at once).
+         Only on a host with no background Bash, use the Monitor tool instead, knowing it stops after 30 minutes and must then be re-armed:
+         `Monitor(command="tail -n 0 -F $STREAM | grep --line-buffered -E '\"event\": ?\"(new|alert|recovered|state_corrupt|baseline_skipped|seed_ahead|replay_capped|persona_added|still_unread)\"'")`
        - **prints one line →** **your inbox is already watched. Arm nothing, and ask the human for nothing.** That consumer may be yours from before a `/clear`, or it may belong to ANOTHER session of the same persona (another pane, or an earlier run in this one). Either way a second one double-fires every event and adds nothing. Tell the human "the inbox is watched (pid N)", never "alerts aren't on", and never ask them to approve a second one. Mail wakes the session that owns that consumer; if that isn't you, peek with `kijito_hive_inbox(persona="<P>", unread_only=true, mark_read=false)` when you need to.
        - **prints two or more →** genuinely stacked; keep the newest, kill the rest by pid:
          ```bash
          ps -eo pid,etime,command | grep "^ *[0-9]* .*tail -n 0 -F .*$STREAM" | grep -v grep
-         # keep the newest (smallest etime); kill the older tail pids and their parent shells.
+         # keep the newest (smallest etime); kill the older tail pids and their parent processes
+         # (for a waiter, killing its python parent takes the tail with it).
          ```
-     - ⚠️ **Trust `pgrep`, not the task list.** A monitor armed before `/clear` keeps delivering notifications after it, even when `TaskList` shows no tasks. The process is the ground truth.
+     - ⚠️ **Trust `pgrep`, not the task list.** A consumer armed before `/clear` keeps running after it, even when `TaskList` shows no tasks. The process is the ground truth.
      - ⛔ **RUNNING IS NOT ARMED — verify the wake path.** A pid proves something is alive, not that events reach *you*. A live consumer still fails to wake you if the producer is not writing, if the tail is on another persona's stream, or if the filter excludes the event kind. Confirm the stream file for YOUR persona exists and grows. ⚠️ This check is about a consumer YOU armed. If a consumer from another session is live and you cannot inspect it (for example, the command is denied), that is **not** a reason to arm a second one: report the inbox as watched and move on.
      - **Producer down, or neither stream file exists?** A producer running for a different persona does not cover you; check the file for YOUR persona. **If a supervised producer is installed for your persona, restart THAT** (`systemctl --user restart kijito-inbox-monitor@<P>` on systemd, `launchctl kickstart -k gui/$(id -u)/com.kijito.inbox-monitor` on launchd) — a second, unsupervised producer beside a stopped unit would feed the same stream from a different cursor once the unit comes back, and every message would wake you twice. **If none is installed**, start one and prove it end to end with `~/.claude/kijito-inbox-start.sh --persona <P>` (it names exactly what is missing and is not done until a message you send yourself wakes you). Until it is up, peek now and then with `kijito_hive_inbox(persona="<P>", unread_only=true, mark_read=false)`.
-   - This step runs every session, including after `/clear`; because it checks first, it arms at most one monitor across the life of the `claude` process.
+   - This step runs every session, including after `/clear`; because it checks first (and the waiter refuses a second copy on the same stream), it keeps at most one consumer alive across the life of the `claude` process.
 5. **Resume or report.** If the pointer shows ACTIVE WORK and you were auto-started on an armed pane, continue it autonomously to its DONE-WHEN — do not wait for a prompt. Otherwise, report where things stand and wait for the user.
 
 ## Path B — brand-new persona/project: set up identity first

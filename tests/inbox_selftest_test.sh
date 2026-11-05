@@ -150,6 +150,34 @@ else
 fi
 rm -rf "$H" "$SH"
 
+# 9. THE ONE-SHOT WAITER IS A CONSUMER EVEN THOUGH THE TEST MESSAGE ENDS IT. kijito-inbox-wait.py exits on
+#    the first event (that exit is the wake), so a consumer check made only AFTER the message lands would
+#    find nothing and call a working wake path NOT WORKING. The shim stands in for the producer: the send
+#    appends a `new` row to the stream, exactly what the real producer does a moment later.
+H="$(mktemp -d)"; SH="$(mktemp -d)"
+mkdir -p "$H/.kijito-monitor"; EV="$H/.kijito-monitor/waitee.jsonl"
+printf '{"event": "armed", "persona": "waitee", "cursor": 1}\n' > "$EV"
+printf 'kjt_test' > "$H/.claude_token"; chmod 600 "$H/.claude_token"
+cat > "$SH/curl" <<SHIM
+#!/usr/bin/env bash
+printf '{"event": "new", "persona": "waitee", "id": 2, "wake_class": "mail"}\\n' >> "$EV"
+printf '200'; exit 0
+SHIM
+chmod +x "$SH/curl"
+XDG_CACHE_HOME="$H/xdg" python3 -I "$REPO/providers/claude/scripts/kijito-inbox-wait.py" --events "$EV" --max-wait 60 > "$H/waiter.out" 2>&1 &
+WPID=$!
+i=0; until pgrep -f "^tail -n 0 -F $EV\$" >/dev/null 2>&1 || [ $i -ge 50 ]; do sleep 0.1; i=$((i+1)); done
+out="$(HOME="$H" KIJITOMON_TOKEN_FILE="$H/.claude_token" KIJITOMON_BIN="$(type -P false)" PATH="$SH:$PATH" \
+        "$SELFTEST" --persona waitee --timeout 6 --require-consumer 2>&1)"; rc=$?
+wait "$WPID"; wrc=$?
+if [ "$rc" -eq 0 ] && [ "$wrc" -eq 0 ] && printf '%s' "$out" | grep -q "consumer was attached when the test message landed" \
+   && grep -q '"id": 2' "$H/waiter.out"; then
+  grn "a one-shot waiter that the test message woke counts as the consumer (WORKING, exit 0)"
+else
+  red "one-shot waiter: selftest rc=$rc waiter rc=$wrc: $out :: $(cat "$H/waiter.out")"
+fi
+rm -rf "$H" "$SH"
+
 echo
 echo "passed: $pass   failed: $fail"
 [ "$fail" -eq 0 ] || exit 1

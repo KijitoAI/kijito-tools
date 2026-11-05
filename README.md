@@ -20,6 +20,7 @@ opt-in per pane, and the skills are convenience wrappers, not requirements.
 | Session catch-up (`session-catchup-hint.sh`, a SessionStart hook) | Each session catches up on memory and notes before it starts on the task. | Optional |
 | Armed-pane autonomy (`claude-armed.sh`, `arm-session.sh`, `session-autosend.sh`) | An armed tmux pane sends itself a first prompt and continues preloaded work. Arming is per pane, so one pane can run unattended while you drive another. | Optional |
 | Self-clear loop (`self-clear.sh`, `lifecycle-lib.sh`, `kijito-qa-pass.sh`) | At high measured context, the session curates memory, confirms a fresh session can resume, runs `/clear`, then catches up again and continues. Gated so it will not clear with unsaved work. | Optional (see note) |
+| Inbox waiter (`kijito-inbox-wait.py`) | The session's inbox consumer: run with Bash `run_in_background`, it waits (with no time limit) for the next event on the persona's stream, wakes the session by exiting, and is re-armed after each wake. Holds back network blips. | Yes (inbox) |
 | `kijito-start` skill | The active, thorough version of session catch-up: load memory, read the current-state pointer and recent lessons, arm the inbox, and resume active work — or, for a new persona, set up identity and the pointer. | Yes |
 | `kijito-qa-memory` skill | Memory curation that requires writing the new memories (not only fixing existing ones), then uses a fresh subagent to confirm a cold start can reconstruct the work. | Yes |
 
@@ -174,6 +175,17 @@ a producer for that persona unless one already covers it, sends you a real messa
 consumer line your agent must arm. It exits `0` only when the wake is proven; `3` means the mail reaches your stream and only the
 consumer is left. A producer started this way stops at logout or reboot — for one that stays up, see the
 monitor README's "Running the producer for real (supervision)".
+
+**The consumer is a waiter, not a Monitor.** Claude Code's Monitor tool stops every watch after 30
+minutes, so an inbox watched that way goes deaf, or wakes the session every half hour only to be
+re-armed. The SessionStart hook and the `kijito-start` skill instead have the agent run
+`python3 -I ~/.claude/kijito-inbox-wait.py --persona <name> --events <stream>` with Bash
+`run_in_background`. It blocks until the first wake-worthy event, prints it and exits; background Bash
+has no time limit, and the exit is what wakes the session. The agent re-arms it first and then reads the
+inbox, so mail that arrives in between is in that read. A source-DOWN alert that recovers within
+`--grace` seconds (default 600) wakes nobody; `--grace 0` wakes on every alert. Exit `2` means no stream
+(nothing is collecting the persona's mail, and the line says how to start it), and `4` means another
+waiter already watches the stream.
 
 Three hops, and the verdict names the one that broke: **producer** (a producer runs *and covers this
 persona*, not a sibling's) · **stream** (the message actually lands in this persona's event file) ·

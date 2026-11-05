@@ -38,7 +38,7 @@ PANE="${1:-}"
 POLL="${HEARTBEAT_POLL:-300}"
 QUIET_CHECKS="${HEARTBEAT_QUIET:-4}"
 # How long a persona's event stream may carry unread wake events with NO consumer before this
-# says so. Default 10 min: longer than a Monitor re-arm gap, far shorter than a usage-limit outage.
+# says so. Default 10 min: longer than a waiter or Monitor re-arm gap, far shorter than a usage-limit outage.
 UNCONSUMED_SECS="${HEARTBEAT_UNCONSUMED_SECS:-600}"
 
 _kjt_lib="${KIJITO_LC_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lifecycle-lib.sh}"
@@ -59,8 +59,8 @@ command -v tmux >/dev/null 2>&1 || { lc_log HEARTBEAT_SKIP "no tmux"; exit 0; }
 _pane_hash() { tmux capture-pane -p -t "$1" 2>/dev/null | tail -40 | cksum | awk '{print $1"-"$2}'; }
 
 # ── THE UNCONSUMED-STREAM CHECK ──────────────────────────────────────────────────────────────────
-# WHY: a Claude usage-limit hit ends the agent's turn loop, and the wake-capable consumer (a Monitor
-# tail) dies or expires with it. When the limit clears NOTHING re-arms it: the producer keeps writing
+# WHY: a Claude usage-limit hit ends the agent's turn loop, and the wake-capable consumer (the inbox
+# waiter's tail, or a Monitor's) dies, expires or fires with nobody left to re-arm it. When the limit clears NOTHING re-arms it: the producer keeps writing
 # events, nobody reads them, and the session is permanently deaf while every health signal reads
 # green (producer up, heartbeat fresh, mail landing). That is DIFFERENT from the producer's "dormant
 # inbox" notice, which is about mail nobody has READ on the server; this is about a local stream

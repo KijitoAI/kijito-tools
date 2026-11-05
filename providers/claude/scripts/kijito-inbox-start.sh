@@ -37,6 +37,7 @@ _lib="$_dir/kijito-persona-lib.sh"; [ -r "$_lib" ] || _lib="$HOME/.claude/kijito
 # shellcheck source=/dev/null
 . "$_lib" || { echo "COULD NOT RUN: cannot source kijito-persona-lib.sh"; exit 2; }
 SELFTEST="${KIJITO_SELFTEST:-$_dir/inbox-selftest.sh}"; [ -x "$SELFTEST" ] || SELFTEST="$HOME/.claude/inbox-selftest.sh"
+WAITER="$_dir/kijito-inbox-wait.py"; [ -f "$WAITER" ] || WAITER="$HOME/.claude/kijito-inbox-wait.py"
 
 # ── 0. which API ───────────────────────────────────────────────────────────────────────────────────
 API_FILE="$HOME/.config/kijito-inbox-monitor/api_base"
@@ -177,8 +178,10 @@ if ! printf '%s\n' "$out" | grep -q '^  ok    stream:'; then
 fi
 cat <<EOF
 The monitor is running and your stream is receiving mail. The WAKE is not proven until your agent reads
-the stream. In Claude Code, have your agent arm this ONCE per session (Monitor tool, persistent):
-  tail -n 0 -F $EVENTS | grep --line-buffered -E '"event": ?"(new|alert|recovered|state_corrupt|baseline_skipped|seed_ahead|replay_capped|persona_added|still_unread)"'
+the stream. In Claude Code, have your agent run this with the Bash tool and run_in_background=true, and
+re-arm it each time it wakes (it exits on the first event, which is what wakes the agent; background Bash
+has no time limit, while the Monitor tool stops every watch after 30 minutes):
+  python3 -I $WAITER --persona $(printf '%q' "$PERSONA") --events $(printf '%q' "$EVENTS")
 then send itself one message (kijito_hive_send to "$PERSONA") and confirm it was woken - or re-run:
   $SELFTEST --persona $PERSONA
 Not done until that says the wake is PROVEN.

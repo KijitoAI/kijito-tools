@@ -103,6 +103,8 @@ verdict() {   # $1=producer_ok $2=stream_ok $3=consumer_ok (each 1/0) -> prints,
     printf '%s\n' "  and NOT yet proven to wake you."
     printf '%s\n' "  In your agent session, arm a wake-capable consumer on:"
     printf '%s\n' "    ${EVENTS:-<your events file>}"
+    printf '%s\n' "  In Claude Code that is the inbox waiter, run with Bash run_in_background=true:"
+    printf '%s\n' "    python3 -I ~/.claude/kijito-inbox-wait.py --persona ${PERSONA:-<persona>} --events ${EVENTS:-<your events file>}"
     printf '%s\n' "  then re-run this check. A background \`tail\` that only writes to a file is NOT a"
     printf '%s\n' "  consumer: it captures without re-invoking you, which is indistinguishable from"
     printf '%s\n' "  silence for as long as it lasts."
@@ -243,6 +245,11 @@ if [ "$producer_ok" = 1 ]; then
       printf '%s\n' "COULD NOT MEASURE: the wake path was not exercised. This is not a pass."
       exit 2
     fi
+    # ⚠️ LOOK FOR THE CONSUMER BEFORE THE MESSAGE GOES OUT, TOO. The default Claude Code consumer is a
+    # ONE-SHOT waiter (kijito-inbox-wait.py): it exits on the first event, and that exit IS the wake. So
+    # the test message itself ends it, and a consumer check made only afterwards would report a working
+    # wake as "nothing is reading the stream".
+    if kijito_stream_consumed "$EVENTS"; then pre_consumer=1; fi
     before=$(wc -c < "$EVENTS" 2>/dev/null || echo 0)
     stamp="kijito-inbox-selftest $(date -u +%FT%TZ) $$"
     # Send to SELF. A self-addressed message is the only test message that cannot bother anyone else,
@@ -300,6 +307,9 @@ if [ -n "$EVENTS" ]; then _crc=0; kijito_stream_consumed "$EVENTS" || _crc=$?; f
 if [ "$_crc" = 0 ]; then
   consumer_ok=1
   printf '  ok    consumer: a wake-capable consumer is attached to the stream\n'
+elif [ "${pre_consumer:-0}" = 1 ] && [ "$stream_ok" = 1 ]; then
+  consumer_ok=1
+  printf '  ok    consumer: a wake-capable consumer was attached when the test message landed (a one-shot inbox waiter exits on it; that exit is the wake, so re-arm it)\n'
 elif [ "$_crc" = 2 ]; then
   printf '  ????  consumer: COULD NOT MEASURE - this host offers no way to list processes (no pgrep, no PowerShell)\n'
   printf '\n%s\n' "COULD NOT MEASURE: whether anything reads ${EVENTS} is unknown here. This is not a pass."

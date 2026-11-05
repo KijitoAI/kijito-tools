@@ -138,32 +138,46 @@ session please") works with no flags and outranks this default.
      producer; the helper arms on the supervised stream the same way.
    - If it is not installed, or `codex` was launched with a config override
      that prevents daemon attachment, or the producer's events stream is absent:
-     check whether this session has the `Monitor` tool (Claude Code client).
-     - **If Monitor IS available** (your persona running in a Claude Code
-       session): fall back to the Claude Code arm path — the same proven
-       `tail -F` + `grep` Monitor pattern every Claude Code persona uses
-       (documented in the claude provider's kijito-start skill). Resolve the
-       stream file path for YOUR persona:
+     check whether this session is a Claude Code client (it has Claude Code's
+     Bash tool, which can run a command in the background, and its `Monitor` tool).
+     - **If it IS a Claude Code session** (your persona running in Claude Code):
+       fall back to the Claude Code arm path — the inbox waiter documented in
+       the claude provider's kijito-start skill. Resolve the stream file path
+       for YOUR persona:
        ```bash
        # Whichever of these exists is your stream:
        ls ~/.kijito-monitor/<persona>.jsonl                    # systemd (Linux)
        ls ~/.cache/kijito-inbox-monitor/events.<persona>.ndjson # launchd (macOS)
+       ls ~/.local/state/kijito-inbox-monitor/events.<persona>.ndjson # monitor's own unit, or kijito-inbox-start.sh
        ```
-       If NEITHER exists, the producer is not running — see "Producer down"
+       If NONE exists, the producer is not running — see "Producer down"
        in the claude provider's kijito-start skill (enable with
        `systemctl --user enable --now kijito-inbox-monitor@<persona>` on systemd
        or `launchctl kickstart -k gui/$(id -u)/com.kijito.inbox-monitor` on
-       launchd). Check idempotently — one line per live monitor:
+       launchd). Check idempotently — one line per live consumer:
        ```bash
        pgrep -f "^tail -n 0 -F .*<persona>\.(jsonl|ndjson)"
        ```
-       If nothing prints, arm exactly ONE persistent Monitor:
+       If nothing prints, arm exactly ONE waiter with the Bash tool and
+       `run_in_background: true` (the script is installed by the Claude
+       provider of kijito-tools):
+       ```bash
+       python3 -I ~/.claude/kijito-inbox-wait.py --persona <persona> --events "$STREAM"
        ```
-       Monitor(command="tail -n 0 -F $STREAM | grep --line-buffered -E '\"event\": ?\"(new|alert|recovered|state_corrupt|baseline_skipped|seed_ahead|replay_capped|persona_added|still_unread)\"'", persistent=true)
+       It exits on the first wake-worthy event, which wakes the session, and
+       background Bash has no time limit. Each time it wakes you, re-arm it
+       FIRST, then read the inbox, so mail that lands in between is in that
+       read. Exit `2` means no stream (the producer is not running), `4` means
+       another waiter already watches the stream (the inbox is watched; arm
+       nothing). The `Monitor` tool also works there, but it caps every watch
+       at 30 minutes (it has no persistent option), so use it only if
+       background Bash is unavailable:
+       ```
+       Monitor(command="tail -n 0 -F $STREAM | grep --line-buffered -E '\"event\": ?\"(new|alert|recovered|state_corrupt|baseline_skipped|seed_ahead|replay_capped|persona_added|still_unread)\"'")
        ```
        Report **armed-live (Claude Code fallback)**. This is not an ad-hoc
-       watcher — it is the standard, battle-tested Claude Code wake path.
-     - **If Monitor is NOT available** (Codex CLI without daemon): you are in
+       watcher — it is the standard Claude Code wake path.
+     - **If it is NOT a Claude Code session** (Codex CLI without daemon): you are in
        **catch-up-only**. State that plainly in one line. Do NOT substitute
        ad-hoc watchers or lifecycle hooks — the floor is honest catch-up, not
        an improvised wake path.
