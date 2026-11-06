@@ -70,10 +70,14 @@ bake that branch's in-progress bytes into a machine's hooks. To prevent that, a 
 git checkout is **refused**; choose explicitly:
 
 ```bash
-./install.sh --from-main       # install the stable main bytes (recommended for a shared rollout;
-                               # branch-state-immune — installs via a detached worktree at main)
+./install.sh --from-main       # fetch origin/main and install exactly that tree (recommended for a
+                               # shared rollout; never a stale local `main`; refuses if the fetch fails)
 ./install.sh --allow-branch    # deliberately install THIS branch's bytes (e.g. testing your own work)
 ```
+
+A plain `./install.sh` on `main` first fetches `origin/main` (bounded by a short timeout,
+`KIJITO_TOOLS_FETCH_TIMEOUT`, default 15 s). If local `main` is behind it refuses and says by how much;
+if the fetch fails (offline) it installs anyway with a one-line warning.
 
 A packaged install (`npx kijito-tools`, `pipx run kijito-tools`) is not a git checkout, so the
 bytes ARE the release and no flag is needed.

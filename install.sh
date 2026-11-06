@@ -10,7 +10,7 @@
 #   ./install.sh                      # claude, unchanged from before the providers/ split
 #   ./install.sh --provider codex     # verify the codex release gate; add --skills-only to deploy
 #   ./install.sh --list-providers
-#   ./install.sh --from-main          # install the stable main bytes (branch-state-immune)
+#   ./install.sh --from-main          # fetch origin/main and install exactly that tree
 #   ./install.sh --allow-branch       # deliberately install THIS branch's bytes (off-main opt-in)
 #
 # ⚠️ THE DEFAULT IS LOAD-BEARING AND MUST STAY `claude`. `npx kijito-tools` and
@@ -25,11 +25,22 @@
 #       someone's feature branch silently bakes that branch's in-progress bytes into its hooks.
 #   Either wrong alone is survivable; together they let a machine converge on stale/unreleased bytes
 #   with no error (only reading the installed CONTENT catches it). So main is the documented
-#   path (--from-main, installed via a detached worktree so the caller's branch is untouched), and
+#   path (--from-main: fetch origin/main and install exactly that commit's tree, extracted with
+#   `git archive` into a temp dir, so the caller's branch and working tree are untouched), and
 #   installing from any OTHER branch is made OPT-IN (--allow-branch) — a mere warning still installs
 #   the wrong bytes for anyone who does not read it, so the unsafe path must be opt-in, not opt-out.
 #   (A non-git checkout — npm/pipx packaged release — has no branch to be wrong about, so it is
 #   exempt: the bytes ARE the release.)
+#
+# ⛔ --from-main MEANS ORIGIN'S MAIN, NEVER THE LOCAL `main` REF. A local `main` is only as new as
+#   the last time someone fast-forwarded it, and it cannot be fast-forwarded at all while it is checked
+#   out in another worktree. Measured 2026-11-05: local main sat at 0.2.17 while origin/main was 0.2.23,
+#   and --from-main silently DOWNGRADED ~/.claude by six releases (the second time; the first was
+#   2026-09-11). So --from-main fetches origin/main first and installs that commit's tree; if the fetch
+#   fails it REFUSES, because "install whatever main we last saw" is exactly the stale install it exists
+#   to prevent.
+#   A PLAIN install on main has the same trap (HEAD == local main says nothing about origin), so it
+#   fetches too, bounded by a short timeout: behind origin/main → refuse; offline → install with a warning.
 #
 # Unrecognized arguments are passed through to the provider's own installer untouched, so a
 # provider can add flags without this file needing to know about them.
@@ -56,13 +67,13 @@ usage() {
   echo "  claude provider args:  --persona <name>   name this folder's persona (writes .kijito_persona)"
   echo
   echo "rollout safety (git checkouts only):"
-  echo "  --from-main       install the stable main bytes via a detached worktree (recommended)"
+  echo "  --from-main       fetch origin/main and install exactly its tree (recommended)"
   echo "  --allow-branch    deliberately install the current (off-main) branch's bytes"
 }
 
 # ROLLOUT SAFETY (see the header). git checkouts only; a packaged (non-git) install is exempt.
-# branch_guard refuses a bare install from an off-main checkout; from_main_install performs the
-# main-worktree install. Both are no-ops outside a git checkout.
+# branch_guard refuses a bare install from an off-main checkout; from_main_install fetches origin/main
+# and installs that commit's tree. Neither applies outside a git checkout.
 _on_main_commit() {
   # True iff HEAD sits at main's COMMIT (so a detached HEAD at main counts, not just the branch name).
   local head_sha main_sha
@@ -71,9 +82,46 @@ _on_main_commit() {
   [ -n "$head_sha" ] && [ "$head_sha" = "$main_sha" ]
 }
 
+# _fetch_main: fetch origin's main into the remote-tracking ref, bounded by $FETCH_TIMEOUT seconds and
+# never prompting for credentials. Returns non-zero if the fetch failed or timed out. (No `timeout(1)`:
+# macOS does not ship one, so the bound is a background watcher.)
+_fetch_main() {
+  GIT_TERMINAL_PROMPT=0 git -C "$ROOT" fetch --quiet "$MAIN_REMOTE" \
+    "+refs/heads/main:refs/remotes/$MAIN_REMOTE/main" >/dev/null 2>&1 &
+  local pid=$! rc=0 w
+  ( sleep "$FETCH_TIMEOUT"; kill -TERM "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+  w=$!
+  wait "$pid" || rc=$?
+  pkill -P "$w" 2>/dev/null || true; kill "$w" 2>/dev/null || true; wait "$w" 2>/dev/null || true
+  return "$rc"
+}
+
+# ⛔ "HEAD IS AT MAIN" ONLY MEANS "HEAD IS AT THE LOCAL main REF", and that ref can be months old: it is
+# only as new as its last fast-forward, and cannot be fast-forwarded while main is checked out in another
+# worktree. A plain install that trusted it silently installed stale bytes — the same trap --from-main
+# had. So on main, check against origin first (bounded, see _fetch_main):
+#   · local main BEHIND origin/main → refuse (exit 3), naming the two ways out;
+#   · the fetch FAILS (offline)     → install anyway with a one-line warning, so offline installs keep working.
+# --allow-branch is the deliberate "install these bytes" opt-in, so it skips the check.
+main_freshness_guard() {
+  [ "$ALLOW_BRANCH" -eq 1 ] && return 0
+  if ! _fetch_main; then
+    echo "kijito-tools: warning: could not reach '$MAIN_REMOTE' to check that local main is current; installing local main as is." >&2
+    return 0
+  fi
+  local behind
+  behind="$(git -C "$ROOT" rev-list --count "HEAD..refs/remotes/$MAIN_REMOTE/main" 2>/dev/null || echo 0)"
+  [ "${behind:-0}" -gt 0 ] 2>/dev/null || return 0
+  cat >&2 <<EOF
+ERROR: local main is $behind commits behind $MAIN_REMOTE/main; run ./install.sh --from-main or update main.
+Nothing was installed: installing this checkout would put older bytes into ~/.claude.
+EOF
+  exit 3
+}
+
 branch_guard() {
   git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1 || return 0   # not a git checkout → exempt
-  _on_main_commit && return 0                                       # already main → nothing to guard
+  if _on_main_commit; then main_freshness_guard; return 0; fi       # on main → only freshness to check
   local cur
   cur="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '(unknown)')"
   if [ "$ALLOW_BRANCH" -eq 1 ]; then
@@ -84,7 +132,7 @@ branch_guard() {
 ERROR: kijito-tools is checked out on '$cur', not main.
 The installer COPIES the current working tree into ~/.claude, so a bare install here would bake
 '$cur' bytes into your hooks and skills — and they will NOT update afterward. Choose one:
-  ./install.sh --from-main       # install the stable main bytes (recommended; branch-state-immune)
+  ./install.sh --from-main       # fetch origin/main and install exactly that (recommended)
   ./install.sh --allow-branch    # deliberately install THIS branch's bytes
 EOF
   exit 3
@@ -94,27 +142,49 @@ from_main_install() {
   git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1 || {
     echo "ERROR: --from-main needs a git checkout of kijito-tools (this is a packaged install)." >&2
     exit 3; }
+  # Fetch into the remote-tracking ref explicitly, so the ref we read below is the one we just fetched
+  # whatever fetch refspec this clone happens to have configured.
+  if ! git -C "$ROOT" fetch --quiet "$MAIN_REMOTE" "+refs/heads/main:refs/remotes/$MAIN_REMOTE/main" 2>/dev/null; then
+    cat >&2 <<EOF
+ERROR: --from-main could not fetch '$MAIN_REMOTE/main' in $ROOT, so it cannot know what main is now.
+Nothing was installed: installing the last-seen main could silently downgrade ~/.claude.
+Fix the network or the '$MAIN_REMOTE' remote and run it again (or, deliberately, ./install.sh --allow-branch).
+EOF
+    exit 3
+  fi
   local main_sha
-  main_sha="$(git -C "$ROOT" rev-parse main 2>/dev/null || true)"
-  [ -n "$main_sha" ] || { echo "ERROR: --from-main: no local 'main' ref in $ROOT." >&2; exit 3; }
-  _on_main_commit && return 0    # already at main's commit → fall through to the normal install
-  local wt
-  wt="$(mktemp -d "${TMPDIR:-/tmp}/kjt-claude-main.XXXXXX")"
-  # --detach: main may be checked out elsewhere; a detached worktree at its commit always succeeds.
-  git -C "$ROOT" worktree add --detach "$wt" main >/dev/null 2>&1 || {
-    echo "ERROR: --from-main: could not create a main worktree." >&2; rmdir "$wt" 2>/dev/null; exit 3; }
+  main_sha="$(git -C "$ROOT" rev-parse --verify --quiet "refs/remotes/$MAIN_REMOTE/main^{commit}" || true)"
+  [ -n "$main_sha" ] || { echo "ERROR: --from-main: '$MAIN_REMOTE/main' did not resolve after the fetch. Nothing was installed." >&2; exit 3; }
+  # ⛔ ALWAYS FROM THE FETCHED COMMIT, EVEN WHEN HEAD IS ALREADY THERE: the working tree may hold
+  # uncommitted edits, and --from-main promises origin/main's bytes, not this checkout's.
+  # `git archive` gives exactly that commit's tree in a plain directory: no worktree to register or
+  # remove, the caller's checkout is untouched, and the copy has no .git, so the installer re-invoked
+  # from it treats it as a release (no branch guard, and no way to recurse back here).
+  local tree
+  tree="$(mktemp -d "${TMPDIR:-/tmp}/kjt-from-main.XXXXXX")"
+  if ! git -C "$ROOT" archive --format=tar "$main_sha" | tar -xf - -C "$tree"; then
+    echo "ERROR: --from-main: could not extract $MAIN_REMOTE/main ($main_sha). Nothing was installed." >&2
+    rm -rf "$tree"; exit 3
+  fi
+  echo "kijito-tools: installing $MAIN_REMOTE/main @ ${main_sha:0:12} (fetched just now)." >&2
   local rc=0
-  # Re-invoke the MAIN copy of this installer (its own guard sees main and passes). Do NOT pass
-  # --from-main again — no recursion. Preserve provider + any passthrough args.
-  bash "$wt/install.sh" --provider "$PROVIDER" ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"} || rc=$?
-  # The install only READS the worktree (it copies OUT), so it stays clean → remove without --force
-  # (IRREVERSIBLE: never --force/prune a worktree — that can destroy a sibling's uncommitted work).
-  git -C "$ROOT" worktree remove "$wt" >/dev/null 2>&1 || true
+  # Run from the caller's directory (the provider writes --persona's marker into $PWD). Do NOT pass
+  # --from-main again. Preserve provider + any passthrough args. The ceiling stops git in the child
+  # from discovering an ENCLOSING repository (a TMPDIR inside some checkout), which would make the
+  # extract look like a git checkout and put it back under the branch guard.
+  GIT_CEILING_DIRECTORIES="$(dirname "$tree")" \
+    bash "$tree/install.sh" --provider "$PROVIDER" ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"} || rc=$?
+  rm -rf "$tree"    # our own throwaway extract of a commit that is still in git; nothing else lives there
   exit "$rc"
 }
 
 PROVIDER="claude"
 FROM_MAIN=0
+# The remote whose main --from-main installs. `origin` in every normal clone; overridable for a clone
+# whose upstream is named differently.
+MAIN_REMOTE="${KIJITO_TOOLS_MAIN_REMOTE:-origin}"
+# Upper bound, in seconds, on the freshness fetch a plain install on main makes.
+FETCH_TIMEOUT="${KIJITO_TOOLS_FETCH_TIMEOUT:-15}"
 ALLOW_BRANCH=0
 # bash 3.2 (the macOS default) errors on "${arr[@]}" when arr is empty under `set -u`, so this
 # array is always expanded through the ${arr[@]+...} guard below.
@@ -141,8 +211,8 @@ if [ "$PROVIDER" = "_shared" ] || [ ! -d "$PROVIDER_DIR" ]; then
 fi
 
 # ROLLOUT SAFETY gate — runs after provider validation, before any install.
-# --from-main installs the stable main bytes (and exits), unless HEAD is already main (falls
-# through); otherwise branch_guard refuses a silent off-main install unless --allow-branch opts in.
+# --from-main fetches and installs origin/main's tree (and exits, never falling through to the
+# working tree); otherwise branch_guard refuses a silent off-main install unless --allow-branch opts in.
 if [ "$FROM_MAIN" -eq 1 ]; then
   from_main_install
 fi
