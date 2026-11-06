@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.24
+
+- **The SessionStart hook is about 1,000 characters shorter again.** 0.2.23 grew its output from about
+  1,930 to 2,940 characters in every session for every user. The common case is now about 1,800 (at
+  most 2,000, pinned by `tests/catchup_size_budget_test.sh`). It still gives the one arm command, the
+  re-arm-first-then-read rule, what exit 2 means and the capped Monitor fallback; the full detail (exit
+  codes, the blip debounce and `--grace`, why a bare tail cannot wake anyone) moved to
+  `kijito-inbox-wait.py --help` and the `kijito-start` skill.
+- **`./install.sh --from-main` installs origin/main, never a stale local `main`.** It fetches
+  `origin/main` and installs exactly that commit from a clean extract; if the fetch fails it refuses
+  (exit 3) and installs nothing. A local `main` checked out in an old worktree could not be
+  fast-forwarded, and the install silently downgraded `~/.claude`.
+- **A plain `./install.sh` on `main` checks that `main` is current.** If local `main` is behind
+  `origin/main` it refuses (exit 3) and names `--from-main`; if origin cannot be reached it installs
+  with a one-line warning, so offline installs keep working.
+
 ## 0.2.23
 
 - **The inbox watch no longer dies after 30 minutes.** Claude Code's Monitor tool caps every watch at
