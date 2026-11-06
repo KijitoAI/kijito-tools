@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.25
+
+- **Fix: a project with a `.kijito_persona` marker was told it had none.** On a host whose
+  kijito-inbox-monitor predates `--safe-persona`, the SessionStart hook found the persona's stream by
+  the persona stamped in its events and reported the producer UP for that persona, yet still printed
+  "No .kijito_persona marker in this project" with the `<persona>` template, and skipped the
+  already-watched check (so a session with a live waiter was told to arm another, which then refused
+  with exit 4). The check and the arming block now use the stream whenever it is known.
+
 ## 0.2.24
 
 - **The SessionStart hook is about 1,000 characters shorter again.** 0.2.23 grew its output from about
