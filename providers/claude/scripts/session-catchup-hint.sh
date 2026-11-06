@@ -197,6 +197,11 @@ elif [ -d "$HOME/.cache/kijito-inbox-monitor" ]; then _events="$_mac_events"; _s
 elif [ -f "$HOME/Library/LaunchAgents/com.kijito.inbox-monitor.plist" ]; then _events="$_mac_events"; _sup="launchd"
 elif [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then _events="$_mac_events"; _sup="launchd"
 else _events="$_lnx_events"; _sup="systemd"; fi
+# THE STREAM IS KNOWN when the producer answered --safe-persona OR its own output named this persona's
+# file (_found). An old producer that cannot answer --safe-persona still names the file, so gating the
+# consumer check and the arming block on _safe alone told a session with a marker that it had none and
+# skipped the already-watched check.
+_stream_known=""; { [ -n "$_safe" ] || { [ -n "$_persona" ] && [ -n "$_found" ]; }; } && _stream_known=1
 # NATIVE WINDOWS (Git Bash): the stream may sit in the macOS-shaped path, but nothing there is launchd.
 # The supervisor is whatever the user registered - in practice a Scheduled Task.
 if command -v kijito_host_is_windows >/dev/null 2>&1 && kijito_host_is_windows; then _sup="task"; fi
@@ -303,7 +308,7 @@ EOF
 # very duplicate-monitor bug this block exists to prevent. Match on the resolved events file's
 # basename instead.
 _armed=""; _armed_unknown=""
-if [ -n "$_safe" ]; then
+if [ -n "$_stream_known" ]; then
   _evbase=$(basename "$_events")
   # basename is a literal filename; escape the regex metacharacter it can contain (.) so a dot
   # cannot match an arbitrary character and over-report.
@@ -402,7 +407,7 @@ No background Bash? The Monitor tool CAPS EVERY WATCH AT 30 MINUTES; re-arm it w
 ARMHOW
 }
 
-if [ -n "$_safe" ] && [ -n "$_armed" ] && [ -n "$_win_orphans" ]; then
+if [ -n "$_stream_known" ] && [ -n "$_armed" ] && [ -n "$_win_orphans" ]; then
 cat <<EOF
 
 [INBOX WAKE — only OLD tails on your stream; they may be leaked orphans] Tailing $_events: pid(s) $_armed.$_stale_note
@@ -410,7 +415,7 @@ The waiter (Bash, run_in_background=true; re-arm it after each wake):
   python3 -I $(_shq "$_wait_py") --persona $(_shq "$_persona") --events $(_shq "$_events")
 $_prod
 EOF
-elif [ -n "$_safe" ] && [ -n "$_armed" ]; then
+elif [ -n "$_stream_known" ] && [ -n "$_armed" ]; then
 cat <<EOF
 
 [INBOX WAKE — your inbox is ALREADY WATCHED; arm nothing, ask for nothing] A live consumer already tails
@@ -422,7 +427,7 @@ is not yours, peek when needed: kijito_hive_inbox(persona="$_persona", unread_on
 If your OWN task list shows more than one inbox consumer, TaskStop all but one; never \`pkill -f …events…\`.$_stale_note
 $_prod
 EOF
-elif [ -n "$_safe" ]; then
+elif [ -n "$_stream_known" ]; then
 cat <<EOF
 
 [INBOX WAKE — how mail reaches this session] If \`pgrep -f "^tail -n 0 -F .*$(basename "$_events")"\` prints
