@@ -274,6 +274,11 @@ check_hook() {
   if grep -q "UP for 'ghost'" <<<"$out"; then
     grn "$label: live producer for this persona → by-content route still reports UP"
   else red "$label: live producer for this persona → by-content route no longer reports UP"; bad=1; fi
+  # The arming block must use the persona the marker named. Gating it on the --safe-persona answer
+  # alone told a session WITH a marker that it had none and printed the <persona> template.
+  if ! grep -q "No .kijito_persona marker" <<<"$out" && grep -q "\-\-persona 'ghost'" <<<"$out"; then
+    grn "$label: old producer, stream found by stamp → arming block names the marker's persona"
+  else red "$label: old producer, stream found by stamp → hook claims no marker / prints the template"; bad=1; fi
   # A producer for a persona whose name merely STARTS with ours is not ours: "--persona ghostly" must not
   # satisfy "--persona ghost" (an inline grep -F matches it as a substring).
   out="$(printf '{"source":"startup","cwd":"%s"}' "$proj2" \
