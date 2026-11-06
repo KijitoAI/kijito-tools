@@ -9,8 +9,18 @@ re-arm it each time it wakes you.
 
     python3 -I ~/.claude/kijito-inbox-wait.py --persona <P> --events <stream file>
 
-ON WAKE: re-arm FIRST (the same command), THEN read the inbox. Mail that lands between the wake
+ON WAKE: re-arm FIRST (the same command), THEN read the inbox with
+kijito_hive_inbox(persona=<P>, unread_only=true, mark_read=false). Mail that lands between the wake
 and the re-arm is in that read, so nothing falls in the gap.
+
+WHY NOT A BARE `tail -F` IN THE BACKGROUND. It is CAPTURE-ONLY: it never exits, so the harness never
+re-invokes the agent and mail sits unseen. A consumer wakes a session only by exiting (background
+Bash) or by printing into a Monitor. Arm at most ONE consumer per stream: a second one double-fires
+every event (this waiter refuses to start a second copy; see exit 4).
+
+NO BACKGROUND BASH? Use the Monitor tool with `tail -n 0 -F <stream> | grep --line-buffered -E
+'"event": ?"(new|alert|...)"'` (the SessionStart hook prints the exact line). It stops after 30
+minutes, so re-arm it each time it ends.
 
 It follows the stream with a real `tail -n 0 -F <stream>` child, so every existing consumer
 probe (the SessionStart hook, the heartbeat watchdog, inbox-selftest, the skills' pgrep) sees
@@ -31,9 +41,9 @@ NETWORK-BLIP DEBOUNCE. On a flaky network the producer emits a source-DOWN `aler
 after, `recovered`. Each used to wake the agent for nothing. By default a source-DOWN alert that
 is followed by `recovered` within --grace seconds (600) wakes nobody; one still unrecovered when
 the window ends wakes you with the alert. A `recovered` with no pending alert does not wake.
---grace 0 turns the debounce off: every alert and every `recovered` wakes at once, as before. ONLY the source-DOWN alert (the one carrying
-`consecutive_failures`) is debounced: every other alert, `new`, `still_unread` and every other
-diagnostic wakes immediately.
+--grace 0 turns the debounce off: every alert and every `recovered` wakes at once, as before.
+ONLY the source-DOWN alert (the one carrying `consecutive_failures`) is debounced: every other
+alert, `new`, `still_unread` and every other diagnostic wakes immediately.
 
 stdlib only; safe under `python3 -I`.
 """
@@ -184,10 +194,14 @@ class _Args(argparse.ArgumentParser):
 
 
 def main(argv=None):
+    # --help prints the module docstring: it is the one full account of the exit codes, the debounce and
+    # why a bare tail cannot wake anyone. The SessionStart hook stays short and points here instead.
     ap = _Args(
         prog="kijito-inbox-wait",
-        description="Wait for the next wake-worthy Kijito inbox event, print it and exit. "
-                    "Run with Bash run_in_background=true; re-arm after each wake.")
+        # (`python3 -OO` strips docstrings; fall back to the one-line summary rather than crash.)
+        description=(__doc__ or "Wait for the next wake-worthy Kijito inbox event, print it and exit. "
+                     "Run with Bash run_in_background=true; re-arm after each wake.").split("\nstdlib only")[0].strip(),
+        formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--persona", help="persona whose stream to watch (default: the .kijito_persona marker)")
     ap.add_argument("--events", help="the event stream file (default: resolved from the persona)")
     ap.add_argument("--grace", type=float, default=600.0, metavar="SECONDS",

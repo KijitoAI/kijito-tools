@@ -240,9 +240,9 @@ elif pgrep -f "kijito_inbox_monitor\.py|bin/kijito-inbox-monitor" >/dev/null 2>&
 else _prc=1; fi
 if [ "$_prc" = 0 ]; then
   if [ -z "$_persona" ]; then
-    _prod="inbox-monitor producer: a producer process is running (persona unknown here — no .kijito_persona marker, so this hook cannot tell whether it covers YOUR inbox)."
+    _prod="inbox-monitor producer: a producer process is running (with no persona marker this hook cannot tell whether it covers YOUR inbox)."
   elif [ "$_rule" = by-content ]; then
-    _prod="inbox-monitor producer: UP for '$_persona' ($_sup; events → $_events — identified from the stream's own persona stamp and confirmed against a running producer's own arguments, because the installed producer could not be asked for the filename rule)."
+    _prod="inbox-monitor producer: UP for '$_persona' ($_sup; the stream was found by its own persona stamp and a running producer's arguments, as the installed producer cannot answer --safe-persona)."
   elif [ "$_rule" = stale-stream ]; then
     # The most diagnosable state of the lot, and easy to misread as UP: the file is there, nothing is
     # writing it. Say that, rather than the generic "not being collected" — a stale file and a missing
@@ -256,13 +256,15 @@ if [ "$_prc" = 0 ]; then
   elif [ "$_rule" = no-producer ]; then
     _prod="inbox-monitor producer: a producer process is running, but no kijito-inbox-monitor executable is on this PATH, so this hook cannot resolve where '$_persona''s events are written (set \$KIJITOMON_BIN if it lives somewhere unusual)."
   elif [ -e "$_events" ]; then
-    _prod="inbox-monitor producer: UP for '$_persona' ($_sup; events → $_events)."
+    # No path here: whenever this line is reachable the arming block above it already names the stream.
+    _prod="inbox-monitor producer: UP for '$_persona' ($_sup)."
   else
     # The case that matters on a multi-persona host: one persona's producer is up, another's is not,
     # and a host-global check would call that UP and send the agent off to tail a missing file.
     # The path below came from the PRODUCER's own rule, so "does not exist" now means the stream is
     # genuinely absent rather than that we spelled the name differently than the writer did.
-    _prod="inbox-monitor producer: a producer is running but NOT for '$_persona' — $_events does not exist, so YOUR mail is not being collected. Start one: $(_hint "$_persona")"
+    # (No path: the arming block above already names the stream that does not exist.)
+    _prod="inbox-monitor producer: a producer is running but NOT for '$_persona' — your stream does not exist, so YOUR mail is not being collected. Start one: $(_hint "$_persona")"
   fi
 elif [ "$_prc" = 2 ]; then
   if [ -n "$_safe" ] && [ -e "$_events" ]; then
@@ -281,7 +283,7 @@ Kijito sessions usually catch up before the user's task, so they continue rather
 1) kijito_startup(persona=<the persona setup recorded>), adding project=<name> ONLY if setup recorded a project
    (omit project= otherwise; never derive it from the directory name), then kijito_get the current-state pointer
    it names, then skim recent lessons.
-2) A wake-capable inbox consumer (the INBOX WAKE block below) is what lets mail reach this session; a bare background tail does not.
+2) Mail reaches this session only through a wake-capable inbox consumer (INBOX WAKE below); a bare background tail is not one.
 3) In a brand-new project with no persona yet, ./CLAUDE.md and ~/.claude/CLAUDE.md say which persona/project to write memories under.
 For a context figure, ~/.claude/myctx.sh measures it; a felt sense of "full" is unreliable.
 EOF
@@ -341,7 +343,7 @@ fi
 # After /clear or compaction the agent cannot see its own earlier arming result, so a >30-min tail may be
 # its OWN consumer. Say so rather than calling every old tail an orphan.
 _own_note=""
-case "$src" in clear|compact) _own_note=" — and this session was just reset, so one of them may be YOUR OWN pre-reset waiter or Monitor, whose result line you can no longer see" ;; esac
+case "$src" in clear|compact) _own_note=" — this session was just reset, so one may be YOUR OWN pre-reset waiter or Monitor" ;; esac
 # THE >30-MIN NOTE DEPENDS ON THE HOST. Only Windows/Git Bash leaks a tail when its Monitor expires, so
 # only there is an old tail (with no waiter behind it) likely an orphan. On macOS and Linux an expired
 # Monitor takes its tail with it: a tail older than 30 min belongs to a long-lived consumer (an inbox
@@ -353,18 +355,14 @@ _stale_note=""
 if [ -n "${_stale_only:-}" ]; then
   if command -v kijito_host_is_windows >/dev/null 2>&1 && kijito_host_is_windows; then
     _stale_note='
-⚠️ EVERY tail listed is older than 30 min and no inbox waiter (kijito-inbox-wait.py) names this stream. A
-Monitor caps at 30 min, so on this host they are most likely LEAKED ORPHANS that wake nobody (Windows/Git
-Bash does not kill a tail when its Monitor expires)'"${_own_note}"'.
-The safe move: stop these BY PID (kill <pid>), never by pattern, and arm one fresh waiter — you end with
-exactly one consumer you KNOW wakes you.'
+⚠️ EVERY tail listed is older than 30 min and no inbox waiter names this stream. Windows/Git Bash does not
+kill a tail when its Monitor expires, so these are most likely LEAKED ORPHANS that wake nobody'"${_own_note}"'.
+Stop them BY PID (kill <pid>), never by pattern, then arm one waiter.'
   else
     _stale_note='
-Every tail listed is older than 30 min. On this host an expired Monitor takes its tail with it, so each of
-these belongs to a long-lived consumer — an inbox waiter, or an older "persistent" Monitor: yours, or a
-sibling session'"'"'s LIVE consumer'"${_own_note}"'.
-Do NOT stop any of them unless it is in YOUR OWN task list - stopping a sibling'"'"'s tail silently cuts its
-mail. If none is yours, the inbox is still watched (by that session), so arm nothing.'
+Every tail listed is older than 30 min. Here an expired Monitor takes its tail with it, so
+each belongs to a long-lived consumer (a waiter, or an older "persistent" Monitor): yours or a sibling'"'"'s'"${_own_note}"'.
+Stop one only if it is in YOUR OWN task list (a sibling'"'"'s tail is its mail); if none is, arm nothing.'
   fi
 fi
 
@@ -382,85 +380,64 @@ if [ -n "${_stale_only:-}" ] && command -v kijito_host_is_windows >/dev/null 2>&
 # half hour to be re-armed. The default consumer is therefore a ONE-SHOT WAITER run with Bash
 # run_in_background: background Bash has no time limit and wakes the session exactly once, when the
 # waiter exits on the first wake-worthy event. The Monitor line stays only for hosts without background Bash.
+#
+# ⛔ THIS TEXT IS INJECTED INTO EVERY SESSION OF EVERY USER, SO IT HAS A SIZE BUDGET (≤ 2,000 chars for the
+# common "producer up, nothing armed yet" case; pinned by tests/catchup_size_budget_test.sh). 0.2.23 grew
+# it to ~2,940 by explaining the waiter here. The hook says only what an agent needs to arm correctly: the
+# one command, the re-arm-then-read rule, what exit 2 means, and the Monitor fallback. Everything else
+# (exit codes 1/3/4/5, the network-blip debounce and --grace, why a bare tail is capture-only) lives in
+# the waiter's own --help (its module docstring) and the kijito-start skill. Add detail THERE, not here.
 _shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 _wait_py="$_kjt_dir/kijito-inbox-wait.py"
 [ -f "$_wait_py" ] || _wait_py="$HOME/.claude/kijito-inbox-wait.py"
 _mon_filter="grep --line-buffered -E '\\\"event\\\": ?\\\"(new|alert|recovered|state_corrupt|baseline_skipped|seed_ahead|replay_capped|persona_added|still_unread)\\\"'"
-_wait_how() {  # $1 = the inbox read to do after re-arming
-  cat <<WAITHOW
-It blocks until the first wake-worthy event on your stream, prints it and EXITS, and that exit is
-what re-invokes you. Background Bash has no time limit. It sleeps through network blips (a "source is
-DOWN" alert that recovers within 10 min; add --grace 0 to wake on every alert) and refuses to start a
-second waiter on the same stream (exit 4: already watched, arm nothing). Exit 2 = NO STREAM: the
-producer is not running, and the line it prints says how to start it.
-⇒ EACH TIME IT WAKES YOU: RE-ARM IT FIRST (the same call), THEN read the inbox:
-  $1
-Mail that lands between the wake and the re-arm is in that read, so nothing falls in the gap.
-WAITHOW
+_arm_how() {  # $1 = the waiter's argument list, $2 = the persona for the inbox read, $3 = the Monitor's stream
+  cat <<ARMHOW
+  Bash(command="python3 -I $(_shq "$_wait_py") $1", run_in_background=true)
+EACH TIME IT WAKES YOU: RE-ARM IT FIRST (the same call), THEN read the inbox with
+kijito_hive_inbox(persona="$2", unread_only=true, mark_read=false). Exit 2 = NO STREAM: nothing writes
+your stream; its line says how to start the producer. More: the waiter's --help.
+No background Bash? The Monitor tool CAPS EVERY WATCH AT 30 MINUTES; re-arm it when it ends:
+  Monitor(command="tail -n 0 -F $3 | $_mon_filter")
+ARMHOW
 }
-_mon_alt='Only if this host has NO background Bash: the Monitor tool works, but it CAPS EVERY WATCH AT 30 MINUTES
-(there is no persistent option), so you are woken at expiry and must re-arm it:'
 
 if [ -n "$_safe" ] && [ -n "$_armed" ] && [ -n "$_win_orphans" ]; then
 cat <<EOF
 
-[INBOX WAKE — only OLD tails on your stream; they may be leaked orphans] One or more processes are
-tailing $_events (pid(s): $_armed). The consumer line, if you end up arming one (Bash, run_in_background=true):
+[INBOX WAKE — only OLD tails on your stream; they may be leaked orphans] Tailing $_events: pid(s) $_armed.$_stale_note
+The waiter (Bash, run_in_background=true; re-arm it after each wake):
   python3 -I $(_shq "$_wait_py") --persona $(_shq "$_persona") --events $(_shq "$_events")
-Re-arm it after each wake. Dedupe with TaskStop (agent-scoped), NOT \`pkill -f …events…\` (that can kill a
-sibling's or your own live consumer).$_stale_note $_prod
+$_prod
 EOF
 elif [ -n "$_safe" ] && [ -n "$_armed" ]; then
 cat <<EOF
 
 [INBOX WAKE — your inbox is ALREADY WATCHED; arm nothing, ask for nothing] A live consumer already tails
-$_events (pid(s): $_armed). It may be your own inbox waiter from before a /clear or /compact, or
-another session of persona "$_persona" (another pane, or an earlier run in this one). Either way:
-  • Do NOT arm another waiter or Monitor: a second consumer on the same stream double-fires every event.
-  • Do NOT ask the human to approve or start one, and do NOT tell them alerts are off. Say the inbox is
-    watched and carry on. Being unable to inspect that process is not a reason to arm another.
-  • Mail wakes the session that owns that consumer. If that is not you, peek when you need to:
-    kijito_hive_inbox(persona="$_persona", unread_only=true, mark_read=false).
-  • If your OWN task list shows more than one inbox consumer, TaskStop all but one. Never \`pkill -f …events…\`
-    (that can kill a sibling's or your own live consumer).$_stale_note $_prod
+$_events (pid(s): $_armed): your own waiter from before a /clear or /compact, or another session
+of persona "$_persona". A second consumer double-fires every event, so arm no other waiter or Monitor.
+Do NOT ask the human to approve one or tell them alerts are off; say the inbox is watched (being unable
+to inspect that process is no reason to arm another). If the consumer
+is not yours, peek when needed: kijito_hive_inbox(persona="$_persona", unread_only=true, mark_read=false).
+If your OWN task list shows more than one inbox consumer, TaskStop all but one; never \`pkill -f …events…\`.$_stale_note
+$_prod
 EOF
 elif [ -n "$_safe" ]; then
 cat <<EOF
 
-[INBOX WAKE — how mail reaches this session] Mail wakes a session only through a wake-capable
-consumer; a bare background \`tail\` is CAPTURE-ONLY (it never exits, so it never re-invokes the agent).
-In Claude Code the consumer is the inbox WAITER, run with the Bash tool and run_in_background=true.
-The persona for this project is "$_persona". First confirm nothing already watches its stream (avoid
-double-arming): \`pgrep -f "^tail -n 0 -F .*$(basename "$_events")"\` prints one line per live consumer,
-waiter or Monitor.${_armed_unknown:+ ⚠️ This hook could NOT check for an existing consumer on this host (no pgrep / PowerShell), so it may be armed already: check your task list before arming.}
-If none, arm exactly one:
-
-  Bash(command="python3 -I $(_shq "$_wait_py") --persona $(_shq "$_persona") --events $(_shq "$_events")", run_in_background=true)
-
-$(_wait_how "kijito_hive_inbox(persona=\"$_persona\", unread_only=true, mark_read=false)")
-
-$_mon_alt
-  Monitor(command="tail -n 0 -F $_events | $_mon_filter")
-
+[INBOX WAKE — how mail reaches this session] If \`pgrep -f "^tail -n 0 -F .*$(basename "$_events")"\` prints
+nothing, arm exactly one inbox waiter:${_armed_unknown:+ (⚠️ this hook could NOT check for an existing consumer on this host, so check your task list first.)}
+$(_arm_how "--persona $(_shq "$_persona") --events $(_shq "$_events")" "$_persona" "$_events")
 $_prod
 EOF
 else
 cat <<EOF
 
-[INBOX WAKE — how mail reaches this session] Mail wakes a session only through a wake-capable
-consumer; a bare background \`tail\` is CAPTURE-ONLY (it never exits, so it never re-invokes the agent).
-In Claude Code the consumer is the inbox WAITER, run with the Bash tool and run_in_background=true.
-With your persona name in place of <persona>:
-
-  Bash(command="python3 -I $(_shq "$_wait_py") --persona <persona>", run_in_background=true)
-
-$(_wait_how 'kijito_hive_inbox(persona="<persona>", unread_only=true, mark_read=false)')
-
-$_mon_alt
-  Monitor(command="tail -n 0 -F $_events_tmpl | $_mon_filter")
-
-(No .kijito_persona marker found in this project — add a one-line \`.kijito_persona\` file with your
-persona name in the project root so this resolves automatically next session.) $_prod
+[INBOX WAKE — how mail reaches this session] With your persona in place of <persona>, arm exactly one
+inbox waiter:
+$(_arm_how "--persona <persona>" "<persona>" "$_events_tmpl")
+(No .kijito_persona marker in this project: a one-line \`.kijito_persona\` file naming your persona makes
+this resolve next session.) $_prod
 EOF
 fi
 
