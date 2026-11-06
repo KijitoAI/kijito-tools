@@ -75,6 +75,10 @@ git checkout is **refused**; choose explicitly:
 ./install.sh --allow-branch    # deliberately install THIS branch's bytes (e.g. testing your own work)
 ```
 
+A plain `./install.sh` on `main` first fetches `origin/main` (bounded by a short timeout,
+`KIJITO_TOOLS_FETCH_TIMEOUT`, default 15 s). If local `main` is behind it refuses and says by how much;
+if the fetch fails (offline) it installs anyway with a one-line warning.
+
 A packaged install (`npx kijito-tools`, `pipx run kijito-tools`) is not a git checkout, so the
 bytes ARE the release and no flag is needed.
 

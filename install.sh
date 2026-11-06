@@ -39,6 +39,8 @@
 #   2026-09-11). So --from-main fetches origin/main first and installs that commit's tree; if the fetch
 #   fails it REFUSES, because "install whatever main we last saw" is exactly the stale install it exists
 #   to prevent.
+#   A PLAIN install on main has the same trap (HEAD == local main says nothing about origin), so it
+#   fetches too, bounded by a short timeout: behind origin/main → refuse; offline → install with a warning.
 #
 # Unrecognized arguments are passed through to the provider's own installer untouched, so a
 # provider can add flags without this file needing to know about them.
@@ -80,9 +82,46 @@ _on_main_commit() {
   [ -n "$head_sha" ] && [ "$head_sha" = "$main_sha" ]
 }
 
+# _fetch_main: fetch origin's main into the remote-tracking ref, bounded by $FETCH_TIMEOUT seconds and
+# never prompting for credentials. Returns non-zero if the fetch failed or timed out. (No `timeout(1)`:
+# macOS does not ship one, so the bound is a background watcher.)
+_fetch_main() {
+  GIT_TERMINAL_PROMPT=0 git -C "$ROOT" fetch --quiet "$MAIN_REMOTE" \
+    "+refs/heads/main:refs/remotes/$MAIN_REMOTE/main" >/dev/null 2>&1 &
+  local pid=$! rc=0 w
+  ( sleep "$FETCH_TIMEOUT"; kill -TERM "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+  w=$!
+  wait "$pid" || rc=$?
+  pkill -P "$w" 2>/dev/null || true; kill "$w" 2>/dev/null || true; wait "$w" 2>/dev/null || true
+  return "$rc"
+}
+
+# ⛔ "HEAD IS AT MAIN" ONLY MEANS "HEAD IS AT THE LOCAL main REF", and that ref can be months old: it is
+# only as new as its last fast-forward, and cannot be fast-forwarded while main is checked out in another
+# worktree. A plain install that trusted it silently installed stale bytes — the same trap --from-main
+# had. So on main, check against origin first (bounded, see _fetch_main):
+#   · local main BEHIND origin/main → refuse (exit 3), naming the two ways out;
+#   · the fetch FAILS (offline)     → install anyway with a one-line warning, so offline installs keep working.
+# --allow-branch is the deliberate "install these bytes" opt-in, so it skips the check.
+main_freshness_guard() {
+  [ "$ALLOW_BRANCH" -eq 1 ] && return 0
+  if ! _fetch_main; then
+    echo "kijito-tools: warning: could not reach '$MAIN_REMOTE' to check that local main is current; installing local main as is." >&2
+    return 0
+  fi
+  local behind
+  behind="$(git -C "$ROOT" rev-list --count "HEAD..refs/remotes/$MAIN_REMOTE/main" 2>/dev/null || echo 0)"
+  [ "${behind:-0}" -gt 0 ] 2>/dev/null || return 0
+  cat >&2 <<EOF
+ERROR: local main is $behind commits behind $MAIN_REMOTE/main; run ./install.sh --from-main or update main.
+Nothing was installed: installing this checkout would put older bytes into ~/.claude.
+EOF
+  exit 3
+}
+
 branch_guard() {
   git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1 || return 0   # not a git checkout → exempt
-  _on_main_commit && return 0                                       # already main → nothing to guard
+  if _on_main_commit; then main_freshness_guard; return 0; fi       # on main → only freshness to check
   local cur
   cur="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '(unknown)')"
   if [ "$ALLOW_BRANCH" -eq 1 ]; then
@@ -144,6 +183,8 @@ FROM_MAIN=0
 # The remote whose main --from-main installs. `origin` in every normal clone; overridable for a clone
 # whose upstream is named differently.
 MAIN_REMOTE="${KIJITO_TOOLS_MAIN_REMOTE:-origin}"
+# Upper bound, in seconds, on the freshness fetch a plain install on main makes.
+FETCH_TIMEOUT="${KIJITO_TOOLS_FETCH_TIMEOUT:-15}"
 ALLOW_BRANCH=0
 # bash 3.2 (the macOS default) errors on "${arr[@]}" when arr is empty under `set -u`, so this
 # array is always expanded through the ${arr[@]+...} guard below.

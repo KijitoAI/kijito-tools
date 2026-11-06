@@ -157,6 +157,47 @@ if [ "$MUTATION" -eq 0 ]; then
   [ "$RC" -eq 0 ] && [ "$MARKER" = "MAIN" ] && grn "D bare install on main proceeds (MAIN)" \
     || red "D bare install on main should proceed with MAIN (rc=$RC marker=$MARKER)"
 
+  # F. A PLAIN install on a STALE local main: HEAD == local main, but origin/main moved on. "On main" must
+  # not mean "current" — refuse (exit 3) and name both ways out, installing nothing.
+  make_repo "$REPO/install.sh" "$WORK/f"
+  advance_origin "$WORK/f" MAIN2
+  run "$WORK/f"
+  [ "$RC" -eq 3 ] && [ "$MARKER" = "<none>" ] && grn "F plain install on a stale local main refused (rc=3, nothing installed)" \
+    || red "F plain install on a stale local main should refuse with exit 3 (rc=$RC marker=$MARKER)"
+  msg="$( cd "$WORK/f"; KJT_TEST_OUT=/dev/null bash install.sh --provider testprov 2>&1 >/dev/null || true )"
+  grep -q "local main is 1 commits behind origin/main" <<<"$msg" && grep -q -- "--from-main" <<<"$msg" \
+    && grn "F the refusal says how far behind and names --from-main" || red "F refusal text wrong: $msg"
+  # ...and once main is updated, the same plain install goes through with the new bytes.
+  ( cd "$WORK/f"; git merge -q --ff-only origin/main )
+  run "$WORK/f"
+  [ "$RC" -eq 0 ] && [ "$MARKER" = "MAIN2" ] && grn "F after updating main, the plain install proceeds (MAIN2)" \
+    || red "F after updating main the plain install should proceed (rc=$RC marker=$MARKER)"
+
+  # G. OFFLINE: on main, but the remote cannot be reached. Offline installs must keep working, with a
+  # one-line warning that freshness could not be checked.
+  make_repo "$REPO/install.sh" "$WORK/g"
+  git -C "$WORK/g" remote set-url origin "$WORK/no-such-remote.git"
+  run "$WORK/g"
+  [ "$RC" -eq 0 ] && [ "$MARKER" = "MAIN" ] && grn "G offline plain install on main still installs (MAIN)" \
+    || red "G offline plain install should still install (rc=$RC marker=$MARKER)"
+  msg="$( cd "$WORK/g"; KJT_TEST_OUT=/dev/null bash install.sh --provider testprov 2>&1 >/dev/null || true )"
+  [ "$(grep -c "could not reach 'origin' to check that local main is current" <<<"$msg")" = 1 ] \
+    && grn "G it prints one warning that freshness could not be checked" || red "G missing the offline warning: $msg"
+
+  # G2. A HANGING remote must not hang the install: the fetch is bounded (here 2 s), then it is treated as
+  # offline. The ext:: transport stands in for a network that accepts and never answers.
+  make_repo "$REPO/install.sh" "$WORK/g2"
+  git -C "$WORK/g2" config protocol.ext.allow always
+  git -C "$WORK/g2" remote set-url origin "ext::sh -c sleep% 30"
+  t0=$(date +%s)
+  ( cd "$WORK/g2"; KIJITO_TOOLS_FETCH_TIMEOUT=2 KJT_TEST_OUT="$WORK/g2/.installed_marker" \
+      bash install.sh --provider testprov >/dev/null 2>&1 ); RC=$?
+  el=$(( $(date +%s) - t0 ))
+  MARKER="$( [ -f "$WORK/g2/.installed_marker" ] && cat "$WORK/g2/.installed_marker" || echo '<none>' )"
+  [ "$RC" -eq 0 ] && [ "$MARKER" = "MAIN" ] && [ "$el" -lt 15 ] \
+    && grn "G2 a hanging remote is cut off by the fetch timeout (${el}s) and the install proceeds" \
+    || red "G2 hanging remote: rc=$RC marker=$MARKER after ${el}s"
+
   # E. a NON-git checkout (packaged release) is exempt — the bytes ARE the release.
   make_repo "$REPO/install.sh" "$WORK/e"
   ( cd "$WORK/e"; git checkout -q feature )
@@ -178,6 +219,20 @@ else
   # the defect. If this does NOT happen, scenario A above proves nothing.
   [ "$RC" -eq 0 ] && [ "$MARKER" = "FEATURE" ] && grn "mutation: neutered guard installs FEATURE (A discriminates)" \
     || red "mutation: neutered guard should have installed FEATURE (rc=$RC marker=$MARKER)"
+
+  # Freshness mutant: the plain-install check on main neutered. F's stale local main must then install
+  # the stale MAIN silently — proving F is what catches it.
+  mut3="$WORK/install.mutated3.sh"
+  sed 's/^main_freshness_guard() {$/main_freshness_guard() { return 0;/' "$REPO/install.sh" > "$mut3"
+  if cmp -s "$mut3" "$REPO/install.sh"; then
+    red "mutation: the freshness mutant did not apply — the sed no longer matches, so it proves nothing"
+  else
+    make_repo "$mut3" "$WORK/m3"
+    advance_origin "$WORK/m3" MAIN2
+    run "$WORK/m3"
+    [ "$RC" -eq 0 ] && [ "$MARKER" = "MAIN" ] && grn "mutation: no freshness check installs the stale MAIN (F discriminates)" \
+      || red "mutation: the freshness mutant should have installed stale MAIN (rc=$RC marker=$MARKER)"
+  fi
 
   # Stale-local-main mutant: --from-main reads the LOCAL main ref again. C2's stale-local-main case must then install
   # the stale MAIN — proving C2 is what catches the downgrade.
