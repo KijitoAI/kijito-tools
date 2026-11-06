@@ -6,7 +6,12 @@
 # facts let a machine running a bare `./install.sh` bake a feature branch's in-progress bytes into
 # its hooks with no error — or install STALE bytes because the shared checkout sits on a branch
 # predating a fix on main, which only reading the installed CONTENT catches. The remedy is: refuse a silent off-main install (require --allow-branch to opt
-# in), and offer --from-main to install the stable main bytes branch-state-immune via a worktree.
+# in), and offer --from-main to install the stable main bytes branch-state-immune.
+#
+# ⛔ AND "MAIN" MEANS ORIGIN'S MAIN. A local `main` ref is only as new as its last fast-forward,
+# and cannot be fast-forwarded while it is checked out in another worktree. Measured 2026-11-05: local
+# main at 0.2.17, origin/main at 0.2.23, and --from-main silently downgraded ~/.claude. So --from-main
+# must fetch and install origin/main's tree, and REFUSE when the fetch fails (scenarios C2-C4).
 #
 # ⚠️ WHY A UNIT TEST OF THE GUARD LOGIC WOULD NOT BE ENOUGH: the property is about which BYTES land,
 # across a real git checkout + worktree. So this drives the REAL install.sh end to end against
@@ -52,7 +57,22 @@ PROV
     printf 'FEATURE\n' > VERSION_MARKER
     git commit -qam feature
     git checkout -q main            # leave it on main; each scenario sets the branch it needs
+    # An "origin" for --from-main to fetch from: a bare clone, so pushes to it never touch this checkout.
+    git clone -q --bare . "$dir.origin.git"
+    git remote add origin "$dir.origin.git"
+    git fetch -q origin
   )
+}
+
+# Advance ORIGIN's main to a new commit carrying marker $2, WITHOUT touching the local `main` ref — the
+# local repo is left exactly as stale as the 2026-11-05 machine was. $1 = repo dir.
+advance_origin() {
+  local dir="$1" mark="$2" tmp
+  tmp="$(mktemp -d "$WORK/advance.XXXXXX")"
+  ( git clone -q "$dir.origin.git" "$tmp/c" && cd "$tmp/c" \
+    && git config user.email t@t && git config user.name t \
+    && printf '%s\n' "$mark" > VERSION_MARKER && git commit -qam "$mark" && git push -q origin main )
+  rm -rf "$tmp"
 }
 
 # Run install.sh in $1, capturing exit code + the recorded marker (or "<none>" if nothing installed).
@@ -97,6 +117,40 @@ if [ "$MUTATION" -eq 0 ]; then
   ( cd "$WORK/c"; [ "$(git worktree list | wc -l | tr -d ' ')" = "1" ] ) \
     && grn "C --from-main cleaned up its worktree" || red "C --from-main leaked a worktree"
 
+  # C2. Local main is STALE: origin/main moved on and nobody fast-forwarded the local ref. Run from
+  # the stale local main itself (HEAD == local main), the exact 2026-11-05 shape. --from-main must install
+  # ORIGIN's bytes (MAIN2), never the local ref's (MAIN).
+  make_repo "$REPO/install.sh" "$WORK/c2"
+  advance_origin "$WORK/c2" MAIN2
+  run "$WORK/c2" --from-main
+  [ "$RC" -eq 0 ] && [ "$MARKER" = "MAIN2" ] && grn "C2 --from-main installs origin/main (MAIN2), not a stale local main" \
+    || red "C2 --from-main should install origin/main MAIN2, not the stale local main (rc=$RC marker=$MARKER)"
+  # ...the same off a feature branch, where the old code read the local main ref too.
+  ( cd "$WORK/c2"; git checkout -q feature )
+  run "$WORK/c2" --from-main
+  [ "$RC" -eq 0 ] && [ "$MARKER" = "MAIN2" ] && grn "C2 off a feature branch, --from-main still installs origin/main (MAIN2)" \
+    || red "C2 off a feature branch should install MAIN2 (rc=$RC marker=$MARKER)"
+  # (diff against HEAD: run() itself drops an untracked .installed_marker into the repo.)
+  [ "$(git -C "$WORK/c2" rev-parse --abbrev-ref HEAD)" = feature ] && git -C "$WORK/c2" diff --quiet HEAD \
+    && grn "C2 the caller's branch and working tree are untouched" || red "C2 --from-main changed the caller's checkout"
+
+  # C3. The fetch FAILS (unreachable remote): refuse, install nothing — never fall back to the last-seen main.
+  make_repo "$REPO/install.sh" "$WORK/c3"
+  git -C "$WORK/c3" remote set-url origin "$WORK/no-such-remote.git"
+  run "$WORK/c3" --from-main
+  [ "$RC" -ne 0 ] && [ "$MARKER" = "<none>" ] && grn "C3 fetch failure refuses and installs nothing (rc=$RC)" \
+    || red "C3 a failed fetch must refuse without installing (rc=$RC marker=$MARKER)"
+  ( cd "$WORK/c3"; KJT_TEST_OUT=/dev/null bash install.sh --provider testprov --from-main 2>&1 >/dev/null || true ) \
+    | grep -q "could not fetch" && grn "C3 the refusal says the fetch failed" || red "C3 the refusal must say the fetch failed"
+
+  # C4. HEAD is at origin/main but the working tree has UNCOMMITTED edits: --from-main installs the
+  # committed origin/main tree, not this checkout's working tree.
+  make_repo "$REPO/install.sh" "$WORK/c4"
+  printf 'DIRTY\n' > "$WORK/c4/VERSION_MARKER"
+  run "$WORK/c4" --from-main
+  [ "$RC" -eq 0 ] && [ "$MARKER" = "MAIN" ] && grn "C4 --from-main ignores uncommitted edits (installs MAIN, not DIRTY)" \
+    || red "C4 --from-main should install committed origin/main (rc=$RC marker=$MARKER)"
+
   # D. on main, a bare install proceeds and installs MAIN bytes.
   make_repo "$REPO/install.sh" "$WORK/d"    # already on main
   run "$WORK/d"
@@ -124,6 +178,20 @@ else
   # the defect. If this does NOT happen, scenario A above proves nothing.
   [ "$RC" -eq 0 ] && [ "$MARKER" = "FEATURE" ] && grn "mutation: neutered guard installs FEATURE (A discriminates)" \
     || red "mutation: neutered guard should have installed FEATURE (rc=$RC marker=$MARKER)"
+
+  # Stale-local-main mutant: --from-main reads the LOCAL main ref again. C2's stale-local-main case must then install
+  # the stale MAIN — proving C2 is what catches the downgrade.
+  mut2="$WORK/install.mutated2.sh"
+  sed 's|"refs/remotes/\$MAIN_REMOTE/main^{commit}"|"refs/heads/main^{commit}"|' "$REPO/install.sh" > "$mut2"
+  if cmp -s "$mut2" "$REPO/install.sh"; then
+    red "mutation: the local-main mutant did not apply — the sed no longer matches, so it proves nothing"
+  else
+    make_repo "$mut2" "$WORK/m2"
+    advance_origin "$WORK/m2" MAIN2
+    run "$WORK/m2" --from-main
+    [ "$RC" -eq 0 ] && [ "$MARKER" = "MAIN" ] && grn "mutation: reading local main installs the stale MAIN (C2 discriminates)" \
+      || red "mutation: the local-main mutant should have installed stale MAIN (rc=$RC marker=$MARKER)"
+  fi
 fi
 
 echo

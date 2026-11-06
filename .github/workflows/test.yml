@@ -67,6 +67,8 @@ jobs:
           bash tests/persona_flag_test.sh
           bash tests/inbox_start_test.sh
           bash tests/no_operator_endpoints_test.sh
+          bash tests/install_rollout_test.sh
+          bash tests/install_rollout_test.sh --mutation
 
       - name: codex skills deploy
         run: |
@@ -97,6 +99,7 @@ jobs:
           bash tests/stream_layouts_test.sh
           bash tests/windows_detect_test.sh
           bash tests/catchup_topology_test.sh
+          bash tests/catchup_size_budget_test.sh --mutation
           bash tests/kijito_start_watched_test.sh --mutation
           bash tests/armed_token_precedence_test.sh --mutation
       - name: vendored monitor is byte-identical to its recorded upstream release, and its own suite passes
