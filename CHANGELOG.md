@@ -6,8 +6,10 @@
   listed by a new `.claude-plugin/marketplace.json`, so `KijitoAI/kijito-tools` can be added as a
   marketplace in **Customize > Plugins** (install id `kijito@kijito-tools`). Plugin version 0.1.0. It
   bundles the Kijito connector (`https://api.kijito.ai/mcp`, no key; each user connects it on the
-  plugin's Connectors tab), two skills written for a host with no files and no hooks
-  (`kijito-catch-up`, `kijito-save`), the commands `/kijito:catch-up` and `/kijito:save`, and a
+  plugin's Connectors tab), three skills written for a host with no files and no hooks
+  (`kijito-catch-up`, `kijito-save`, and `kijito-qa-gate`: adversarial passes from new angles until two in
+  a row find nothing, with the gate's state and lessons kept in Kijito), the commands
+  `/kijito:catch-up`, `/kijito:save` and `/kijito:qa-gate`, and a
   SessionStart reminder for Cowork and Claude Code that stays silent when this repo's
   `session-catchup-hint.sh` hook is installed. `tests/plugin_test.sh` keeps every skill and command
   description at or under claude.ai's 200-character cap, keeps `bin/` out of the plugin folder (claude.ai

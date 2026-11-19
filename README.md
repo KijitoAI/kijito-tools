@@ -46,9 +46,9 @@ default; a notes file works in standalone mode.
 
 The scripts and hooks above need a terminal, so they cannot reach claude.ai chat or Cowork. For those,
 this repo is also a plugin marketplace with one plugin, `kijito` ([`plugins/kijito`](plugins/kijito)):
-the Kijito connector plus two short skills, `kijito-catch-up` and `kijito-save`, that make Claude catch
+the Kijito connector plus three short skills: `kijito-catch-up` and `kijito-save`, which make Claude catch
 up from memory at the start of a conversation and save decisions, preferences and finished work as they
-come up. One install on your claude.ai account works in chat, Cowork and Claude Code.
+come up, and `kijito-qa-gate`, which checks work in adversarial passes until two in a row find nothing. One install on your claude.ai account works in chat, Cowork and Claude Code.
 
 1. In claude.ai or the desktop app: **Customize > Plugins > Add > Add marketplace**, enter
    `KijitoAI/kijito-tools`, then install **Kijito**. (Claude Code: `claude plugin marketplace add

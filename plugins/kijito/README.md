@@ -13,8 +13,12 @@ starting from zero. It works the same way in claude.ai chat, in Cowork and in Cl
   current-state note, and recalls from memory before answering anything you may have covered before.
 - **`kijito-save` skill**: Claude saves one insight per memory, corrects what is now wrong instead of
   contradicting it, keeps a current-state note up to date, and never saves secrets.
-- **Commands** `/kijito:catch-up` and `/kijito:save` (Cowork and Claude Code; in chat they load as
-  skills).
+- **`kijito-qa-gate` skill**: before calling work done, Claude attacks it in adversarial passes, each
+  from a new angle, fixes every finding, and stops only after two passes in a row find nothing. It
+  recalls what earlier gates caught, keeps the gate's state in memory so it can continue next time,
+  and saves the lessons each pass caught.
+- **Commands** `/kijito:catch-up`, `/kijito:save` and `/kijito:qa-gate` (Cowork and Claude Code; in
+  chat they load as skills).
 - **A SessionStart hook** (Cowork and Claude Code; chat ignores hooks) that reminds Claude to catch up.
   It stays silent when the kijito-tools Claude Code hook is already installed, so you never get two
   reminders.
@@ -28,7 +32,8 @@ starting from zero. It works the same way in claude.ai chat, in Cowork and in Cl
    ([kijito.ai](https://kijito.ai)). If you already added Kijito as a custom connector, it
    uses the same URL, so you see one set of tools.
 3. Start a conversation. Claude catches up on its own; you can also ask it to "catch up from Kijito" or
-   to "save this to memory", or type `/kijito:catch-up` and `/kijito:save` in Cowork and Claude Code.
+   to "save this to memory", ask it to "QA gate this", or type `/kijito:catch-up`, `/kijito:save` and `/kijito:qa-gate` in Cowork
+   and Claude Code.
 
 ## What data it sends
 
