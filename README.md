@@ -42,6 +42,24 @@ drop into `~/.claude/skills/` and invoke the same way everywhere.
 The self-clear loop needs some durable store to carry the handoff across `/clear`. That is Kijito by
 default; a notes file works in standalone mode.
 
+## Claude app (chat / Cowork) plugin
+
+The scripts and hooks above need a terminal, so they cannot reach claude.ai chat or Cowork. For those,
+this repo is also a plugin marketplace with one plugin, `kijito` ([`plugins/kijito`](plugins/kijito)):
+the Kijito connector plus two short skills, `kijito-catch-up` and `kijito-save`, that make Claude catch
+up from memory at the start of a conversation and save decisions, preferences and finished work as they
+come up. One install on your claude.ai account works in chat, Cowork and Claude Code.
+
+1. In claude.ai or the desktop app: **Customize > Plugins > Add > Add marketplace**, enter
+   `KijitoAI/kijito-tools`, then install **Kijito**. (Claude Code: `claude plugin marketplace add
+   KijitoAI/kijito-tools`, then `claude plugin install kijito@kijito-tools`.)
+2. Open the plugin's **Connectors** tab and connect Kijito; it signs in with your Kijito account.
+3. Start a conversation. In Cowork and Claude Code you can also type `/kijito:catch-up` and `/kijito:save`.
+
+The plugin's SessionStart hook (Cowork and Claude Code only) stays silent when this repo's Claude Code
+hook is installed, so you never get two reminders. See [`plugins/kijito/README.md`](plugins/kijito/README.md)
+for what it sends and where.
+
 ## Install
 
 From source:
@@ -315,6 +333,7 @@ bash tests/drift_test.sh                     # does this machine RUN what the re
 bash tests/conformance_test.sh --selftest    # every provider states the shared doctrine
 bash tests/key_locations_coverage_test.sh    # every documented key location is one the key helper scans
 bash tests/redeem_key_test.sh                # redeem-key runs only the monitor, never the installer
+bash tests/plugin_test.sh                    # the claude.ai / Cowork plugin: descriptions <= 200, no bin/, hook silent beside ours
 node --test providers/codex/wake-helper/kijito-wake-helper.test.mjs \
             providers/codex/wake-helper/integration.test.mjs  # codex wake helper
 node providers/codex/tools/refresh-manifest.mjs --check       # codex gated hashes are current

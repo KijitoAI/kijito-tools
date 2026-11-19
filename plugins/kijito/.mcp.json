@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "kijito": {
+      "type": "http",
+      "url": "https://api.kijito.ai/mcp"
+    }
+  }
+}
