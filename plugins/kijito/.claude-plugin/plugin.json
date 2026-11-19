@@ -1,0 +1,27 @@
+{
+  "name": "kijito",
+  "displayName": "Kijito",
+  "version": "0.1.0",
+  "description": "Persistent memory for your AI across chats, Cowork and Claude Code. Claude catches up on what earlier conversations learned, and saves decisions, preferences and finished work as they happen.",
+  "author": {
+    "name": "Kijito",
+    "url": "https://kijito.ai"
+  },
+  "homepage": "https://kijito.ai",
+  "repository": "https://github.com/KijitoAI/kijito-tools",
+  "documentationUrl": "https://kijito.ai/docs/quickstart",
+  "privacyPolicyUrl": "https://kijito.ai/privacy",
+  "termsOfServiceUrl": "https://kijito.ai/terms",
+  "license": "Apache-2.0",
+  "keywords": [
+    "memory",
+    "kijito",
+    "continuity",
+    "mcp"
+  ],
+  "network": {
+    "hosts": [
+      "api.kijito.ai"
+    ]
+  }
+}

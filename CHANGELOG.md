@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- **A Kijito plugin for the Claude app (chat and Cowork), not only Claude Code.** `plugins/kijito`,
+  listed by a new `.claude-plugin/marketplace.json`, so `KijitoAI/kijito-tools` can be added as a
+  marketplace in **Customize > Plugins** (install id `kijito@kijito-tools`). Plugin version 0.1.0. It
+  bundles the Kijito connector (`https://api.kijito.ai/mcp`, no key; each user connects it on the
+  plugin's Connectors tab), three skills written for a host with no files and no hooks
+  (`kijito-catch-up`, `kijito-save`, and `kijito-qa-gate`: adversarial passes from new angles until two in
+  a row find nothing, with the gate's state and lessons kept in Kijito), the commands
+  `/kijito:catch-up`, `/kijito:save` and `/kijito:qa-gate`, and a
+  SessionStart reminder for Cowork and Claude Code that stays silent when this repo's
+  `session-catchup-hint.sh` hook is installed. `tests/plugin_test.sh` keeps every skill and command
+  description at or under claude.ai's 200-character cap, keeps `bin/` out of the plugin folder (claude.ai
+  and Cowork refuse a plugin that has one), and checks the hook in both directions, including against
+  the real installer. The plugin is not part of the npm or PyPI packages.
+
 ## 0.2.25
 
 - **Fix: a project with a `.kijito_persona` marker was told it had none.** On a host whose

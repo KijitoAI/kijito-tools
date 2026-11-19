@@ -1,0 +1,17 @@
+{
+  "name": "kijito-tools",
+  "description": "Kijito plugins for Claude: persistent memory in chat, Cowork and Claude Code.",
+  "owner": {
+    "name": "Kijito"
+  },
+  "plugins": [
+    {
+      "name": "kijito",
+      "displayName": "Kijito",
+      "source": "./plugins/kijito",
+      "description": "Persistent memory for your AI across chats, Cowork and Claude Code.",
+      "category": "productivity",
+      "homepage": "https://kijito.ai"
+    }
+  ]
+}
